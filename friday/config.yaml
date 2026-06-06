@@ -1,0 +1,50 @@
+# FRIDAY v2 — Cloud-Only configuration
+# The brain is an API call: native Anthropic/Google/OpenAI, or any
+# OpenAI-compatible endpoint (opencode / LM Studio / Ollama / custom).
+
+# ── Provider (the brain) ───────────────────────────────────────────
+provider:
+  type: anthropic                 # anthropic | openai | google | openai_compat | opencode | lmstudio | ollama
+  model: claude-sonnet-4-6
+  api_key_env: ANTHROPIC_API_KEY  # secrets live in .env, never here
+  max_tokens: 4096
+  temperature: 0.3
+  timeout_s: 60
+
+  # Ordered fallbacks tried when the primary is unavailable/errors.
+  fallback:
+    - type: openai
+      model: gpt-4o-mini
+      api_key_env: OPENAI_API_KEY
+    # - type: ollama              # local server via OpenAI-compat (no key)
+    #   model: llama3.1
+    # - type: openai_compat       # any custom endpoint
+    #   model: your-model
+    #   base_url: https://your-endpoint/v1
+    #   api_key_env: FRIDAY_API_KEY
+
+# ── Persona ────────────────────────────────────────────────────────
+persona: friday_core              # loaded from personas/<id>.yaml
+
+# ── Conversation / narration ───────────────────────────────────────
+conversation:
+  # Spoken progress is narrated by the model; these are the delays (seconds)
+  # after which a context-aware "still working" line is spoken on long tasks.
+  progress_delays_s: [4.0, 12.0, 25.0]
+  max_history_turns: 12
+  tool_loop_limit: 10
+
+# ── Voice ──────────────────────────────────────────────────────────
+voice:
+  tts: piper                      # local Piper TTS
+  tts_model: en_US-lessac-medium.onnx
+  stt: local                     # local push-to-talk
+  enabled: true
+
+# ── Database ───────────────────────────────────────────────────────
+database:
+  path: data/friday.db
+
+# ── Logging ────────────────────────────────────────────────────────
+logging:
+  level: info

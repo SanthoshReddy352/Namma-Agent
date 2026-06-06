@@ -5,7 +5,7 @@
 > listed here. The canonical plan ("god document") is
 > [`FRIDAY_V2_GOD_DOC.md`](./FRIDAY_V2_GOD_DOC.md).
 
-**Last updated:** 2026-06-06
+**Last updated:** 2026-06-06 (Phase 1 complete)
 
 ## Legend
 
@@ -18,8 +18,8 @@
 | Phase | Title | Status |
 |------|-------|--------|
 | 0 | Safety net & docs | `[x]` DONE |
-| 1 | Provider layer | `[~]` IN-PROGRESS |
-| 2 | Agent core | `[ ]` TODO |
+| 1 | Provider layer | `[x]` DONE |
+| 2 | Agent core | `[~]` IN-PROGRESS |
 | 3 | Model-narrated progress | `[ ]` TODO |
 | 4 | Backend server | `[ ]` TODO |
 | 5 | Modern GUI | `[ ]` TODO |
@@ -54,14 +54,15 @@
 | Rollback point | tag `v1-pre-rebuild` |
 
 ## Phase 1 — Provider layer
-- [ ] `friday/core/providers/base.py` (Provider ABC + `LLMResponse`)
-- [ ] `openai_provider.py` (native OpenAI, tools + streaming)
-- [ ] `anthropic_provider.py` (native `tool_use` + prompt caching + streaming)
-- [ ] `google_provider.py` (Gemini function-calling)
-- [ ] `openai_compat.py` (opencode / lmstudio / ollama / custom base_url)
-- [ ] `registry.py` (config-driven selection + fallback chain)
-- [ ] `config.yaml` provider section + `.env.example` keys
-- [ ] `friday/tests/test_providers.py`
+- [x] `friday/core/providers/base.py` (Provider ABC + `LLMResponse` + `ToolCall`; neutral message/tool schema)
+- [x] `openai_provider.py` (native OpenAI, thin subclass of compat)
+- [x] `anthropic_provider.py` (native `tool_use` + prompt caching + streaming)
+- [x] `google_provider.py` (Gemini function-calling, google-genai SDK)
+- [x] `openai_compat.py` (reference OpenAI-style impl: tools + streaming + retries; opencode / lmstudio / ollama / custom base_url)
+- [x] `registry.py` (config-driven selection + `ProviderChain` fallback + `--test` CLI)
+- [x] `friday/config.yaml` provider section + `friday/config.py` loader + `.env.example` keys (ANTHROPIC/OPENAI/GOOGLE/FRIDAY_API_KEY)
+- [x] `friday/core/logger.py` (package-local, no dep on legacy `core/`)
+- [x] `friday/tests/test_providers.py` — **21 tests passing**
 
 ## Phase 2 — Agent core
 - [ ] `friday/core/tools.py` ToolRegistry (native defs from capability descriptors)
@@ -122,4 +123,5 @@
 
 ## Change log
 - 2026-06-06 — Migration kicked off. God doc + status tracker created.
-- 2026-06-06 — Phase 0 complete: git initialized, baseline tag `v1-pre-rebuild`, CLAUDE.md migration pointer added, baseline metrics recorded. Starting Phase 1 (provider layer).
+- 2026-06-06 — Phase 0 complete: git initialized, baseline tag `v1-pre-rebuild`, CLAUDE.md migration pointer added, baseline metrics recorded.
+- 2026-06-06 — Phase 1 complete: full provider layer (native Anthropic/OpenAI/Google + generic OpenAI-compat for opencode/lmstudio/ollama/custom), normalized `LLMResponse`/`ToolCall`, native tool-calling + streaming, config-driven `ProviderChain` fallback, v2 config loader. 21 tests passing. Starting Phase 2 (agent core).
