@@ -42,10 +42,13 @@ class FridayService:
         register_memory_tools(self.registry, self.db)
         # Auto-discover capability tools (file/shell/system/apps/...). Skipped
         # when a registry is injected (tests provide their own minimal set).
+        self.mcp = None
         if registry is None:
             from friday.tools import load_tools
 
             load_tools(self.registry)
+            # Wave 5: connect configured MCP servers and register their tools.
+            self.mcp = self._build_mcp(self.config, self.registry)
         self.provider = provider or from_config(self.config)
         self.persona = load_persona(self.config.get("persona", "friday_core"))
 
@@ -78,6 +81,43 @@ class FridayService:
         self.comms = self._build_comms() if registry is None else None
         if self.comms is not None and self.comms.telegram.available:
             self.comms.start_inbound(lambda text: self.run_turn(text).content)
+
+        # Wave 5: fire due reminders in the background (speak + notify).
+        self.reminders = self._build_reminder_runner() if registry is None else None
+        if self.reminders is not None:
+            self.reminders.start()
+
+    # -- mcp ---------------------------------------------------------------
+
+    @staticmethod
+    def _build_mcp(config: dict, registry):
+        try:
+            from friday.mcp import MCPManager
+
+            mcp = MCPManager.from_config(config)
+            mcp.register_into(registry)
+            return mcp
+        except Exception as exc:  # noqa: BLE001
+            from friday.core.logger import logger
+            logger.warning("[service] MCP setup failed: %s", exc)
+            return None
+
+    # -- reminders ---------------------------------------------------------
+
+    def _build_reminder_runner(self):
+        try:
+            from friday.core.reminder_runner import ReminderRunner
+
+            def on_fire(reminder: dict) -> None:
+                msg = f"Reminder: {reminder.get('text', '')}"
+                self._speak(msg)
+                if self.comms is not None and self.comms.any_available:
+                    self.comms.send(msg)
+
+            interval = float((self.config.get("scheduler") or {}).get("poll_seconds", 30))
+            return ReminderRunner(on_fire, interval=interval)
+        except Exception:  # noqa: BLE001
+            return None
 
     # -- comms -------------------------------------------------------------
 

@@ -76,6 +76,18 @@ security:
 #   store_path: data/tasks.json
 # goals:
 #   store_path: data/goals.json
+# scheduler:
+#   poll_seconds: 30          # how often the reminder runner checks for due items
+
+# ── MCP servers (optional — external Model Context Protocol tools) ──
+# Each server's tools appear as mcp_<server>_<tool> in the registry.
+# mcp:
+#   servers:
+#     - name: filesystem
+#       command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/me"]
+#     - name: git
+#       command: ["uvx", "mcp-server-git"]
+#       enabled: true
 
 # ── Logging ────────────────────────────────────────────────────────
 logging:

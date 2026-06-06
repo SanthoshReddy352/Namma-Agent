@@ -116,11 +116,11 @@ The waves above cover the god-doc's value-priority list. These v1 modules were *
 - [x] **comms** — `friday/comms/` (Telegram + Discord, stdlib, env-gated) + `send_notification` tool + Telegram inbound bridge wired into the service (chat with FRIDAY from your phone). `test_comms.py` (12).
 - [x] **task_manager** — `add_task`/`list_tasks`/`complete_task`/`remove_task` (persisted `data/tasks.json`). `test_tools_tasks_goals.py`.
 - [x] **goals** — `add_goal`/`list_goals`/`update_goal_progress`/`remove_goal` (persisted `data/goals.json`).
-- [ ] **mcp_client** — connect external MCP tool servers
+- [x] **mcp_client** — `friday/mcp/` persistent stdio JSON-RPC client (correct initialize→tools/list→tools/call handshake; no `mcp` SDK dep) + `MCPManager` registers each server's tools as `mcp_<server>_<tool>` + `mcp_list_servers`. Wired into the service from `config.mcp.servers`. `test_mcp.py` (6, against a real fake stdio server).
 - [ ] **focus_session**, **workspace_agent**, **world_monitor**, **awareness** — proactive/ambient flows
 - [ ] **greeter / onboarding** — first-run UX (may be re-imagined for the web GUI rather than ported 1:1)
 - [ ] **vision visual description** — describe/review/roast screenshots; **blocked** on multimodal image input in the agent message schema (text-only today)
-- [ ] **scheduler firing** — a runner to actually trigger saved reminders (store exists; daemon does not)
+- [x] **scheduler firing** — `friday/core/reminder_runner.py`: `add_reminder` parses `when` ("in 10 minutes" / "at 09:30" / ISO) → `due_ts`; a background `ReminderRunner` fires due reminders (speak + notify) and marks them. `test_reminder_runner.py` (8).
 
 ## Phase 8 — Purge legacy
 - [ ] Delete intent_recognizer, planning/, routing layers, MoA, task_graph_executor, workflow_orchestrator
