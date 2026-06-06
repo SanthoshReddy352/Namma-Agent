@@ -53,6 +53,8 @@ _DESTRUCTIVE = {
     "kill_process", "modify_system",
     # active security scanning — approval-gated even inside lab_mode
     "port_scan", "ping_sweep", "dir_enum", "dns_enum",
+    # smart-home device changes + reminder deletion
+    "ha_turn_on", "ha_turn_off", "ha_set_temperature", "remove_reminder",
 }
 
 

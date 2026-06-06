@@ -59,6 +59,19 @@ security:
   # default_timeout_sec: 120
   # dig_timeout_sec: 30
 
+# ── Smart home (Home Assistant — optional) ─────────────────────────
+# Off until url + token are set. The token belongs in .env, named by token_env.
+# smart_home:
+#   url: http://homeassistant.local:8123
+#   token_env: HASS_TOKEN
+#   aliases:
+#     bedroom lights: light.bedroom_main
+#     ac: climate.living_room_ac
+
+# ── Scheduler (reminder store) ─────────────────────────────────────
+# scheduler:
+#   store_path: data/reminders.json
+
 # ── Logging ────────────────────────────────────────────────────────
 logging:
   level: info
