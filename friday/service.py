@@ -10,7 +10,7 @@ from typing import Callable, Optional
 
 from friday.config import load_config
 from friday.core.agent import Agent, AgentResult
-from friday.core.builtins import register_memory_tools
+from friday.core.builtins import register_agent_tools, register_memory_tools
 from friday.core.events import fanout
 from friday.core.memory import Database
 from friday.core.narration import NarrationEngine
@@ -66,6 +66,11 @@ class FridayService:
             tool_loop_limit=conv.get("tool_loop_limit", 10),
             max_history_turns=conv.get("max_history_turns", 12),
         )
+
+        # Wave 4: delegate_task + persona tools need the live agent/provider/db.
+        # Skipped when a registry is injected (tests provide their own minimal set).
+        if registry is None:
+            register_agent_tools(self.registry, self.agent, self.provider, self.db)
 
     # -- voice -------------------------------------------------------------
 

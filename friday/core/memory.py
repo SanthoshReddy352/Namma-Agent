@@ -186,6 +186,31 @@ class Database:
                 ).fetchall()
         return [dict(r) for r in rows]
 
+    def delete_fact(self, key: str) -> bool:
+        key = (key or "").strip().lower()
+        with self._lock:
+            row = self.conn.execute("SELECT id FROM facts WHERE key=?", (key,)).fetchone()
+            if row is None:
+                return False
+            self.conn.execute("DELETE FROM facts_fts WHERE rowid=?", (row["id"],))
+            self.conn.execute("DELETE FROM facts WHERE id=?", (row["id"],))
+            self.conn.commit()
+        return True
+
+    def search_turns(self, query: str, limit: int = 10) -> list[dict]:
+        """Keyword search across stored conversation turns (LIKE; cross-session)."""
+        query = (query or "").strip()
+        if not query:
+            return []
+        like = f"%{query}%"
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT session_id, role, content, created_at FROM turns "
+                "WHERE content LIKE ? ORDER BY id DESC LIMIT ?",
+                (like, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     # -- audit -------------------------------------------------------------
 
     def log_audit(self, session_id: Optional[str], tool_name: str, args: dict,

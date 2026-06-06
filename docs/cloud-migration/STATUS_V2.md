@@ -5,7 +5,7 @@
 > listed here. The canonical plan ("god document") is
 > [`FRIDAY_V2_GOD_DOC.md`](./FRIDAY_V2_GOD_DOC.md).
 
-**Last updated:** 2026-06-06 (Phase 7 Wave 3 complete)
+**Last updated:** 2026-06-06 (Phase 7 Waves 1–4 complete; v2 install/run scaffolding added)
 
 ## Legend
 
@@ -24,7 +24,7 @@
 | 4 | Backend server | `[x]` DONE |
 | 5 | Modern GUI | `[x]` DONE |
 | 6 | Voice (Piper TTS + STT) | `[x]` DONE |
-| 7 | Module porting waves | `[~]` IN-PROGRESS |
+| 7 | Module porting waves | `[~]` value-priority waves 1–4 DONE; comms/task_manager/goals/etc. pending (see Phase 7 notes) |
 | 8 | Purge legacy | `[ ]` TODO |
 | 9 | Finalize | `[ ]` TODO |
 
@@ -109,7 +109,18 @@
 - [x] Wave 1: file_ops (read/write/list), shell (run_shell), system (system_info), apps (open_app) — clean v2 tools + auto-discovery (`friday/tools/`) + `friday/core/safety.py` (PathSecurity, destructive classification); `test_tools_wave1.py` (9). 65 tests passing.
 - [x] Wave 2: web (`web_search`/`web_extract`/`web_crawl`, stdlib DDG + HTML-to-text), browser (`open_browser_url`/`search_google`/`play_youtube`/`play_youtube_music` via stdlib `webbrowser`), network (`ping_host`/`dns_lookup`/`check_port`/`public_ip`), security (`port_scan`/`ping_sweep`/`dir_enum`/`dns_enum` — nmap/gobuster/dig, `lab_mode`+`authorized_scopes` gated, approval-gated). `config.yaml` security section + safety destructive set. `test_tools_wave2.py` (21). 86 tests passing.
 - [x] Wave 3: weather (`get_weather` — keyless Open-Meteo+Nominatim, 24h cache), smart_home (`ha_turn_on`/`ha_turn_off`/`ha_get_state`/`ha_set_temperature` — Home Assistant REST, config+env gated, mutators approval-gated), news (`get_news` — keyless RSS, stdlib XML), vision (`take_screenshot` CLI capture + `read_text_from_image` tesseract OCR — text-channel only; visual *description* deferred until multimodal agent input), document_intel (`read_document` — txt/md/csv/pdf/docx text extraction, path-secured), scheduler (`add_reminder`/`list_reminders`/`remove_reminder` — persisted `data/reminders.json`; firing is a future runner). `config.yaml` smart_home+scheduler sections; safety destructive set extended. `test_tools_wave3.py` (19). 105 tests passing.
-- [ ] Wave 4: memory, delegate_task, persona switch
+- [x] Wave 4: memory (`forget_fact` + `search_conversations` added to existing `remember_fact`/`recall_facts`; `delete_fact`/`search_turns` on the DB), delegate_task (one sub-agent tool over a read-only research toolset — collapses v1 Delegate/MoA/ResearchAgent; excludes itself so it can't recurse), persona (`switch_persona`/`list_personas` + `friday_concise`/`friday_playful` personas). Wired via `register_agent_tools` in `service.py` (needs live agent/provider/db). `test_tools_wave4.py` (11). **116 tests passing. 40 tools total.**
+
+### Phase 7 — not yet ported (beyond the original wave plan)
+The waves above cover the god-doc's value-priority list. These v1 modules were **not** in that plan and remain unported — tracked here for the "port everything" goal (candidate **Wave 5+**):
+- [ ] **comms** — Telegram + Discord channels (`send_notification`, inbound bot bridge). *User-requested.*
+- [ ] **task_manager** — task/to-do CRUD (richer than the scheduler reminder store)
+- [ ] **goals** — goal tracking + progress
+- [ ] **mcp_client** — connect external MCP tool servers
+- [ ] **focus_session**, **workspace_agent**, **world_monitor**, **awareness** — proactive/ambient flows
+- [ ] **greeter / onboarding** — first-run UX (may be re-imagined for the web GUI rather than ported 1:1)
+- [ ] **vision visual description** — describe/review/roast screenshots; **blocked** on multimodal image input in the agent message schema (text-only today)
+- [ ] **scheduler firing** — a runner to actually trigger saved reminders (store exists; daemon does not)
 
 ## Phase 8 — Purge legacy
 - [ ] Delete intent_recognizer, planning/, routing layers, MoA, task_graph_executor, workflow_orchestrator
@@ -136,4 +147,5 @@
 - 2026-06-06 — Phase 6 complete: local Piper TTS (final answers + narration spoken), local push-to-talk STT (faster-whisper), barge-in, voice endpoints; all degrade gracefully without audio hardware. 56 tests passing. Starting Phase 7 (module porting).
 - 2026-06-06 — Phase 7 Wave 1 complete: v2 tools package with auto-discovery (file/shell/system/apps), path-security gating, destructive→approval classification. Full vertical verified (model→preamble→tool→narration→final). 65 tests passing. Waves 2–4 (web/browser/security/smart_home/etc.) pending.
 - 2026-06-06 — Phase 7 Wave 2 complete: web (search/extract/crawl, stdlib-only DDG + HTML→text), browser (open URL / Google / YouTube / YT-Music via stdlib `webbrowser`, no Selenium), network (ping/dns_lookup/check_port/public_ip), security (nmap/gobuster/dig wrappers — off by default, double-gated by `lab_mode` + `authorized_scopes`, loopback-always, dangerous-flag blocking, approval-gated). Self-contained (no legacy `core/`/`modules/` deps); added `security` config section + extended destructive set. 21 new tests; 86 friday tests passing. Wave 3 (smart_home/document_intel/vision/scheduler/weather/news) pending.
+- 2026-06-06 — Phase 7 Wave 4 complete + v2 run scaffolding: memory (forget_fact/search_conversations + DB delete_fact/search_turns), delegate_task (bounded sub-agent over read-only research tools; collapses Delegate/MoA/ResearchAgent; non-recursive), persona switch/list + concise/playful personas — wired via register_agent_tools. **Created `friday/requirements.txt`, `friday/.env.example`, and `docs/cloud-migration/RUNNING_V2.md` (setup/run/test guide)** since the cloud app had no install manifest. Smoke-verified: service wires 40 tools, `/api/health`=200, `/api/tools`=40. 11 new tests; **116 passing**. Added an explicit "not yet ported" inventory (comms/Telegram, task_manager, goals, mcp_client, ambient flows) for the port-everything goal.
 - 2026-06-06 — Phase 7 Wave 3 complete: weather (keyless Open-Meteo+Nominatim, 24h disk cache, urllib not requests), smart_home (Home Assistant REST — `url`+`token_env`/`.env` gated, friendly-alias resolution, mutators approval-gated), news (keyless RSS via stdlib `xml.etree`, RSS+Atom), vision (`take_screenshot` cross-platform CLI capture + `read_text_from_image` tesseract OCR — text-channel only; true visual description deferred since the neutral message schema is text-only), document_intel (`read_document` txt/md/csv/pdf/docx → text, path-secured, optional pypdf/python-docx), scheduler (persisted reminder store add/list/remove). Self-contained; `config.yaml` smart_home+scheduler sections; destructive set extended (ha mutators + remove_reminder). 19 new tests; 105 friday tests passing. Wave 4 (memory/delegate_task/persona switch) pending.

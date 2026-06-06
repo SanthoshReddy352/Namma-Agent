@@ -1,0 +1,35 @@
+# FRIDAY v2 (cloud-only) requirements.
+#
+# Install everything:        pip install -r friday/requirements.txt
+# Minimal (no voice/GUI):    install just the "CORE" + ONE provider section.
+#
+# The brain is an API call — you only need the SDK for the provider you use.
+
+# ── CORE (required) ────────────────────────────────────────────────
+fastapi
+uvicorn[standard]        # ASGI server + websockets + http-tools
+pydantic
+PyYAML
+
+# ── PROVIDERS (install at least the one set in config.yaml) ────────
+anthropic                # provider.type: anthropic   (default)
+openai                   # provider.type: openai | openai_compat | ollama | lmstudio
+google-genai             # provider.type: google
+
+# ── VOICE (optional — Piper TTS + local Whisper STT) ───────────────
+# TTS also needs the `piper` binary on PATH + a voice model (.onnx).
+# Everything below degrades to silent no-ops if missing.
+faster-whisper           # local speech-to-text
+sounddevice              # microphone capture / playback
+numpy
+
+# ── DESKTOP WINDOW (optional — native window instead of browser) ───
+pywebview                # `python -m friday` opens a native window; falls back to browser
+
+# ── TOOL EXTRAS (optional — features degrade gracefully without these) ──
+duckduckgo-search        # nicer web_search results (falls back to keyless HTML)
+pypdf                    # read_document for .pdf
+python-docx              # read_document for .docx
+
+# ── DEV ────────────────────────────────────────────────────────────
+pytest

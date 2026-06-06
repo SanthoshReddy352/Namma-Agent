@@ -55,6 +55,8 @@ _DESTRUCTIVE = {
     "port_scan", "ping_sweep", "dir_enum", "dns_enum",
     # smart-home device changes + reminder deletion
     "ha_turn_on", "ha_turn_off", "ha_set_temperature", "remove_reminder",
+    # memory deletion
+    "forget_fact",
 }
 
 
