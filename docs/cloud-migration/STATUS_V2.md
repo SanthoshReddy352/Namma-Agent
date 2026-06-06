@@ -17,8 +17,8 @@
 
 | Phase | Title | Status |
 |------|-------|--------|
-| 0 | Safety net & docs | `[~]` IN-PROGRESS |
-| 1 | Provider layer | `[ ]` TODO |
+| 0 | Safety net & docs | `[x]` DONE |
+| 1 | Provider layer | `[~]` IN-PROGRESS |
 | 2 | Agent core | `[ ]` TODO |
 | 3 | Model-narrated progress | `[ ]` TODO |
 | 4 | Backend server | `[ ]` TODO |
@@ -31,12 +31,27 @@
 ---
 
 ## Phase 0 — Safety net & docs
-- [~] Create god doc (`FRIDAY_V2_GOD_DOC.md`)
-- [~] Create this status tracker (`STATUS_V2.md`)
-- [ ] Add "ACTIVE MIGRATION (v2)" pointer to `CLAUDE.md`
-- [ ] `git init`, `.gitignore` sanity, initial commit
-- [ ] Baseline tag `v1-pre-rebuild`
-- [ ] Record baseline metrics (startup time, file/line count, test pass list)
+- [x] Create god doc (`FRIDAY_V2_GOD_DOC.md`)
+- [x] Create this status tracker (`STATUS_V2.md`)
+- [x] Add "ACTIVE MIGRATION (v2)" pointer to `CLAUDE.md`
+- [x] `git init`, `.gitignore` sanity (added piper tarball), initial commit
+- [x] Baseline tag `v1-pre-rebuild`
+- [x] Record baseline metrics (see below)
+
+**Baseline metrics (v1, 2026-06-06):**
+| Metric | Value |
+|--------|-------|
+| Python files | 478 |
+| Python lines | 101,937 |
+| `core/` files | 146 |
+| Modules | 27 |
+| Test files | 168 |
+| `intent_recognizer.py` | 3,564 lines |
+| `router.py` | 1,113 lines |
+| `app.py` | 1,187 lines |
+| Python runtime | 3.13.12 |
+| Git tracked files | 687 |
+| Rollback point | tag `v1-pre-rebuild` |
 
 ## Phase 1 — Provider layer
 - [ ] `friday/core/providers/base.py` (Provider ABC + `LLMResponse`)
@@ -106,4 +121,5 @@
 ---
 
 ## Change log
-- 2026-06-06 — Migration kicked off. God doc + status tracker created (Phase 0).
+- 2026-06-06 — Migration kicked off. God doc + status tracker created.
+- 2026-06-06 — Phase 0 complete: git initialized, baseline tag `v1-pre-rebuild`, CLAUDE.md migration pointer added, baseline metrics recorded. Starting Phase 1 (provider layer).
