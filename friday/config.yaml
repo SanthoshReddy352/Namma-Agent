@@ -45,6 +45,20 @@ voice:
 database:
   path: data/friday.db
 
+# ── Security tools (active scanning — OFF by default) ──────────────
+# Enable only on networks you are authorized to test. Targets must fall
+# inside authorized_scopes (loopback is always allowed). All scans are
+# approval-gated through the tool registry.
+security:
+  lab_mode: false                 # set true to expose port_scan/ping_sweep/dir_enum/dns_enum
+  authorized_scopes: []           # e.g. ["192.168.1.0/24", "10.0.0.0/8", "lab.example.com"]
+  # nmap_binary: nmap
+  # gobuster_binary: gobuster
+  # dig_binary: dig
+  # wordlist: /usr/share/wordlists/dirb/common.txt
+  # default_timeout_sec: 120
+  # dig_timeout_sec: 30
+
 # ── Logging ────────────────────────────────────────────────────────
 logging:
   level: info

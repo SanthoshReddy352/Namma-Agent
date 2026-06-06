@@ -5,7 +5,7 @@
 > listed here. The canonical plan ("god document") is
 > [`FRIDAY_V2_GOD_DOC.md`](./FRIDAY_V2_GOD_DOC.md).
 
-**Last updated:** 2026-06-06 (Phase 7 Wave 1 complete)
+**Last updated:** 2026-06-06 (Phase 7 Wave 2 complete)
 
 ## Legend
 
@@ -107,7 +107,7 @@
 ## Phase 7 — Module porting waves
 *(each module: convert params to JSON Schema, drop intent regex, add focused test)*
 - [x] Wave 1: file_ops (read/write/list), shell (run_shell), system (system_info), apps (open_app) — clean v2 tools + auto-discovery (`friday/tools/`) + `friday/core/safety.py` (PathSecurity, destructive classification); `test_tools_wave1.py` (9). 65 tests passing.
-- [ ] Wave 2: web, browser_automation, security_tools, network
+- [x] Wave 2: web (`web_search`/`web_extract`/`web_crawl`, stdlib DDG + HTML-to-text), browser (`open_browser_url`/`search_google`/`play_youtube`/`play_youtube_music` via stdlib `webbrowser`), network (`ping_host`/`dns_lookup`/`check_port`/`public_ip`), security (`port_scan`/`ping_sweep`/`dir_enum`/`dns_enum` — nmap/gobuster/dig, `lab_mode`+`authorized_scopes` gated, approval-gated). `config.yaml` security section + safety destructive set. `test_tools_wave2.py` (21). 86 tests passing.
 - [ ] Wave 3: smart_home, document_intel, vision/image, scheduler, weather, news
 - [ ] Wave 4: memory, delegate_task, persona switch
 
@@ -135,3 +135,4 @@
 - 2026-06-06 — Phase 5 complete: modern React+Tailwind GUI (streaming chat, live tool/progress timeline, voice orb, approval modal, settings), pywebview launcher serving the built bundle from FastAPI. Verified end-to-end. Starting Phase 6 (voice).
 - 2026-06-06 — Phase 6 complete: local Piper TTS (final answers + narration spoken), local push-to-talk STT (faster-whisper), barge-in, voice endpoints; all degrade gracefully without audio hardware. 56 tests passing. Starting Phase 7 (module porting).
 - 2026-06-06 — Phase 7 Wave 1 complete: v2 tools package with auto-discovery (file/shell/system/apps), path-security gating, destructive→approval classification. Full vertical verified (model→preamble→tool→narration→final). 65 tests passing. Waves 2–4 (web/browser/security/smart_home/etc.) pending.
+- 2026-06-06 — Phase 7 Wave 2 complete: web (search/extract/crawl, stdlib-only DDG + HTML→text), browser (open URL / Google / YouTube / YT-Music via stdlib `webbrowser`, no Selenium), network (ping/dns_lookup/check_port/public_ip), security (nmap/gobuster/dig wrappers — off by default, double-gated by `lab_mode` + `authorized_scopes`, loopback-always, dangerous-flag blocking, approval-gated). Self-contained (no legacy `core/`/`modules/` deps); added `security` config section + extended destructive set. 21 new tests; 86 friday tests passing. Wave 3 (smart_home/document_intel/vision/scheduler/weather/news) pending.

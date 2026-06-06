@@ -51,6 +51,8 @@ def check_path(path: str) -> tuple[bool, str]:
 _DESTRUCTIVE = {
     "delete_file", "write_file", "run_shell", "run_command", "install_package",
     "kill_process", "modify_system",
+    # active security scanning — approval-gated even inside lab_mode
+    "port_scan", "ping_sweep", "dir_enum", "dns_enum",
 }
 
 
