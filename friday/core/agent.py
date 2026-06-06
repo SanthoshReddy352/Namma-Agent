@@ -31,6 +31,8 @@ from friday.core.tools import ToolRegistry
 EmitFn = Callable[[str, dict], None]
 # on_token(text_chunk)
 TokenFn = Callable[[str], None]
+# approval(tool_name, args) -> True to proceed (may block awaiting the user)
+ApprovalFn = Callable[[str, dict], bool]
 
 
 @dataclass
@@ -76,6 +78,7 @@ class Agent:
         user_input: str,
         session_id: Optional[str] = None,
         on_token: Optional[TokenFn] = None,
+        approval: Optional[ApprovalFn] = None,
     ) -> AgentResult:
         if not session_id:
             session_id = self.new_session()
@@ -108,6 +111,22 @@ class Agent:
 
             for tc in resp.tool_calls:
                 tools_used.append(tc.name)
+                tool = self.registry.get(tc.name)
+                # Gate destructive tools behind the per-turn approval callback.
+                # The approval callback owns any user-facing prompt/round-trip
+                # (e.g. the server emits its own id'd approval_request), so the
+                # agent does not emit a separate approval event here.
+                if tool is not None and tool.destructive and approval is not None:
+                    if not approval(tc.name, tc.args):
+                        from friday.core.tools import ToolResult
+                        declined = ToolResult(ok=False, content="", error="User declined the action.")
+                        self._emit("tool_finished", {
+                            "session_id": session_id, "tool": tc.name,
+                            "ok": False, "summary": "declined",
+                        })
+                        messages.append({"role": "tool", "tool_call_id": tc.id,
+                                         "name": tc.name, "content": declined.as_message_content()})
+                        continue
                 self._emit("tool_started", {"session_id": session_id, "tool": tc.name, "args": tc.args})
                 result = self.registry.execute(tc.name, tc.args)
                 self.db.log_audit(session_id, tc.name, tc.args, result.as_message_content(), result.ok)

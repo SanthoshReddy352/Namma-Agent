@@ -5,7 +5,7 @@
 > listed here. The canonical plan ("god document") is
 > [`FRIDAY_V2_GOD_DOC.md`](./FRIDAY_V2_GOD_DOC.md).
 
-**Last updated:** 2026-06-06 (Phase 3 complete)
+**Last updated:** 2026-06-06 (Phase 4 complete)
 
 ## Legend
 
@@ -21,8 +21,8 @@
 | 1 | Provider layer | `[x]` DONE |
 | 2 | Agent core | `[x]` DONE |
 | 3 | Model-narrated progress | `[x]` DONE |
-| 4 | Backend server | `[~]` IN-PROGRESS |
-| 5 | Modern GUI | `[ ]` TODO |
+| 4 | Backend server | `[x]` DONE |
+| 5 | Modern GUI | `[~]` IN-PROGRESS |
 | 6 | Voice (Piper TTS + STT) | `[ ]` TODO |
 | 7 | Module porting waves | `[ ]` TODO |
 | 8 | Purge legacy | `[ ]` TODO |
@@ -82,10 +82,11 @@
 - [x] `friday/tests/test_narration.py` (10 tests); 43 friday tests passing
 
 ## Phase 4 — Backend server
-- [ ] `friday/server/api.py` FastAPI app + REST (config/persona/tools)
-- [ ] WebSocket event protocol (token/tool/progress/approval/turn_completed)
-- [ ] Approval round-trip over socket
-- [ ] `friday/tests/test_server.py`
+- [x] `friday/service.py` FridayService (wires provider+tools+memory+agent+narration; injectable for tests)
+- [x] `friday/server/api.py` FastAPI app + REST (health/config/tools/persona/session) + static GUI mount
+- [x] WebSocket `/ws` event protocol (token/preamble/tool_started/tool_finished/turn_completed/turn_result)
+- [x] Approval round-trip over socket (id'd approval_request ↔ approval_response; per-turn approval gating in agent)
+- [x] `friday/tests/test_server.py` (6 tests: REST + WS plain/tool/approval-approved/declined); 49 friday tests passing
 
 ## Phase 5 — Modern GUI
 - [ ] `friday/webui/` Vite + React + Tailwind scaffold
@@ -128,3 +129,4 @@
 - 2026-06-06 — Phase 1 complete: full provider layer (native Anthropic/OpenAI/Google + generic OpenAI-compat for opencode/lmstudio/ollama/custom), normalized `LLMResponse`/`ToolCall`, native tool-calling + streaming, config-driven `ProviderChain` fallback, v2 config loader. 21 tests passing.
 - 2026-06-06 — Phase 2 complete: agent core — ToolRegistry, single-SQLite memory (turns/facts FTS5/audit), persona→prompt, the one agent loop (tool calling + streaming + events + bounded loop), memory built-in tools. 33 tests passing total. Starting Phase 3 (model-narrated progress).
 - 2026-06-06 — Phase 3 complete: event bus + fanout, narration engine (model preamble spoken in-the-moment, context-aware long-task progress lines, opt-in tool-result narration, suppression on finalize). 43 tests passing. Starting Phase 4 (backend server).
+- 2026-06-06 — Phase 4 complete: FridayService + FastAPI/WebSocket backend (streaming turn channel, tool events, approval round-trip). Fixed an approval-deadlock (duplicate approval_request). 49 tests passing. Starting Phase 5 (modern GUI).
