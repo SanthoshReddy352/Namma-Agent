@@ -5,7 +5,7 @@
 > listed here. The canonical plan ("god document") is
 > [`FRIDAY_V2_GOD_DOC.md`](./FRIDAY_V2_GOD_DOC.md).
 
-**Last updated:** 2026-06-06 (Phase 4 complete)
+**Last updated:** 2026-06-06 (Phase 5 complete)
 
 ## Legend
 
@@ -22,8 +22,8 @@
 | 2 | Agent core | `[x]` DONE |
 | 3 | Model-narrated progress | `[x]` DONE |
 | 4 | Backend server | `[x]` DONE |
-| 5 | Modern GUI | `[~]` IN-PROGRESS |
-| 6 | Voice (Piper TTS + STT) | `[ ]` TODO |
+| 5 | Modern GUI | `[x]` DONE |
+| 6 | Voice (Piper TTS + STT) | `[~]` IN-PROGRESS |
 | 7 | Module porting waves | `[ ]` TODO |
 | 8 | Purge legacy | `[ ]` TODO |
 | 9 | Finalize | `[ ]` TODO |
@@ -89,13 +89,14 @@
 - [x] `friday/tests/test_server.py` (6 tests: REST + WS plain/tool/approval-approved/declined); 49 friday tests passing
 
 ## Phase 5 — Modern GUI
-- [ ] `friday/webui/` Vite + React + Tailwind scaffold
-- [ ] Streaming chat transcript
-- [ ] Tool/progress timeline component
-- [ ] Voice orb / push-to-talk control
-- [ ] Settings (provider+model picker, persona, key status)
-- [ ] Dark modern theme
-- [ ] `friday/app.py` pywebview native window + serve `webui/dist`
+- [x] `friday/webui/` Vite + React + Tailwind scaffold (built to `webui/dist`)
+- [x] Streaming chat transcript (token-by-token via `useFriday` WS hook)
+- [x] Tool/progress timeline component (live preamble + tool states)
+- [x] Voice orb / push-to-talk control (+ approval modal)
+- [x] Settings (provider/model/persona/tools view)
+- [x] Dark modern glassy theme (Tailwind, animated)
+- [x] `friday/app.py` + `friday/__main__.py`: uvicorn thread + pywebview window (browser fallback); serves `webui/dist`
+- [x] End-to-end smoke verified (GUI served at `/`, REST, WS turn stream); 49 tests passing
 
 ## Phase 6 — Voice
 - [ ] `friday/voice/tts.py` Piper (port, output + narration)
@@ -130,3 +131,4 @@
 - 2026-06-06 — Phase 2 complete: agent core — ToolRegistry, single-SQLite memory (turns/facts FTS5/audit), persona→prompt, the one agent loop (tool calling + streaming + events + bounded loop), memory built-in tools. 33 tests passing total. Starting Phase 3 (model-narrated progress).
 - 2026-06-06 — Phase 3 complete: event bus + fanout, narration engine (model preamble spoken in-the-moment, context-aware long-task progress lines, opt-in tool-result narration, suppression on finalize). 43 tests passing. Starting Phase 4 (backend server).
 - 2026-06-06 — Phase 4 complete: FridayService + FastAPI/WebSocket backend (streaming turn channel, tool events, approval round-trip). Fixed an approval-deadlock (duplicate approval_request). 49 tests passing. Starting Phase 5 (modern GUI).
+- 2026-06-06 — Phase 5 complete: modern React+Tailwind GUI (streaming chat, live tool/progress timeline, voice orb, approval modal, settings), pywebview launcher serving the built bundle from FastAPI. Verified end-to-end. Starting Phase 6 (voice).
