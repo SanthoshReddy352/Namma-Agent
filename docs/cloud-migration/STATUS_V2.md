@@ -5,7 +5,7 @@
 > listed here. The canonical plan ("god document") is
 > [`FRIDAY_V2_GOD_DOC.md`](./FRIDAY_V2_GOD_DOC.md).
 
-**Last updated:** 2026-06-06 (Phase 6 complete)
+**Last updated:** 2026-06-06 (Phase 7 Wave 1 complete)
 
 ## Legend
 
@@ -106,7 +106,7 @@
 
 ## Phase 7 — Module porting waves
 *(each module: convert params to JSON Schema, drop intent regex, add focused test)*
-- [ ] Wave 1: file_ops, code_exec/shell, system_control, app_launcher
+- [x] Wave 1: file_ops (read/write/list), shell (run_shell), system (system_info), apps (open_app) — clean v2 tools + auto-discovery (`friday/tools/`) + `friday/core/safety.py` (PathSecurity, destructive classification); `test_tools_wave1.py` (9). 65 tests passing.
 - [ ] Wave 2: web, browser_automation, security_tools, network
 - [ ] Wave 3: smart_home, document_intel, vision/image, scheduler, weather, news
 - [ ] Wave 4: memory, delegate_task, persona switch
@@ -134,3 +134,4 @@
 - 2026-06-06 — Phase 4 complete: FridayService + FastAPI/WebSocket backend (streaming turn channel, tool events, approval round-trip). Fixed an approval-deadlock (duplicate approval_request). 49 tests passing. Starting Phase 5 (modern GUI).
 - 2026-06-06 — Phase 5 complete: modern React+Tailwind GUI (streaming chat, live tool/progress timeline, voice orb, approval modal, settings), pywebview launcher serving the built bundle from FastAPI. Verified end-to-end. Starting Phase 6 (voice).
 - 2026-06-06 — Phase 6 complete: local Piper TTS (final answers + narration spoken), local push-to-talk STT (faster-whisper), barge-in, voice endpoints; all degrade gracefully without audio hardware. 56 tests passing. Starting Phase 7 (module porting).
+- 2026-06-06 — Phase 7 Wave 1 complete: v2 tools package with auto-discovery (file/shell/system/apps), path-security gating, destructive→approval classification. Full vertical verified (model→preamble→tool→narration→final). 65 tests passing. Waves 2–4 (web/browser/security/smart_home/etc.) pending.

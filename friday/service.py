@@ -40,6 +40,12 @@ class FridayService:
         self.db = db or Database(db_path)
         self.registry = registry or ToolRegistry()
         register_memory_tools(self.registry, self.db)
+        # Auto-discover capability tools (file/shell/system/apps/...). Skipped
+        # when a registry is injected (tests provide their own minimal set).
+        if registry is None:
+            from friday.tools import load_tools
+
+            load_tools(self.registry)
         self.provider = provider or from_config(self.config)
         self.persona = load_persona(self.config.get("persona", "friday_core"))
 
