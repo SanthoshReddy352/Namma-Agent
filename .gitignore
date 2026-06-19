@@ -38,6 +38,10 @@ data/*.sqlite3*
 data/browser-profile/
 data/_archive_*/
 data/chroma/
+data/media/
+data/memory/
+data/projects/
+data/uploads/
 # P2.2: canonical DB is data/friday.db; core/data/ was the accidental duplicate
 core/data/
 models/
