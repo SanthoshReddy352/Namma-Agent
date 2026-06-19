@@ -201,6 +201,24 @@ def test_phantom_media_link_is_stripped():
     assert "Here's a diagram:" in result.content and "That's it." in result.content
 
 
+def test_phantom_diagram_block_fully_stripped():
+    """A fabricated diagram block — the image line PLUS the orphan
+    '*caption* · [⬇ Download diagram](…)' line — is removed whole: no broken image,
+    no dangling caption, no dead download link, surrounding prose kept."""
+    content = (
+        "Here's what that looks like visually:\n\n"
+        "![if-elif-else decision flow](/api/media/diagrams/phantom123.png)\n\n"
+        "*if-elif-else decision flow* · [⬇ Download diagram](/api/media/diagrams/phantom123.png)\n\n"
+        "Key thing: indentation matters.")
+    agent, db, _ = _agent([LLMResponse(content=content)])
+    result = agent.process_turn("teach")
+    assert "/api/media/" not in result.content
+    assert "⬇" not in result.content and "Download diagram" not in result.content
+    assert "if-elif-else decision flow" not in result.content  # orphan caption gone too
+    assert "Here's what that looks like visually:" in result.content
+    assert "Key thing: indentation matters." in result.content
+
+
 def test_does_not_duplicate_repeated_media():
     """A tool returning the same media URL twice is shown once in the final answer."""
     reg = ToolRegistry()

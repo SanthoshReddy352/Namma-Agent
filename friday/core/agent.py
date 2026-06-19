@@ -29,11 +29,16 @@ from friday.core.persona import Persona, load_persona
 from friday.core.providers.base import Provider
 from friday.core.tools import ToolRegistry
 
-# A markdown image pointing at our media mount. The ONLY legitimate source of
-# these is a successful render_diagram / fetch_image tool result (the agent injects
-# that itself); when the model writes one in its own prose the file doesn't exist,
-# so it renders as a broken/"unavailable" image. We strip those phantom links.
-_MEDIA_IMG_RE = re.compile(r"!\[[^\]]*\]\((/api/media/[^)\s]+)\)")
+# References to our media mount. The ONLY legitimate source of these is a
+# successful render_diagram / fetch_image / render_simulation tool result (the
+# agent injects that itself); when the model writes one in its own prose the file
+# doesn't exist, so it renders as a broken/"unavailable" image plus an orphan
+# caption + dead download link. We strip every flavour of those phantom refs.
+_MEDIA_MD_RE = re.compile(r"!?\[[^\]]*\]\((/api/media/[^)\s]+)\)")   # ![alt](url) or [text](url)
+_MEDIA_URL_RE = re.compile(r"/api/media/[^)\s\"'<>]+")               # bare url, any form
+# Decoration left over once a media link is removed (emphasis, the tool's " · "
+# caption separator, dashes/pipes) — a line that's ONLY this is an orphan caption.
+_CAPTION_DECORATION = " *_·•|–—-\t\r"
 
 # Cues that mean "a comprehension check is coming". In a teaching session these
 # MUST be backed by a pose_quiz card; if the model promised one but didn't call
@@ -54,17 +59,47 @@ _QUIZ_REPAIR_INSTRUCTION = (
 )
 
 
+def _media_missing(url: str) -> bool:
+    """True when a /api/media/<path> URL has no backing file on disk."""
+    rel = url[len("/api/media/"):].split("?", 1)[0].split("#", 1)[0]
+    try:
+        return not (Path("data/media") / rel).exists()
+    except Exception:  # noqa: BLE001
+        return True
+
+
 def _strip_phantom_media(text: str) -> str:
-    """Remove model-authored ``![…](/api/media/…)`` links whose file doesn't exist
-    on disk (fabricated diagram/image links the model shouldn't have written)."""
+    """Scrub model-authored references to /api/media artifacts that don't exist on
+    disk — the broken image link, the orphan ``*Title* · [⬇ Download …](…)`` caption
+    line, standalone download links, and any bare leftover URL — so a fabricated
+    diagram never surfaces as a broken image or a dangling caption. Real, tool-
+    produced media (whose file exists) is left completely untouched.
+
+    Works line by line so we can drop a whole caption/download line wholesale while
+    keeping ordinary prose that merely happens to mention a (real) link.
+    """
     if not text or "/api/media/" not in text:
         return text
 
-    def _repl(m: "re.Match") -> str:
-        rel = m.group(1)[len("/api/media/"):]
-        return m.group(0) if (Path("data/media") / rel).exists() else ""
-
-    return _MEDIA_IMG_RE.sub(_repl, text).strip()
+    out: list[str] = []
+    for line in text.split("\n"):
+        missing = [u for u in _MEDIA_URL_RE.findall(line) if _media_missing(u)]
+        if not missing:
+            out.append(line)
+            continue
+        # The tool's caption/download line for a missing artifact
+        # ("*Title* · [⬇ Download diagram](…)") — drop it entirely.
+        low = line.lower()
+        if "·" in line or "⬇" in line or "download" in low:
+            continue
+        # Otherwise strip just the dead image/link markdown (and any bare URL),
+        # keeping the surrounding prose intact.
+        cleaned = _MEDIA_MD_RE.sub(lambda m: m.group(0) if not _media_missing(m.group(1)) else "", line)
+        cleaned = _MEDIA_URL_RE.sub(lambda m: m.group(0) if not _media_missing(m.group(0)) else "", cleaned)
+        # If nothing meaningful remains (just caption decoration), drop the line.
+        if cleaned.strip(_CAPTION_DECORATION):
+            out.append(cleaned)
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
 def _promises_check(text: str) -> bool:
