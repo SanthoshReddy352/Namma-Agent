@@ -408,6 +408,39 @@ class FridayService:
             return ""
         return (resp.content or "").strip()
 
+    def project_recap(self, session_id: str, project: Optional[dict] = None) -> str:
+        """A concise hand-off recap of a project chat, so a DIFFERENT model can
+        seamlessly continue after a mid-chat model switch. Mirrors ``learning_recap``:
+        best-effort, returns "" when there's nothing to recap or the call fails."""
+        turns = self.db.session_turns(session_id)
+        convo = [t for t in turns
+                 if t.get("role") in ("user", "assistant") and (t.get("content") or "").strip()]
+        if len(convo) < 2:  # nothing of substance to carry over yet
+            return ""
+        transcript = "\n".join(
+            f"{t['role'].upper()}: {(t['content'] or '')[:800]}" for t in convo[-16:])
+        pname = (project or {}).get("name") or "this project"
+        messages = [
+            {"role": "system", "content":
+                "You summarize an ongoing assistant chat so another assistant can "
+                "seamlessly pick it up. Be concise and concrete."},
+            {"role": "user", "content":
+                f'This is a working chat in the project "{pname}". Summarize for the next '
+                "assistant in 3–5 short bullet points:\n"
+                "- what the user is trying to do and any decisions made\n"
+                "- key facts, files, or context established so far\n"
+                "- anything still open or in progress\n"
+                "- the very next step\n"
+                "Output only the bullet points.\n\n" + transcript},
+        ]
+        try:
+            resp = self.provider_for(None).generate(messages, tools=None, stream=False)
+        except Exception as exc:  # noqa: BLE001
+            from friday.core.logger import logger
+            logger.warning("[service] project recap failed: %s", exc)
+            return ""
+        return (resp.content or "").strip()
+
     def summarize_project_sessions(self, project_id: str, limit: int = 3) -> int:
         """Summarize a project's finished-but-unsummarized chats so the next
         session in that project opens with real cross-session context. Called

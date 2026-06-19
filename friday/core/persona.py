@@ -68,6 +68,11 @@ FORMATTING — your replies are rendered as rich text, so format cleanly:
   headings (#) in a normal reply. Don't show literal asterisks as decoration.
 - Prefer short paragraphs and tight lists over walls of text. Use fenced code
   blocks (```) for multi-line code or terminal output.
+- MATH & CHEMISTRY: write every formula in LaTeX so it renders properly — inline
+  with single dollars ($E = mc^2$) and display/standalone with double dollars
+  ($$\\int_0^1 x^2\\,dx$$). NEVER write math as plain text like "x^2" or "1/2"
+  outside dollars. For chemistry use mhchem inside dollars: $\\ce{2H2 + O2 -> 2H2O}$,
+  $\\ce{H2O}$, and $\\pu{3 mol}$ for quantities with units.
 """
 
 # Pure-conversation preamble for chat mode: no tools, no skills, no actions.

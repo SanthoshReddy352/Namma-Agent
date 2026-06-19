@@ -294,3 +294,42 @@ def test_learning_switch_model_rejects_non_learning_session():
     r = client.post("/api/learning/switch_model",
                     json={"session_id": sid, "model": "x"}).json()
     assert r["ok"] is False
+
+
+def test_project_switch_model_recaps_and_keeps_project():
+    """Switching a project chat's model mirrors the Learning-Room switch: recap the
+    session, bind the new model to a fresh session in the SAME project, carry the
+    chat title over, and seed the recap intro — instead of cold-starting."""
+    svc = _service([LLMResponse(content="- Set up the build\n- Next: wire the deploy step")])
+    app = create_app(svc)
+    client = TestClient(app)
+    project = svc.db.create_project("Pipeline", "ci/cd work")
+    old = svc.db.create_session_in(project_id=project["id"], kind="chat")
+    svc.db.rename_session(old, "CI setup")
+    svc.db.add_turn(old, "user", "help me set up CI")
+    svc.db.add_turn(old, "assistant", "Sure — let's start with the build job.")
+
+    r = client.post("/api/projects/switch_model",
+                    json={"session_id": old, "model": "gemini-guider"}).json()
+    assert r["ok"] is True
+    new = r["session_id"]
+    assert new and new != old
+    # new session bound to the chosen model and kept in the same project
+    assert svc.db.get_session(new)["model"] == "gemini-guider"
+    assert svc.db.get_session(new)["project_id"] == project["id"]
+    # the chat title carries over for sidebar continuity
+    assert svc.db.get_session(new)["title"] == "CI setup"
+    # the new thread opens with a recap intro carrying the summary
+    intro = svc.db.session_turns(new)[0]["content"]
+    assert "now chatting with" in intro and "deploy step" in intro
+    assert "deploy step" in r["recap"]
+
+
+def test_project_switch_model_rejects_non_project_session():
+    svc = _service([])  # provider must not be called
+    app = create_app(svc)
+    client = TestClient(app)
+    sid = svc.db.create_session()  # a plain chat, not filed in any project
+    r = client.post("/api/projects/switch_model",
+                    json={"session_id": sid, "model": "x"}).json()
+    assert r["ok"] is False

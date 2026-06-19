@@ -53,6 +53,11 @@ export const updateProject = (id, fields) => jpatch(`/api/projects/${id}`, field
 export const deleteProject = (id) => j(`/api/projects/${id}`, { method: "DELETE" });
 export const newProjectSession = (id) => jpost(`/api/projects/${id}/sessions`);
 export const addProjectMemory = (id, content) => jpost(`/api/projects/${id}/memory`, { content });
+// Switch a project chat to another configured model: the server recaps the
+// current session and returns a fresh session id (seeded with that recap, kept in
+// the same project) to open — the exact mirror of switchLearningModel.
+export const switchProjectModel = (sessionId, model) =>
+  jpost("/api/projects/switch_model", { session_id: sessionId, model });
 export const deleteScopeMemory = (entryId) => j(`/api/scope_memory/${entryId}`, { method: "DELETE" });
 export const renameSession = (id, title) => jpatch(`/api/sessions/${id}`, { title });
 export const fileChat = (id, projectId) => jpost(`/api/sessions/${id}/project`, { project_id: projectId });
@@ -147,6 +152,9 @@ const blank = () => ({ messages: [], timeline: [], status: "idle", streamId: nul
 const isProvisional = (k) => typeof k === "string" && k.startsWith("ref");
 const LAST_SESSION_KEY = "friday-current-session";
 const SERVER_ID_KEY = "friday-server-id";
+// The "active model" — the brain the user last picked. New chats inherit it so a
+// model choice sticks across chats instead of snapping back to the first profile.
+const ACTIVE_MODEL_KEY = "friday-active-model";
 
 /**
  * Core hook: one WebSocket turn channel feeding *per-session* state. Every chat
@@ -170,6 +178,16 @@ export function useFriday() {
   const [configuredModels, setConfiguredModels] = useState([]); // switchable brains
   const configuredModelsRef = useRef([]);
   configuredModelsRef.current = configuredModels;
+  // The persisted active model — what new chats default to (see ACTIVE_MODEL_KEY).
+  const [activeModel, setActiveModel] = useState(() => localStorage.getItem(ACTIVE_MODEL_KEY) || "");
+  const activeModelRef = useRef(activeModel);
+  activeModelRef.current = activeModel;
+  const setActive = useCallback((modelId) => {
+    if (!modelId) return;
+    activeModelRef.current = modelId;
+    setActiveModel(modelId);
+    localStorage.setItem(ACTIVE_MODEL_KEY, modelId);
+  }, []);
   const voiceRef = useRef(voiceOn);
   voiceRef.current = voiceOn;
   const dataRef = useRef({});                     // synchronous mirror of `data`
@@ -294,10 +312,16 @@ export function useFriday() {
         }
         break;
       }
-      case "quiz":
-        // Interactive multiple-choice card rendered inline in the chat thread.
-        patch(key, (cur) => ({ messages: [...cur.messages, { id: nextId(), role: "quiz", quiz: msg, at: now() }] }));
+      case "quiz": {
+        // Interactive multiple-choice card rendered inline in the chat thread. The
+        // question lives ONLY in this card — never let it go missing: if the event
+        // somehow arrives without a session id, fall back to the open chat so the
+        // learner always sees the artifact the teacher promised.
+        const qsid = key || currentRef.current;
+        const quiz = key ? msg : { ...msg, session_id: qsid };
+        patch(qsid, (cur) => ({ messages: [...cur.messages, { id: nextId(), role: "quiz", quiz, at: now() }] }));
         break;
+      }
       case "learn_suggestion":
         // A gentle "want me to teach this?" chip under the reply for this chat.
         patch(key, () => ({ suggestion: msg.topic }));
@@ -372,10 +396,11 @@ export function useFriday() {
     if (!key) { key = "ref" + nextId(); clientRef = key; setCurrentSid(key); }
     else if (isProvisional(key)) { clientRef = key; }
     else { sessionId = key; }
-    // The chat's chosen brain. Falls back to the first configured model so a new
-    // chat runs on a real model instead of the (possibly empty) config default.
-    // Sticky: the server binds it on the first turn and ignores it on later turns.
-    const model = dataRef.current[key]?.model || configuredModelsRef.current[0]?.id || null;
+    // The chat's chosen brain: this chat's own pick, else the active model the user
+    // last chose, else the first configured profile. Sticky: the server binds it on
+    // the first turn and ignores it on later turns.
+    const model = dataRef.current[key]?.model || activeModelRef.current
+      || configuredModelsRef.current[0]?.id || null;
     const userMsg = { id: nextId(), role: "user", content: clean || "(sent attachment)", attachments, at: now() };
     patch(key, (cur) => ({ messages: [...cur.messages, userMsg], timeline: [], streamId: null, status: "thinking", suggestion: null }));
     wsRef.current.send(JSON.stringify({
@@ -457,7 +482,16 @@ export function useFriday() {
 
   // ── Model selection / switching ───────────────────────────────────────────
   const reloadConfiguredModels = useCallback(
-    () => fetchConfiguredModels().then((r) => { setConfiguredModels(r?.models || []); return r?.models || []; }),
+    () => fetchConfiguredModels().then((r) => {
+      const models = r?.models || [];
+      setConfiguredModels(models);
+      // Drop a stale active model that's no longer in the configured list.
+      setActiveModel((am) => {
+        if (am && !models.some((m) => m.id === am)) { localStorage.removeItem(ACTIVE_MODEL_KEY); return ""; }
+        return am;
+      });
+      return models;
+    }),
     []);
   useEffect(() => { reloadConfiguredModels(); }, [reloadConfiguredModels]);
 
@@ -467,7 +501,8 @@ export function useFriday() {
     let key = currentRef.current;
     if (!key) { key = "ref" + nextId(); setCurrentSid(key); }
     patch(key, () => ({ model: modelId }));
-  }, [patch]);
+    setActive(modelId); // remember it as the default for future new chats
+  }, [patch, setActive]);
 
   // Switch the brain MID-CHAT: starts a NEW session (fresh context) but keeps the
   // same on-screen thread — the prior messages stay visible above a divider, and
@@ -486,8 +521,9 @@ export function useFriday() {
       dataRef.current = o; return o;
     });
     setCurrentSid(newKey);
+    setActive(modelId); // remember it as the default for future new chats
     localStorage.removeItem(LAST_SESSION_KEY); // the new session has no id until its first turn
-  }, [configuredModels, selectModel, patch]);
+  }, [configuredModels, selectModel, setActive, patch]);
 
   // Show a local (client-only) assistant message — used by /help and /clear.
   const showLocal = useCallback((content) => {
@@ -502,7 +538,8 @@ export function useFriday() {
     chatContext: cur.context || null, suggestion: cur.suggestion || null, learningSignal,
     approval, passwordReq, mode, setMode, sessions, shuttingDown,
     voiceOn, setVoiceOn,
-    configuredModels, currentModel: cur.model || configuredModels[0]?.id || "", selectModel, switchModelNewSession, reloadConfiguredModels,
+    configuredModels, currentModel: cur.model || activeModel || configuredModels[0]?.id || "",
+    activeModel, setActiveModel: setActive, selectModel, switchModelNewSession, reloadConfiguredModels,
     chatHasTurns: (cur.messages || []).some((m) => m.role === "user"),
     send, sendToSession, stop, respondApproval, respondPassword, openSession, newChat, refreshSessions, removeSession, showLocal,
     currentSessionId: () => (currentRef.current && !isProvisional(currentRef.current) ? currentRef.current : null),

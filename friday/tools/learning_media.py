@@ -14,6 +14,7 @@ import json
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import urllib.parse
@@ -48,6 +49,35 @@ def _locate_output(out_path: Path) -> Path | None:
         return out_path
     suffixed = out_path.with_name(f"{out_path.stem}-1{out_path.suffix}")
     return suffixed if suffixed.exists() else None
+
+
+# PNG signature + minimum plausible size for a real diagram (mmdc can emit a
+# 0-byte or truncated file when puppeteer dies mid-render; that file would 404 /
+# show broken in the chat). We never hand a URL to the chat unless the bytes on
+# disk are a genuine, non-degenerate PNG.
+_PNG_SIG = b"\x89PNG\r\n\x1a\n"
+
+
+def _verify_png(path: Path) -> bool:
+    """True only for a real, decodable PNG with non-zero dimensions. This is the
+    server-side verification gate: a diagram is placed in the chat ONLY after we
+    confirm the rendered image is valid, so the learner never sees a broken/blank
+    image and never has to re-render client-side."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size < 256:  # a valid diagram PNG is comfortably larger than this
+        return False
+    try:
+        with path.open("rb") as fh:
+            head = fh.read(24)  # 8-byte sig + IHDR length/type + width/height
+    except OSError:
+        return False
+    if len(head) < 24 or head[:8] != _PNG_SIG or head[12:16] != b"IHDR":
+        return False
+    width, height = struct.unpack(">II", head[16:24])
+    return width > 0 and height > 0
 
 
 # ── Foolproof diagram generation ────────────────────────────────────────────
@@ -206,8 +236,13 @@ def _render_diagram(args: dict) -> ToolResult:
                     last_err = "diagram render timed out"
                     continue
                 produced = _locate_output(out_path)
-                if proc.returncode == 0 and produced is not None:
+                # The image is placed in the chat ONLY after server-side verification
+                # that the bytes are a real, decodable PNG — a 0 returncode is not
+                # enough (puppeteer can exit clean having written a truncated file).
+                if proc.returncode == 0 and produced is not None and _verify_png(produced):
                     break
+                if produced is not None and not _verify_png(produced):
+                    last_err = (last_err or "render produced an invalid/empty PNG")
                 produced = None
                 logger.warning("[learning_media] mmdc attempt %d failed: %s", attempt, last_err[:300])
 
@@ -274,7 +309,9 @@ def _render_simulation(args: dict) -> ToolResult:
     (_media_dir("sims") / name).write_text(html, encoding="utf-8")
     url = f"/api/media/sims/{name}"
     record_artifact("simulation", url, title)
-    # The Learning Room renders /api/media/sims/* links as a sandboxed iframe card.
+    # Every chat renders /api/media/sims/* links as a playable, sandboxed iframe
+    # card right inline (with an expand-to-fullscreen control) — the learner runs
+    # the simulation in place, never bounced to a separate browser tab.
     content = f"[▶ Open interactive simulation — {title}]({url})"
     return ToolResult(ok=True, content=content, data={"url": url, "kind": "simulation"})
 
@@ -328,9 +365,13 @@ def register(registry: ToolRegistry) -> None:
     )
     registry.register(
         "render_simulation",
-        "Save a self-contained interactive HTML/JS simulation (one full <html> document, "
-        "all CSS/JS inline) as a downloadable artifact rendered in a sandboxed frame. Use "
-        "when motion or interaction teaches better than text.",
+        "Build a self-contained interactive HTML/JS simulation (one full <html> document, "
+        "all CSS/JS inline) — it plays INLINE in the chat in a sandboxed, expandable frame, "
+        "so the user experiences it right here without ever leaving for a browser tab. Reach "
+        "for this whenever hands-on interaction or motion teaches better than a static "
+        "picture: sliders that change a graph, a clickable diagram, a physics/animation demo, "
+        "a step-through visualizer, a tiny playground. Make it self-explanatory with on-screen "
+        "controls and labels.",
         {
             "type": "object",
             "properties": {

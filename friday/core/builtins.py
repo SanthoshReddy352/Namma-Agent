@@ -465,31 +465,49 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
     def pose_quiz(args: dict) -> ToolResult:
         topic = _topic()
         question = (args.get("question") or "").strip()
-        options = args.get("options") or []
-        if not question or len(options) < 2:
-            return ToolResult(ok=False, content="", error="need a question and >=2 options")
+        options = [str(o).strip() for o in (args.get("options") or []) if str(o).strip()]
+        if not question:
+            return ToolResult(ok=False, content="",
+                              error="pose_quiz needs a 'question'. The check question must "
+                                    "live in this card — do not ask it in chat text.")
+        if len(options) < 2:
+            return ToolResult(ok=False, content="",
+                              error="pose_quiz needs at least 2 non-empty 'options'. Provide "
+                                    "the options here — never list them in chat text.")
         own = _session_module(topic) if topic else None
+        # Clamp answer_index into range so a bad index can never produce a card with
+        # no correct answer.
+        try:
+            answer_index = int(args.get("answer_index", 0))
+        except (TypeError, ValueError):
+            answer_index = 0
+        answer_index = max(0, min(answer_index, len(options) - 1))
         import json as _json
         import uuid as _uuid
+        session_id = get_current_session()
         payload = {
             "quiz_id": _uuid.uuid4().hex,  # ties the persisted card to its answer
             "question": question,
             "options": options,
-            "answer_index": int(args.get("answer_index", 0)),
+            "answer_index": answer_index,
             "explanation": (args.get("explanation") or "").strip(),
             "topic_id": topic["id"] if topic else None,
             # Attribute the check to the module whose THREAD it was posed in, not
             # the global pointer (they diverge when revisiting other modules).
             "module_id": (own or {}).get("id")
                          or (topic or {}).get("progress", {}).get("current_module"),
-            "session_id": get_current_session(),  # route the card to the right chat
+            "session_id": session_id,  # route the card to the right chat
         }
         emit_event("quiz", payload)
         # Persist the card as a 'quiz' turn so it survives leaving/reopening the
         # chat (recent_turns keeps it out of the model's message history).
-        if payload["session_id"]:
-            db.add_turn(payload["session_id"], "quiz", _json.dumps(payload))
-        return ToolResult(ok=True, content="(quiz shown to the learner — wait for their answer)")
+        if session_id:
+            db.add_turn(session_id, "quiz", _json.dumps(payload))
+        # Tell the model the card is now on screen and to NOT restate it — restating
+        # the question in prose is exactly what produces an "inline" question.
+        return ToolResult(ok=True, content="(The multiple-choice card is now displayed to the "
+                          "learner. Do NOT repeat the question or the options in your message — "
+                          "the card IS the question. Wait for their answer.)")
 
     def record_understanding(args: dict) -> ToolResult:
         topic = _topic()
@@ -532,8 +550,17 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
         topic = (args.get("topic") or "").strip()
         if not topic:
             return ToolResult(ok=False, content="", error="'topic' is required")
-        emit_event("learn_suggestion", {"topic": topic, "session_id": get_current_session()})
-        return ToolResult(ok=True, content="")  # silent: the UI shows a gentle toast
+        # Solo chats ONLY: a learning suggestion makes no sense inside the Learning
+        # Room itself (they're already there) or a project chat (a focused workspace).
+        # Gate it server-side so the gentle nudge can never surface anywhere else,
+        # regardless of what the model does.
+        sid = get_current_session()
+        sess = db.get_session(sid) if sid else None
+        kind = (sess or {}).get("kind") or "chat"
+        if kind != "chat" or (sess or {}).get("project_id"):
+            return ToolResult(ok=True, content="(not a solo chat — learning suggestion skipped)")
+        emit_event("learn_suggestion", {"topic": topic, "session_id": sid})
+        return ToolResult(ok=True, content="")  # silent: the UI shows a gentle nudge
 
     registry.register(
         "set_learning_plan",
@@ -600,8 +627,12 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
     )
     registry.register(
         "suggest_learning",
-        "Call ONLY in a normal chat when the user is struggling to understand a concept: "
-        "offers them the Learning Room for that topic via a gentle toast. Pass the topic.",
+        "Call in a normal solo chat when you detect the user is trying to LEARN a topic "
+        "more deeply — asking follow-up 'why/how' questions, going step by step, asking to "
+        "be taught/explained, or clearly struggling to grasp a concept. It offers them the "
+        "Learning Room for that topic via a gentle nudge under your reply. Pass a short, "
+        "specific `topic` (e.g. 'recursion', 'how neural networks learn'). Call it at most "
+        "once for a given topic; do not use it for quick factual or task requests.",
         {"type": "object", "properties": {"topic": {"type": "string"}}, "required": ["topic"]},
         suggest_learning,
     )

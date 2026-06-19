@@ -18,7 +18,9 @@ the backend WebSocket (Phase 4), and TTS can all subscribe to the same stream.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable, Optional
 
 from friday.core.logger import logger
@@ -26,6 +28,56 @@ from friday.core.memory import Database
 from friday.core.persona import Persona, load_persona
 from friday.core.providers.base import Provider
 from friday.core.tools import ToolRegistry
+
+# A markdown image pointing at our media mount. The ONLY legitimate source of
+# these is a successful render_diagram / fetch_image tool result (the agent injects
+# that itself); when the model writes one in its own prose the file doesn't exist,
+# so it renders as a broken/"unavailable" image. We strip those phantom links.
+_MEDIA_IMG_RE = re.compile(r"!\[[^\]]*\]\((/api/media/[^)\s]+)\)")
+
+# Cues that mean "a comprehension check is coming". In a teaching session these
+# MUST be backed by a pose_quiz card; if the model promised one but didn't call
+# the tool, we repair the turn (and, failing that, drop the empty promise).
+_CHECK_CUES = (
+    "quick check", "let's check", "lets check", "let us check", "take a look at the card",
+    "take a look at the question", "pick the option", "let me know your answer",
+    "check if that", "check if this", "check to see", "check below", "see if that",
+    "see if this", "👇",
+)
+
+_QUIZ_REPAIR_INSTRUCTION = (
+    "[system] Your last teaching message invited a comprehension check, but you did NOT "
+    "call pose_quiz — so the learner sees no question card and is stuck. Call pose_quiz "
+    "RIGHT NOW for the concept you just taught: a clear multiple-choice question, 3–4 "
+    "options, the correct 0-based answer_index, and a one-line explanation. Respond with "
+    "ONLY the pose_quiz tool call — no prose."
+)
+
+
+def _strip_phantom_media(text: str) -> str:
+    """Remove model-authored ``![…](/api/media/…)`` links whose file doesn't exist
+    on disk (fabricated diagram/image links the model shouldn't have written)."""
+    if not text or "/api/media/" not in text:
+        return text
+
+    def _repl(m: "re.Match") -> str:
+        rel = m.group(1)[len("/api/media/"):]
+        return m.group(0) if (Path("data/media") / rel).exists() else ""
+
+    return _MEDIA_IMG_RE.sub(_repl, text).strip()
+
+
+def _promises_check(text: str) -> bool:
+    low = (text or "").lower()
+    return any(cue in low for cue in _CHECK_CUES)
+
+
+def _strip_check_promise(text: str) -> str:
+    """Last-resort: drop short lines that only invite a (now-missing) check, so the
+    learner isn't left staring at a promise with no card."""
+    kept = [ln for ln in (text or "").split("\n")
+            if not (_promises_check(ln) and len(ln.strip()) <= 200)]
+    return "\n".join(kept).strip()
 
 # emit(event_type, payload_dict)
 EmitFn = Callable[[str, dict], None]
@@ -115,6 +167,9 @@ class Agent:
 
         # chat mode = pure conversation: no tools, no skills, no memory writes via tools.
         chat_mode = (mode or "agent").lower() == "chat"
+        # In a Learning-Room MODULE thread the teacher must back every "let's check"
+        # with a pose_quiz card; guard against the model promising one and not calling it.
+        quiz_guard = (not chat_mode) and self._is_teaching_session(session_id)
         logger.info("[turn] mode=%s session=%s :: %s", "chat" if chat_mode else "agent",
                     session_id[:8], user_input[:120].replace("\n", " "))
         emit("turn_started", {"session_id": session_id, "text": user_input, "mode": mode})
@@ -159,8 +214,9 @@ class Agent:
 
             if not resp.has_tool_calls:
                 final_content = resp.content
-                if resp.content.strip():
-                    segments.append(resp.content.strip())
+                cleaned = _strip_phantom_media(resp.content.strip())
+                if cleaned:
+                    segments.append(cleaned)
                 logger.info("[turn] final answer (%d step(s), tools=%s)", step,
                             ",".join(tools_used) or "none")
                 break
@@ -169,7 +225,7 @@ class Agent:
             # AND keep it in the visible answer.
             if resp.content.strip():
                 emit("preamble", {"session_id": session_id, "text": resp.content})
-                segments.append(resp.content.strip())
+                segments.append(_strip_phantom_media(resp.content.strip()))
                 # Mirror the final assembly in the live stream: the next round's
                 # tokens (or injected media) must start a new paragraph, exactly
                 # like the "\n\n" join below — so the bubble doesn't reflow when
@@ -210,10 +266,16 @@ class Agent:
                 })
                 # Surface generated media (diagram/image/simulation) inline in the
                 # visible answer — these tools return ready-to-render markdown +
-                # download link in their result content and tag data.url. The same
-                # markdown is pushed into the live token stream, so the image
-                # renders in place the moment it exists instead of popping in at
-                # the end of the turn.
+                # download link in their result content and tag data.url.
+                #
+                # The media is appended to `segments` (so it lands, in order, in the
+                # finalized answer that's persisted and replayed) but is DELIBERATELY
+                # NOT pushed into the live token stream. Streaming the image markdown
+                # mid-turn makes the chat bubble re-parse its whole markdown on every
+                # subsequent token, which remounts the <img> and makes the diagram
+                # flicker. By withholding media from the token stream, the image is
+                # painted exactly once — when the finalized turn_result lands — so the
+                # server-rendered, verified PNG appears as a single stable artifact.
                 data = getattr(result, "data", None) or {}
                 media_md = ""
                 if result.ok and isinstance(data, dict):
@@ -226,14 +288,24 @@ class Agent:
                         media_md = data["inline"].strip()
                 if media_md:
                     segments.append(media_md)
-                    if on_token is not None:
-                        on_token(media_md + "\n\n")
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "name": tc.name,
                     "content": result.as_message_content(),
                 })
+
+        # Teaching guard: the model promised a check but never posed the card. Force
+        # the pose_quiz so the learner actually gets a question; if even that fails,
+        # drop the empty promise so they're not left staring at nothing.
+        if quiz_guard and "pose_quiz" not in tools_used:
+            visible = "\n\n".join(s for s in segments if s).strip()
+            if _promises_check(visible):
+                if self._repair_dangling_quiz(messages, visible, provider, tool_defs,
+                                               emit, session_id):
+                    tools_used.append("pose_quiz")
+                else:
+                    segments = [_strip_check_promise(s) for s in segments]
 
         final_content = "\n\n".join(s for s in segments if s).strip() or final_content
         self.db.add_turn(session_id, "assistant", final_content, tools_used)
@@ -244,6 +316,47 @@ class Agent:
                            tools_used=tools_used, usage=usage)
 
     # -- helpers -----------------------------------------------------------
+
+    def _is_teaching_session(self, session_id: str) -> bool:
+        """True for a Learning-Room MODULE thread (where the pedagogy contract — and
+        thus the pose_quiz requirement — applies), not the path chat or a plain chat."""
+        try:
+            sess = self.db.get_session(session_id)
+            if (sess or {}).get("kind") != "learning":
+                return False
+            from friday.core.learning import topic_for_session
+            topic = topic_for_session(self.db, session_id)
+            return bool(topic and topic.get("session_id") != session_id)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _repair_dangling_quiz(self, messages: list[dict], visible_answer: str,
+                              provider: Provider, tool_defs: list, emit: EmitFn,
+                              session_id: str) -> bool:
+        """One forced attempt to get the model to call pose_quiz for the check it just
+        promised. Returns True if a quiz card was posed. The card emits + persists via
+        the pose_quiz tool itself, so nothing is added to the visible answer here."""
+        convo = messages + [
+            {"role": "assistant", "content": visible_answer},
+            {"role": "user", "content": _QUIZ_REPAIR_INSTRUCTION},
+        ]
+        try:
+            resp = provider.generate(convo, tools=tool_defs, stream=False)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[turn] quiz-repair generation failed: %s", exc)
+            return False
+        posed = False
+        for tc in getattr(resp, "tool_calls", None) or []:
+            if tc.name != "pose_quiz":
+                continue
+            logger.info("[turn] quiz-repair posing missing check")
+            emit("tool_started", {"session_id": session_id, "tool": tc.name, "args": tc.args})
+            result = self.registry.execute("pose_quiz", tc.args)
+            emit("tool_finished", {"session_id": session_id, "tool": tc.name,
+                                   "ok": result.ok, "summary": result.as_message_content()[:200]})
+            self.db.log_audit(session_id, tc.name, tc.args, result.as_message_content(), result.ok)
+            posed = posed or result.ok
+        return posed
 
     def _build_messages(self, user_input: str, session_id: str, chat_mode: bool = False) -> list[dict]:
         facts = self.db.all_facts()

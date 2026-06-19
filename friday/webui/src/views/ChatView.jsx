@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { clearMemory, learningModuleSession, switchLearningModel } from "../api.js";
+import { clearMemory, learningModuleSession, switchLearningModel, switchProjectModel } from "../api.js";
 import Logo from "../components/Logo.jsx";
 import Message from "../components/Message.jsx";
 import QuizCard from "../components/QuizCard.jsx";
@@ -23,7 +23,7 @@ export default function ChatView() {
     voiceOn, setVoiceOn, send, stop, newChat, refreshSessions, showLocal,
     chatContext, suggestion, sendToSession, openChat,
     configuredModels, currentModel, selectModel, switchModelNewSession, chatHasTurns, confirmAction,
-    currentSessionId,
+    currentSessionId, setActiveModel,
   } = useOutletContext();
   const navigate = useNavigate();
 
@@ -57,7 +57,24 @@ export default function ChatView() {
       "Switch model");
     if (!ok) return;
     const r = await switchLearningModel(sid, modelId);
-    if (r?.session_id) openChat(r.session_id);
+    if (r?.session_id) { setActiveModel?.(modelId); openChat(r.session_id); }
+  }
+
+  // Switching the model inside a project chat works exactly like the Learning-Room
+  // switch: the server summarizes the current session and seeds the recap into a
+  // fresh session (kept in the same project) on the new model, so the conversation
+  // continues instead of cold-starting. We confirm first, then open it.
+  async function onPickModelProject(modelId) {
+    if (modelId === currentModel) return;
+    const label = configuredModels.find((m) => m.id === modelId)?.label || modelId || "the default model";
+    const sid = currentSessionId?.();
+    if (!sid) { selectModel(modelId); return; }  // chat not started yet — just re-pick
+    const ok = await confirmAction(
+      `Switch this chat to ${label}? I'll summarize what we've covered so far and continue from there — you won't lose the thread.`,
+      "Switch model");
+    if (!ok) return;
+    const r = await switchProjectModel(sid, modelId);
+    if (r?.session_id) { setActiveModel?.(modelId); openChat(r.session_id); }
   }
 
   const scrollRef = useRef(null);
@@ -107,11 +124,20 @@ export default function ChatView() {
       <header className="flex items-center justify-between px-5 h-12 border-b border-line dark:border-night-line">
         <div className="flex items-center gap-2 text-[13px] text-ink-faint dark:text-night-faint min-w-0">
           {chatContext?.project ? (
-            <Breadcrumb navigate={navigate} crumbs={[
-              { label: "Projects", to: "/projects" },
-              { label: chatContext.project.name, to: `/projects/${chatContext.project.id}` },
-              { label: chatContext.title || "New Chat" },   // active leaf, not clickable
-            ]} />
+            <>
+              <Breadcrumb navigate={navigate} crumbs={[
+                { label: "Projects", to: "/projects" },
+                { label: chatContext.project.name, to: `/projects/${chatContext.project.id}` },
+                { label: chatContext.title || "New Chat" },   // active leaf, not clickable
+              ]} />
+              {configuredModels.length > 0 && (
+                <>
+                  <span className="mx-1 shrink-0">·</span>
+                  <ModelSwitcher models={configuredModels} current={currentModel}
+                                 defaultModel={config?.model || "default"} onPick={onPickModelProject} />
+                </>
+              )}
+            </>
           ) : chatContext?.topic ? (
             <>
               <Breadcrumb navigate={navigate} crumbs={[
@@ -194,12 +220,16 @@ export default function ChatView() {
                 return <Message key={m.id} {...m} />;
               })}
               {busy && timeline.length > 0 && <Timeline items={timeline} />}
-              {suggestion && !busy && (
-                <button onClick={() => navigate(`/learning?suggest=${encodeURIComponent(suggestion)}`)}
-                        className="flex items-center gap-2 text-[13.5px] rounded-full border border-brand-soft/60 bg-brand-wash dark:bg-night-soft text-brand-deep px-3.5 py-2 hover:shadow-soft transition">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9 12 4l10 5-10 5L2 9Z" /><path d="M6 11v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5" /></svg>
-                  Learn “{suggestion}” in the Learning Room →
-                </button>
+              {/* Gentle "want to go deeper?" nudge, centered below the reply — solo
+                  chats only (never inside a project workspace or the Learning Room). */}
+              {suggestion && !busy && !chatContext?.project && !chatContext?.topic && (
+                <div className="flex justify-center pt-1">
+                  <button onClick={() => navigate(`/learning?suggest=${encodeURIComponent(suggestion)}`)}
+                          className="flex items-center gap-2 text-[13.5px] rounded-full border border-brand-soft/60 bg-brand-wash dark:bg-night-soft text-brand-deep px-3.5 py-2 hover:shadow-soft transition">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M2 9 12 4l10 5-10 5L2 9Z" /><path d="M6 11v5c0 1 2.7 2.5 6 2.5s6-1.5 6-2.5v-5" /></svg>
+                    Want to go deeper? Learn “{suggestion}” in the Learning Room →
+                  </button>
+                </div>
               )}
             </div>
           </main>

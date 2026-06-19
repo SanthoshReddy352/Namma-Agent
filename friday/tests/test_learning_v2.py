@@ -7,7 +7,7 @@ import time
 import pytest
 
 from friday.core.builtins import register_learning_tools
-from friday.core.interactive import set_current_session
+from friday.core.interactive import set_current_session, set_event_sink
 from friday.core.learning import learning_block
 from friday.core.learning_nudge import nudge_message, nudge_tick, stale_topics
 from friday.core.memory import Database
@@ -36,6 +36,94 @@ def topic(db):
 
 def _module_sid(db, topic, mid):
     return db.module_session(topic["id"], mid)
+
+
+def test_dangling_check_is_repaired_with_pose_quiz(db, topic):
+    """In a module thread, when the model ends with a check invitation but DOESN'T
+    call pose_quiz, the agent forces the quiz so the learner still gets a card."""
+    from friday.core.agent import Agent
+    from friday.core.persona import load_persona
+    from friday.core.providers.base import LLMResponse, Provider, ToolCall
+
+    class Scripted(Provider):
+        name = "scripted"
+
+        def __init__(self, responses):
+            super().__init__(model="scripted")
+            self._r = list(responses)
+
+        def is_available(self):
+            return True
+
+        def generate(self, messages, tools=None, stream=False, on_token=None):
+            resp = self._r.pop(0)
+            if stream and on_token and resp.content:
+                on_token(resp.content)
+            return resp
+
+    sid = _module_sid(db, topic, "m1")
+    reg = ToolRegistry()
+    register_learning_tools(reg, db)
+    events = []
+    responses = [
+        # 1) final answer that promises a check but calls no tool
+        LLMResponse(content="Great. Let's check if that sits right with you 👇"),
+        # 2) the forced repair turn supplies the pose_quiz call
+        LLMResponse(tool_calls=[ToolCall(id="q1", name="pose_quiz", args={
+            "question": "What is abstraction?", "options": ["A simplified model", "Memorizing data"],
+            "answer_index": 0})]),
+    ]
+    agent = Agent(Scripted(responses), reg, db, load_persona())
+    # The quiz card reaches the UI via the turn-local event sink (as in the real app).
+    set_event_sink(lambda e, p: events.append((e, p)))
+    try:
+        result = agent.process_turn("[quiz answer] correct — continue", session_id=sid)
+    finally:
+        set_event_sink(None)
+
+    assert "pose_quiz" in result.tools_used
+    quizzes = [p for e, p in events if e == "quiz"]
+    assert quizzes and quizzes[0]["question"] == "What is abstraction?"
+    # and it's persisted as a quiz turn so it survives reload
+    assert any(t["role"] == "quiz" for t in db.session_turns(sid))
+
+
+def test_dangling_check_promise_stripped_when_repair_fails(db, topic):
+    """If the forced repair still doesn't pose a quiz, the empty check invitation is
+    removed so the learner isn't left staring at a promise with no card."""
+    from friday.core.agent import Agent
+    from friday.core.persona import load_persona
+    from friday.core.providers.base import LLMResponse, Provider
+
+    class Scripted(Provider):
+        name = "scripted"
+
+        def __init__(self, responses):
+            super().__init__(model="scripted")
+            self._r = list(responses)
+
+        def is_available(self):
+            return True
+
+        def generate(self, messages, tools=None, stream=False, on_token=None):
+            resp = self._r.pop(0)
+            if stream and on_token and resp.content:
+                on_token(resp.content)
+            return resp
+
+    sid = _module_sid(db, topic, "m1")
+    reg = ToolRegistry()
+    register_learning_tools(reg, db)
+    responses = [
+        LLMResponse(content="Abstraction keeps the signal.\nQuick check: take a look 👇"),
+        LLMResponse(content="Sorry!"),  # repair fails to call pose_quiz
+    ]
+    agent = Agent(Scripted(responses), reg, db, load_persona())
+    result = agent.process_turn("[quiz answer] correct — continue", session_id=sid)
+
+    assert "pose_quiz" not in result.tools_used
+    assert "Abstraction keeps the signal." in result.content
+    assert "take a look" not in result.content.lower()  # the empty promise was dropped
 
 
 # ── path chat vs module contract ────────────────────────────────────────────

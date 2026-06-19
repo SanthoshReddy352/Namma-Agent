@@ -161,11 +161,12 @@ def test_media_tool_output_surfaced_in_answer():
     assert "/api/media/diagrams/abc.png" in db.recent_turns(result.session_id)[-1]["content"]
 
 
-def test_stream_interleaves_media_and_mirrors_final_answer():
-    """The live token stream must contain the SAME assembly as the final answer:
-    preamble text, then generated media markdown in place, then the closing
-    answer — so images render inline while streaming instead of popping in when
-    the turn ends (and the turn_result replace causes no reflow)."""
+def test_media_in_final_answer_but_not_streamed():
+    """The final answer carries the generated media markdown in order (preamble,
+    diagram, closing line) — but the media is DELIBERATELY withheld from the live
+    token stream. Streaming the image markdown made the chat bubble re-parse on
+    every later token and flicker the diagram; painting it once, when the turn
+    finalizes, keeps the server-rendered image rock-steady."""
     reg = ToolRegistry()
     media_md = "![Water cycle](/api/media/diagrams/x.png)\n\n*Water cycle* · [⬇ Download](/api/media/diagrams/x.png)"
 
@@ -181,15 +182,27 @@ def test_stream_interleaves_media_and_mirrors_final_answer():
     chunks = []
     result = agent.process_turn("show me", on_token=chunks.append)
 
+    # The image markdown is in the canonical/persisted answer, in order …
+    assert result.content == f"Here's the picture:\n\n{media_md}\n\nAnd that's the cycle."
+    # … but never pushed through the token stream (no mid-turn image = no flicker).
     streamed = "".join(chunks)
-    expected = f"Here's the picture:\n\n{media_md}\n\nAnd that's the cycle."
-    assert streamed == expected
-    assert result.content == expected  # canonical answer == streamed answer
+    assert "/api/media/diagrams/x.png" not in streamed
+    assert "Here's the picture:" in streamed and "And that's the cycle." in streamed
 
 
-def test_stream_does_not_duplicate_repeated_media():
-    """A tool returning the same media URL twice is shown once — in the stream
-    AND in the final answer alike."""
+def test_phantom_media_link_is_stripped():
+    """If the model writes an /api/media image link in its OWN prose (no render tool
+    ran, so the file doesn't exist), it must not leave a broken/"unavailable" image —
+    the phantom link is stripped, surrounding text kept."""
+    agent, db, _ = _agent([LLMResponse(
+        content="Here's a diagram:\n\n![X](/api/media/diagrams/does-not-exist-xyz.png)\n\nThat's it.")])
+    result = agent.process_turn("teach")
+    assert "/api/media/diagrams/does-not-exist-xyz.png" not in result.content
+    assert "Here's a diagram:" in result.content and "That's it." in result.content
+
+
+def test_does_not_duplicate_repeated_media():
+    """A tool returning the same media URL twice is shown once in the final answer."""
     reg = ToolRegistry()
     media_md = "![d](/api/media/diagrams/same.png)"
     reg.register("draw", "draw", {"type": "object", "properties": {}},
@@ -202,5 +215,6 @@ def test_stream_does_not_duplicate_repeated_media():
     agent, db, _events = _agent(responses, registry=reg)
     chunks = []
     result = agent.process_turn("draw twice", on_token=chunks.append)
-    assert "".join(chunks).count("same.png") == 1
     assert result.content.count("same.png") == 1
+    # never streamed mid-turn, so the live bubble can't flicker the diagram
+    assert "".join(chunks).count("same.png") == 0

@@ -140,6 +140,89 @@ def _gui_order() -> list[str | None]:
     return [None]  # macOS — Cocoa/WKWebView is the only/right choice
 
 
+def _enable_clipboard_access() -> None:
+    """Turn on JS clipboard access in the native webview.
+
+    WebKit2GTK — the Linux pywebview backend (and the default on Kali) — ships with
+    `javascript-can-access-clipboard` DISABLED. That blocks `document.execCommand`
+    copy/cut/paste AND the webview's own Ctrl+C/V/X handling, so copy/paste appears
+    completely dead inside the desktop window. We flip it on the moment the native
+    WebKit view exists. Best-effort: any failure just leaves the prior behavior, and
+    on non-GTK backends this is a quiet no-op.
+
+    Passed as pywebview's ``start(func=…)`` callback, so it runs on a worker thread
+    once the GUI loop is up; the actual setting change is marshalled onto the GTK
+    main loop via GLib.
+    """
+    try:
+        from gi.repository import GLib, Gtk  # type: ignore
+    except Exception:  # noqa: BLE001 — not the GTK backend / PyGObject missing
+        return
+
+    # Duck-type the WebKit view: a Gtk.Widget exposes get_settings() too, but only
+    # WebKitSettings carries the clipboard property — so this finds the WebView
+    # without depending on pywebview internals or the GI type name.
+    def _is_webview(widget) -> bool:
+        getter = getattr(widget, "get_settings", None)
+        if not callable(getter):
+            return False
+        try:
+            s = getter()
+            return s is not None and s.find_property("javascript-can-access-clipboard") is not None
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _collect(widget, out: list) -> None:
+        if _is_webview(widget):
+            out.append(widget)
+        # GTK3 containers expose get_children(); single-child holders, get_child().
+        if hasattr(widget, "get_children"):
+            with suppress(Exception):
+                for child in widget.get_children():
+                    _collect(child, out)
+        elif hasattr(widget, "get_child"):
+            with suppress(Exception):
+                child = widget.get_child()
+                if child is not None:
+                    _collect(child, out)
+
+    def _apply() -> bool:
+        try:
+            tops = list(Gtk.Window.list_toplevels())
+        except Exception:  # noqa: BLE001
+            return False  # not GTK3 / no toplevels — stop
+        views: list = []
+        for top in tops:
+            _collect(top, views)
+        if not views:
+            return True  # window/webview not realized yet — retry
+        for wv in views:
+            try:
+                settings = wv.get_settings()
+                # The GObject property is "javascript-can-access-clipboard"; try the
+                # "enable-" spelling too in case a WebKit build differs.
+                for prop in ("javascript-can-access-clipboard",
+                             "enable-javascript-can-access-clipboard"):
+                    with suppress(Exception):
+                        settings.set_property(prop, True)
+                with suppress(Exception):
+                    wv.set_settings(settings)
+                logger.info("[app] enabled WebKit clipboard access")
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("[app] clipboard enable failed: %s", exc)
+        return False  # done — don't retry
+
+    state = {"tries": 0}
+
+    def _tick() -> bool:
+        state["tries"] += 1
+        keep_going = _apply()
+        return bool(keep_going) and state["tries"] < 25  # ~5s of retries, then give up
+
+    # Schedule on the GTK main loop (thread-safe to call from this worker thread).
+    GLib.timeout_add(200, _tick)
+
+
 def _launch_window(service: FridayService, server_thread: threading.Thread) -> None:
     """Open the native desktop window; fall back to a browser tab only if no GUI
     toolkit is available at all."""
@@ -172,6 +255,7 @@ def _launch_window(service: FridayService, server_thread: threading.Thread) -> N
             # private_mode=False keeps a disk cache between launches → faster
             # warm starts and smoother navigation (esp. on Windows/WebView2).
             webview.start(
+                _enable_clipboard_access,  # runs once the GUI loop is up
                 gui=gui, icon=icon, private_mode=False,
                 storage_path=str(_ASSETS.parent / ".webview"),
             )

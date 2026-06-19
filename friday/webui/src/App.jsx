@@ -5,6 +5,8 @@ import Logo from "./components/Logo.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import Settings from "./components/Settings.jsx";
 import PasswordPrompt from "./components/PasswordPrompt.jsx";
+import ImageViewer from "./components/ImageViewer.jsx";
+import { installClipboardShortcuts } from "./clipboard.js";
 import ChatView from "./views/ChatView.jsx";
 import ProjectsView from "./views/ProjectsView.jsx";
 import ProjectDetailView from "./views/ProjectDetailView.jsx";
@@ -37,6 +39,9 @@ function Shell() {
 
   const refreshProjects = () => listProjects().then((r) => r?.projects && setProjects(r.projects));
   useEffect(() => { refreshProjects(); }, []);
+  // Guarantee copy/cut/paste app-wide even inside the pywebview desktop window,
+  // where the native shortcuts are often not wired.
+  useEffect(() => installClipboardShortcuts(), []);
 
   function handleRename(id, title) {
     renameSession(id, title).then(() => friday.refreshSessions());
@@ -131,6 +136,9 @@ function Shell() {
       )}
 
       <PasswordPrompt req={passwordReq} onSubmit={respondPassword} onCancel={() => respondPassword("")} />
+
+      {/* Top-layer image viewer (zoom / pan / reset / close) — opened from inline images. */}
+      <ImageViewer />
 
       {showSettings && (
         <Settings onClose={() => setShowSettings(false)} theme={theme}

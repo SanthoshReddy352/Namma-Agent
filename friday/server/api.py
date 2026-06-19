@@ -182,6 +182,21 @@ def _switch_intro(topic: Optional[dict], module: Optional[dict],
     return "\n".join(lines)
 
 
+def _project_switch_intro(project: Optional[dict], model_label: str, recap: str) -> str:
+    """The seeded opening when the user switches the model mid-chat in a project: it
+    tells them which brain is answering now and recaps the chat so the new model isn't
+    cold. Mirrors ``_switch_intro`` for the Learning Room."""
+    pname = (project or {}).get("name") or "this project"
+    lines = [f"🔄 You're now chatting with **{model_label}**. I've picked up right where we "
+             f"left off — no need to start over."]
+    if (recap or "").strip():
+        lines.append("\n**Where we are so far:**\n" + recap.strip())
+    else:
+        lines.append(f"\nWe're just getting started in **{pname}**.")
+    lines.append("\nReady to keep going? Ask me anything and we'll continue from here.")
+    return "\n".join(lines)
+
+
 def _restore_turns(db, session_id: str) -> list[dict]:
     """Session history for the UI, with persisted quiz cards restored.
 
@@ -574,6 +589,33 @@ def create_app(service: Optional[FridayService] = None) -> FastAPI:
         service.db.add_turn(new_sid, "assistant", _switch_intro(topic, module, label, recap))
         logger.info("[learning] model switch %s → %s (session %s → %s)",
                     (module or {}).get("title") or topic["title"], label, old_sid[:8], new_sid[:8])
+        return {"ok": True, "session_id": new_sid, "model": body.model, "recap": recap}
+
+    @app.post("/api/projects/switch_model")
+    def project_switch_model(body: SwitchModelBody):
+        """Switch a project chat to a different configured model WITHOUT a cold
+        restart — the exact mirror of the Learning-Room switch: summarize the current
+        session, spin up a fresh session in the SAME project bound to the new model,
+        seed a recap so the new model continues seamlessly, and carry the chat's title
+        over. Returns the new session id to open."""
+        old_sid = body.session_id
+        meta = service.db.get_session(old_sid) if old_sid else None
+        pid = (meta or {}).get("project_id")
+        if not meta or not pid:
+            return {"ok": False, "error": "Not a project chat."}
+        project = service.db.get_project(pid)
+        label = next((m.get("label") for m in service.configured_models()
+                      if m.get("id") == body.model), None) or body.model or "the default model"
+        recap = service.project_recap(old_sid, project)
+        new_sid = service.db.create_session_in(project_id=pid, kind="chat")
+        service.db.set_session_model(new_sid, body.model or None)
+        # Carry the chat's name over so the switch keeps the same thread in the sidebar.
+        title = (meta.get("title") or "").strip()
+        if title:
+            service.db.rename_session(new_sid, title)
+        service.db.add_turn(new_sid, "assistant", _project_switch_intro(project, label, recap))
+        logger.info("[project] model switch %s → %s (session %s → %s)",
+                    (project or {}).get("name") or pid, label, old_sid[:8], new_sid[:8])
         return {"ok": True, "session_id": new_sid, "model": body.model, "recap": recap}
 
     @app.post("/api/learning/{topic_id}/quiz")
