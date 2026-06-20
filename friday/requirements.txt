@@ -30,11 +30,18 @@ pywebview                # `python -m friday` opens a native window; falls back 
 
 # ── TOOL EXTRAS (optional — features degrade gracefully without these) ──
 ddgs                     # web_search backend (renamed from duckduckgo-search; falls back to keyless HTML)
-playwright               # controlled Chromium for real video playback + media_control (run: playwright install chromium)
+requests                 # render_diagram: hosted mermaid.ink rendering (primary, no local browser)
+mermaid-cli              # render_diagram: LOCAL/offline mermaid → PNG fallback (drives headless Chromium via Playwright; run: playwright install chromium)
+playwright               # controlled Chromium for real video playback + media_control + local mermaid render (run: playwright install chromium)
 markitdown               # read_document: rich extraction (pdf/docx/pptx/xlsx/html/epub → markdown)
 pypdf                    # read_document for .pdf (fallback)
 python-docx              # read_document for .docx (fallback)
 python-multipart         # document upload endpoint (multipart/form-data)
+# convert_document: md → docx/pdf/pptx/html/txt/… . pandoc (a system binary, not pip —
+#   https://pandoc.org/install) gives high-fidelity universal conversion; without it the
+#   tool still does md/txt/html (stdlib) and docx (python-docx, above). 'markdown' (pip)
+#   upgrades the html fallback when pandoc is absent.
+markdown                 # convert_document: richer md → html fallback (optional)
 
 # ── DEV ────────────────────────────────────────────────────────────
 pytest

@@ -81,7 +81,7 @@ def test_session_turns_have_timestamps():
 def test_exit_tool_registered_and_calls_shutdown():
     from friday.service import FridayService
     from friday.tests.test_server import ScriptedProvider
-    svc = FridayService(config={"persona": "friday_core", "conversation": {}},
+    svc = FridayService(config={"persona": "core", "conversation": {}},
                         provider=ScriptedProvider([LLMResponse(content="hi")]),
                         registry=ToolRegistry(), db=Database(":memory:"))
     called = {}
@@ -105,7 +105,7 @@ def test_auto_approve_bypasses_prompt():
         LLMResponse(content="", tool_calls=[ToolCall(id="1", name="danger", args={})]),
         LLMResponse(content="done"),
     ])
-    svc = FridayService(config={"persona": "friday_core", "conversation": {}},
+    svc = FridayService(config={"persona": "core", "conversation": {}},
                         provider=prov, registry=reg, db=Database(":memory:"))
     svc.auto_approve = True
     # approval returns False — but auto_approve must override and still run the tool.

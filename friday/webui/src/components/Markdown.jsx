@@ -118,6 +118,9 @@ export default function Markdown({ children }) {
               ? <SimulationCard src={href} title={childText(children) || "Interactive simulation"} />
               : <a href={href} target="_blank" rel="noreferrer noopener" {...props}>{children}</a>,
           img: ({ node, ...props }) => <InlineImage {...props} />,
+          // All diagrams are rendered to PNGs server-side and arrive as <img>; the
+          // browser never renders mermaid. So a fenced block is always just a
+          // copy-enabled code block.
           pre: ({ node, ...props }) => <CodeBlock {...props} />,
           // Unwrap a paragraph that only carries a simulation card (a <div> can't
           // be nested in a <p>).

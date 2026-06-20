@@ -10,6 +10,8 @@ error, never a crash.
 """
 from __future__ import annotations
 
+import asyncio
+import base64
 import json
 import os
 import re
@@ -17,6 +19,7 @@ import shutil
 import struct
 import subprocess
 import tempfile
+import threading
 import urllib.parse
 import urllib.request
 import uuid
@@ -51,6 +54,141 @@ def _locate_output(out_path: Path) -> Path | None:
     return suffixed if suffixed.exists() else None
 
 
+# ── Hybrid server-side render: API first, local fallback ─────────────────────
+# Every diagram is rendered to a real PNG ON THE SERVER — the browser NEVER runs
+# mermaid. Two methods, tried in order:
+#   1. mermaid.ink — a hosted renderer. Zero local footprint, fast, no browser.
+#   2. local render — mermaid-cli (the `mermaid_cli` Python package, which drives
+#      a headless Chromium via Playwright) or the `mmdc` Node binary if present.
+# Method 2 is the air-gapped safety net for when mermaid.ink is unreachable/down,
+# so a diagram is produced even with no network. Both paths return raw PNG bytes
+# that must pass `_verify_png_bytes` before anything reaches disk or the chat.
+_INK_HOSTS = ("https://mermaid.ink", "https://mermaid-ink.fly.dev")
+_INK_TIMEOUT = 20
+# High-resolution, white-background output. On mermaid.ink `scale` MULTIPLIES
+# `width`, so width=1400 × scale=3 ≈ a 4200px-wide PNG — crisp enough to zoom into
+# in the image viewer without blur (the default endpoint returns ~400px, which is
+# what looked fuzzy).
+_INK_QUERY = "?type=png&bgColor=white&width=1400&scale=3"
+
+# NO styling/theme directive is injected. The model writes the whole Mermaid source
+# (declaration, nodes, edges, and any `%%{init}%%` it chooses) and we render it
+# verbatim — Mermaid's clean default look, exactly what mermaid.ink produces. The
+# only post-processing is image hygiene (white background + margin trim in
+# `_finalize_png`), which is about the PNG, not the diagram's design.
+
+
+def _render_via_ink(code: str) -> tuple[bytes | None, str]:
+    """Method 1 — POST the diagram to mermaid.ink and get a PNG back. The source is
+    URL-safe base64 in the path (mermaid.ink's documented contract). Returns
+    (png_bytes, error); png_bytes is None on any failure so we fall through to local."""
+    try:
+        import requests  # optional dep; absence just means we skip to local render
+    except Exception:  # noqa: BLE001
+        return None, "requests not installed"
+    enc = base64.urlsafe_b64encode(code.encode("utf-8")).decode("ascii")
+    last = "mermaid.ink unreachable"
+    for host in _INK_HOSTS:
+        url = f"{host}/img/{enc}{_INK_QUERY}"
+        try:
+            r = requests.get(url, timeout=_INK_TIMEOUT)
+        except Exception as exc:  # noqa: BLE001
+            last = f"mermaid.ink request failed: {exc}"
+            continue
+        if r.status_code == 200 and _verify_png_bytes(r.content):
+            return r.content, ""
+        last = f"mermaid.ink returned {r.status_code}"
+    return None, last
+
+
+def _run_coro(coro, timeout: float = 75.0):
+    """Run an async coroutine to completion from sync code, regardless of whether an
+    event loop is already running in this thread — we spin a dedicated thread with a
+    fresh loop. (The server runs turns off the main loop, but this keeps the render
+    safe to call from anywhere, including the async context.)
+
+    Bounded by ``timeout`` so a wedged headless browser can NEVER hang the whole
+    turn: if the render thread doesn't finish in time we raise, the caller falls
+    through to the next render method / text outline, and the daemon thread is left
+    to die with the process."""
+    box: dict = {}
+
+    def runner():
+        try:
+            box["v"] = asyncio.run(coro)
+        except Exception as exc:  # noqa: BLE001
+            box["e"] = exc
+
+    t = threading.Thread(target=runner, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"local render exceeded {timeout:.0f}s")
+    if "e" in box:
+        raise box["e"]
+    return box.get("v")
+
+
+def _render_via_local(code: str, out_path: Path) -> tuple[bytes | None, str]:
+    """Method 2 — render locally with no network. Prefer the `mermaid_cli` Python
+    package (bundled Playwright/Chromium); fall back to the `mmdc` Node binary if it
+    is on PATH. Returns (png_bytes, error)."""
+    # 2a — the Python mermaid-cli package (cross-platform, pip-installable).
+    try:
+        from mermaid_cli import render_mermaid  # type: ignore
+    except Exception:  # noqa: BLE001
+        render_mermaid = None
+    if render_mermaid is not None:
+        try:
+            # A large, hi-DPI viewport for a crisp render (the styling/scale also rides
+            # in the source's %%{init}%% directive, so it looks the same as the API path).
+            _, _, data = _run_coro(render_mermaid(
+                code, output_format="png", background_color="white",
+                viewport={"width": 1400, "height": 1000, "deviceScaleFactor": 3}))
+            if _verify_png_bytes(data):
+                return data, ""
+            return None, "mermaid_cli produced an invalid/empty PNG"
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[learning_media] mermaid_cli render failed: %s", str(exc)[:200])
+            # fall through to the binary
+
+    # 2b — the `mmdc` Node binary, retried once (puppeteer fails transiently).
+    mmdc = _mmdc()
+    if not mmdc:
+        return None, "mermaid-cli not installed (pip install mermaid-cli)"
+    last_err = ""
+    for attempt in (1, 2):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "d.mmd"
+            src.write_text(code, encoding="utf-8")
+            cfg = Path(tmp) / "pp.json"
+            cfg.write_text(json.dumps({"args": ["--no-sandbox"]}), encoding="utf-8")
+            env = dict(os.environ)
+            for cand in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
+                if Path(cand).exists():
+                    env.setdefault("PUPPETEER_EXECUTABLE_PATH", cand)
+                    break
+            cmd = [mmdc, "-i", str(src), "-o", str(out_path),
+                   "-w", "2048", "-H", "1536", "-s", "4", "-b", "white", "-p", str(cfg)]
+            try:
+                proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90,
+                                      env=env, encoding="utf-8", errors="replace")
+            except subprocess.TimeoutExpired:
+                last_err = "diagram render timed out"
+                continue
+            produced = _locate_output(out_path)
+            if proc.returncode == 0 and produced is not None and _verify_png(produced):
+                try:
+                    data = produced.read_bytes()
+                finally:
+                    if produced != out_path:
+                        produced.unlink(missing_ok=True)
+                return data, ""
+            last_err = (proc.stderr or "").strip()[:200] or "render produced an invalid/empty PNG"
+            logger.warning("[learning_media] mmdc attempt %d failed: %s", attempt, last_err[:300])
+    return None, last_err or "local render failed"
+
+
 # PNG signature + minimum plausible size for a real diagram (mmdc can emit a
 # 0-byte or truncated file when puppeteer dies mid-render; that file would 404 /
 # show broken in the chat). We never hand a URL to the chat unless the bytes on
@@ -58,20 +196,73 @@ def _locate_output(out_path: Path) -> Path | None:
 _PNG_SIG = b"\x89PNG\r\n\x1a\n"
 
 
+def _verify_png_bytes(data: bytes) -> bool:
+    """True only for a real, decodable PNG with non-zero dimensions — applied to the
+    raw bytes BEFORE they ever touch disk or the chat. This is the server-side
+    verification gate: a diagram is placed in the chat ONLY after we confirm the
+    rendered image is valid, so the learner never sees a broken/blank image and
+    never has to re-render client-side."""
+    if not data or len(data) < 256:  # a valid diagram PNG is comfortably larger
+        return False
+    head = data[:24]  # 8-byte sig + IHDR length/type + width/height
+    if len(head) < 24 or head[:8] != _PNG_SIG or head[12:16] != b"IHDR":
+        return False
+    width, height = struct.unpack(">II", head[16:24])
+    return width > 0 and height > 0
+
+
+def _finalize_png(data: bytes) -> bytes:
+    """Make a raw rendered PNG chat-ready: flatten any transparency onto a solid
+    WHITE background and trim the empty margins.
+
+    mermaid.ink returns a TRANSPARENT PNG with the diagram sitting in a large empty
+    canvas — which made the picture (a) look microscopic in the chat (mostly margin)
+    and (b) lose its dark lines/text on any dark backdrop. Flattening bakes in a
+    white background so the node-connection lines are always visible regardless of
+    theme; trimming removes the dead margin so the diagram fills its frame.
+
+    Best-effort: if Pillow isn't installed or anything goes wrong, the original
+    bytes are returned unchanged (the diagram still shows, just un-trimmed)."""
+    try:
+        import io
+
+        from PIL import Image, ImageChops
+    except Exception:  # noqa: BLE001 — Pillow optional
+        return data
+    try:
+        img = Image.open(io.BytesIO(data))
+        img.load()
+        white = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info):
+            rgba = img.convert("RGBA")
+            white.paste(rgba, mask=rgba.split()[-1])
+        else:
+            white.paste(img.convert("RGB"))
+        # Trim the white margin down to the diagram, leaving a small even border.
+        bbox = ImageChops.difference(white, Image.new("RGB", white.size, (255, 255, 255))).getbbox()
+        if bbox:
+            pad = 28
+            l, t, r, b = bbox
+            white = white.crop((max(0, l - pad), max(0, t - pad),
+                                min(white.size[0], r + pad), min(white.size[1], b + pad)))
+        out = io.BytesIO()
+        white.save(out, "PNG", optimize=True)
+        result = out.getvalue()
+        # Header check only — NOT _verify_png_bytes' 256-byte floor, which exists to
+        # catch truncated *renders*; a legitimately tiny trimmed diagram can be smaller.
+        return result if result[:8] == _PNG_SIG else data
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("[learning_media] PNG finalize skipped: %s", str(exc)[:160])
+        return data
+
+
 def _verify_png(path: Path) -> bool:
-    """True only for a real, decodable PNG with non-zero dimensions. This is the
-    server-side verification gate: a diagram is placed in the chat ONLY after we
-    confirm the rendered image is valid, so the learner never sees a broken/blank
-    image and never has to re-render client-side."""
+    """Same gate as :func:`_verify_png_bytes`, reading the header off disk."""
     try:
-        size = path.stat().st_size
-    except OSError:
-        return False
-    if size < 256:  # a valid diagram PNG is comfortably larger than this
-        return False
-    try:
+        if path.stat().st_size < 256:
+            return False
         with path.open("rb") as fh:
-            head = fh.read(24)  # 8-byte sig + IHDR length/type + width/height
+            head = fh.read(24)
     except OSError:
         return False
     if len(head) < 24 or head[:8] != _PNG_SIG or head[12:16] != b"IHDR":
@@ -80,196 +271,188 @@ def _verify_png(path: Path) -> bool:
     return width > 0 and height > 0
 
 
-# ── Foolproof diagram generation ────────────────────────────────────────────
-# The model never writes Mermaid syntax (that's what produced broken diagrams —
-# quotes / parentheses / commas inside node labels crash the parser). It picks one
-# of a few CLASSICAL diagram types and supplies only labels + relationships as
-# structured data; WE generate guaranteed-valid Mermaid with every label safely
-# quoted. Result: a render can fail transiently, but never from bad syntax.
+# ── Model-authored Mermaid ──────────────────────────────────────────────────
+# The model writes the Mermaid source itself (modern models are reliable at this
+# when given strict rules + examples — see the tool description). We render that
+# source verbatim, with NO theme/node styling injected. The only things we touch
+# are robustness niceties: stripping a ```mermaid fence the model may wrap the code
+# in, and a light sanity check that it actually looks like a diagram.
 
-_DIAGRAM_TYPES = ("flowchart", "tree", "sequence")
-
-
-def _safe_label(text: str) -> str:
-    """A node/edge label that can never break the Mermaid flowchart parser:
-    wrapped in quotes by the caller, with inner quotes escaped to the HTML entity
-    Mermaid understands and newlines turned into <br/>."""
-    t = (text or "").strip().replace("\r", " ")
-    t = t.replace('"', "#quot;")
-    t = re.sub(r"\s*\n\s*", "<br/>", t)
-    t = re.sub(r"[ \t]+", " ", t)
-    return t or " "
+# The keywords a Mermaid diagram's FIRST real line must begin with. Used only as a
+# guardrail against the model passing prose / JSON instead of diagram source — not
+# an exhaustive grammar (Mermaid itself is the real validator at render time).
+_MERMAID_HEADS = (
+    "graph", "flowchart", "sequencediagram", "classdiagram", "statediagram",
+    "erdiagram", "journey", "gantt", "pie", "mindmap", "timeline", "gitgraph",
+    "quadrantchart", "requirementdiagram", "c4context", "c4container",
+    "c4component", "sankey", "xychart", "block-beta", "packet-beta",
+)
 
 
-def _seq_text(text: str) -> str:
-    """Sequence message text: ';' and newlines are statement separators in Mermaid,
-    so neutralise them; everything else is safe after the colon."""
-    t = (text or "").replace("\r", " ")
-    t = re.sub(r"\s*\n\s*", " ", t).replace(";", ",")
-    t = re.sub(r"[ \t]+", " ", t).strip()
-    return t or "…"
+def _clean_code(code: str) -> str:
+    """Normalise the model's Mermaid source: strip a wrapping ```mermaid / ``` fence
+    (models love to add one) and surrounding whitespace, so it renders verbatim."""
+    t = (code or "").strip()
+    if t.startswith("```"):
+        t = t[3:]
+        if t[:7].lower().startswith("mermaid"):
+            t = t[7:]
+        if t.endswith("```"):
+            t = t[:-3]
+    return t.strip()
 
 
-def _build_flow(links: list[dict], nodes_extra: list[str], direction: str) -> str:
-    """A flowchart / hierarchy from edges. ``links`` are {from,to,label?} using the
-    human labels themselves; we assign safe ids so the model can never mismatch one."""
-    seen: dict[str, str] = {}
-    order: list[str] = []
-
-    def nid(label: str) -> str:
-        label = (label or "").strip()
-        if label not in seen:
-            seen[label] = f"n{len(seen)}"
-            order.append(label)
-        return seen[label]
-
-    for lab in nodes_extra or []:
-        if (lab or "").strip():
-            nid(lab)
-    edges: list[str] = []
-    for lk in links or []:
-        frm, to = (lk.get("from") or "").strip(), (lk.get("to") or "").strip()
-        if not frm or not to:
+def _looks_like_mermaid(code: str) -> bool:
+    """True if the first meaningful line opens with a known diagram declaration —
+    catching the case where the model passes prose or JSON instead of Mermaid."""
+    for raw in code.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("%%"):  # skip blanks + %%{init}%% / comments
             continue
-        a, b = nid(frm), nid(to)
-        lbl = (lk.get("label") or "").strip()
-        edges.append(f'    {a} -->|"{_safe_label(lbl)}"| {b}' if lbl else f"    {a} --> {b}")
-    lines = [f"graph {direction}"]
-    lines += [f'    {seen[l]}["{_safe_label(l)}"]' for l in order]
-    lines += edges
-    return "\n".join(lines)
+        head = re.split(r"[\s({]", line, maxsplit=1)[0].lower()
+        return head in _MERMAID_HEADS
+    return False
 
 
-def _build_sequence(steps: list[dict]) -> str:
-    seen: dict[str, str] = {}
-    decls: list[str] = []
-    body: list[str] = []
+# The tool description doubles as the model's Mermaid spec: strict rules + worked
+# examples so the source it writes renders first time. Kept here (not inline in
+# register) so it's easy to extend with more examples as failure modes show up.
+_DIAGRAM_TOOL_DESC = """\
+Draw a diagram and show it inline as a crisp, downloadable PNG. YOU write the \
+Mermaid source in `code`; we render it server-side and display the image. Use this \
+for EVERY structure, flow, hierarchy, sequence, or relationship worth a picture.
 
-    def pid(name: str) -> str:
-        name = (name or "").strip() or "?"
-        if name not in seen:
-            seen[name] = f"p{len(seen)}"
-            decls.append(f'    participant {seen[name]} as "{_safe_label(name)}"')
-        return seen[name]
+STRICT MERMAID RULES — follow exactly so it renders the first time:
+1. Put ONLY raw Mermaid in `code`. No prose, no Markdown, no ``` fences.
+2. The FIRST line is the diagram declaration, e.g. `flowchart TD`, `sequenceDiagram`, \
+`classDiagram`, `stateDiagram-v2`, `erDiagram`, `mindmap`, `timeline`. One statement \
+per line.
+3. Node ids are short and alphanumeric (A, B, db, api). Put human text in the LABEL, \
+not the id: `A["User signs in"]`.
+4. ALWAYS quote a label that contains spaces, punctuation, parentheses, slashes, or \
+quotes: `B["Validate (email + password)"]`. For a line break inside a label use \
+`<br/>`. Never put a raw `"` inside a quoted label — rephrase or drop it.
+5. Don't use Mermaid reserved words as ids (`end`, `graph`, `class`, `state`, \
+`subgraph`, `click`, `style`). Capitalise or rename: `End`, `node_end`.
+6. Flowchart edges: `A --> B`, labelled `A -->|"yes"| B`. Decisions use a diamond: \
+`C{"Valid?"}`.
+7. Sequence: declare `participant X as Label` (no quotes on the alias), then \
+`A->>B: message` (solid) / `B-->>A: reply` (dashed). Group with \
+`alt`/`else`/`end`, `loop`/`end`, `opt`/`end`, and `Note over A,B: text`.
+8. Keep it focused — the fewest nodes that carry the idea. Do NOT add any color, \
+class, or style directives; the clean default look is intended.
 
-    for s in steps or []:
-        frm, to = (s.get("from") or "").strip(), (s.get("to") or "").strip()
-        if not frm or not to:
-            continue
-        body.append(f"    {pid(frm)}->>{pid(to)}: {_seq_text(s.get('text'))}")
-    return "sequenceDiagram\n" + "\n".join(decls + body)
+EXAMPLES (copy the shape):
 
+Flowchart with a decision:
+flowchart TD
+    A["User submits form"] --> B{"All fields valid?"}
+    B -->|"yes"| C["Save to database"]
+    B -->|"no"| D["Show error message"]
+    C --> E["Show success"]
 
-def _build_mermaid(args: dict) -> tuple[str, str]:
-    """(mermaid_source, error). One non-empty; never both."""
-    dtype = (args.get("type") or "flowchart").strip().lower()
-    if dtype not in _DIAGRAM_TYPES:
-        return "", f"'type' must be one of {', '.join(_DIAGRAM_TYPES)}"
-    if dtype == "sequence":
-        steps = args.get("steps") or []
-        if not steps:
-            return "", "a sequence diagram needs 'steps' ([{from,to,text}, …])"
-        return _build_sequence(steps), ""
-    # flowchart / tree share the edge-based builder; a tree is just top-down.
-    links = args.get("links") or []
-    nodes = args.get("nodes") or []
-    if not links and len(nodes) < 2:
-        return "", "a flowchart/tree needs 'links' ([{from,to,label?}, …])"
-    direction = "TD" if dtype == "tree" else (args.get("direction") or "TD").upper()
-    if direction not in ("TD", "LR"):
-        direction = "TD"
-    return _build_flow(links, nodes, direction), ""
+Hierarchy / breakdown (top-down tree):
+flowchart TD
+    Root["Machine Learning"] --> S["Supervised"]
+    Root --> U["Unsupervised"]
+    Root --> R["Reinforcement"]
+    S --> S1["Classification"]
+    S --> S2["Regression"]
 
+Sequence (interaction over time):
+sequenceDiagram
+    autonumber
+    actor User
+    participant API as Auth Server
+    participant DB as Database
+    User->>API: POST /login (credentials)
+    API->>DB: look up user
+    DB-->>API: password hash
+    alt valid
+        API-->>User: 200 OK + token
+    else invalid
+        API-->>User: 401 Unauthorized
+    end
 
-def _outline_fallback(args: dict, title: str) -> str:
-    """A clean text rendering of the SAME structured data, used only when the image
-    render fails (rare, transient). Keeps the lesson moving — never a broken image."""
-    dtype = (args.get("type") or "flowchart").strip().lower()
-    lines = [f"**{title}**"]
-    if dtype == "sequence":
-        for s in args.get("steps") or []:
-            frm, to = (s.get("from") or "?").strip(), (s.get("to") or "?").strip()
-            txt = (s.get("text") or "").strip()
-            lines.append(f"- **{frm} → {to}:** {txt}" if txt else f"- **{frm} → {to}**")
-    else:
-        for lk in args.get("links") or []:
-            frm, to = (lk.get("from") or "?").strip(), (lk.get("to") or "?").strip()
-            lbl = (lk.get("label") or "").strip()
-            lines.append(f"- {frm} → *{lbl}* → {to}" if lbl else f"- {frm} → {to}")
-    return "\n".join(lines)
+State machine:
+stateDiagram-v2
+    [*] --> Idle
+    Idle --> Loading: fetch()
+    Loading --> Success: 200
+    Loading --> Error: failure
+    Success --> [*]
+    Error --> Idle: retry
+
+Mind map (radial concept map):
+mindmap
+    root(("Photosynthesis"))
+        Inputs
+            Sunlight
+            Water
+            CO2
+        Outputs
+            Glucose
+            Oxygen
+"""
 
 
 def _render_diagram(args: dict) -> ToolResult:
     title = (args.get("title") or "Diagram").strip()
-    code, err = _build_mermaid(args)
-    if err:
-        return ToolResult(ok=False, content="", error=err)
+    code = _clean_code(args.get("code") or "")
+    if not code:
+        return ToolResult(ok=False, content="", error="'code' (Mermaid diagram source) is required")
+    if not _looks_like_mermaid(code):
+        return ToolResult(
+            ok=False, content="",
+            error="'code' must be valid Mermaid source — the first line has to be a "
+                  "diagram declaration (e.g. 'flowchart TD', 'sequenceDiagram', "
+                  "'classDiagram', 'mindmap'). Don't pass prose or JSON.")
 
-    mmdc = _mmdc()
-    produced: Path | None = None
     out_dir = _media_dir("diagrams")
     name = f"{uuid.uuid4().hex}.png"
     out_path = out_dir / name
-    last_err = "mermaid-cli (mmdc) not installed" if not mmdc else ""
-    # mmdc/puppeteer fails transiently under load — one retry absorbs most of it.
-    if mmdc:
-        for attempt in (1, 2):
-            with tempfile.TemporaryDirectory() as tmp:
-                src = Path(tmp) / "d.mmd"
-                src.write_text(code, encoding="utf-8")
-                cfg = Path(tmp) / "pp.json"
-                cfg.write_text(json.dumps({"args": ["--no-sandbox"]}), encoding="utf-8")
-                env = dict(os.environ)
-                # Use the system Chromium for puppeteer if mmdc's bundled one is absent.
-                for cand in ("/usr/bin/chromium", "/usr/bin/chromium-browser", "/usr/bin/google-chrome"):
-                    if Path(cand).exists():
-                        env.setdefault("PUPPETEER_EXECUTABLE_PATH", cand)
-                        break
-                # 4× scale on a 2048×1536 canvas for crisp, downloadable artifacts.
-                cmd = [mmdc, "-i", str(src), "-o", str(out_path),
-                       "-w", "2048", "-H", "1536", "-s", "4", "-b", "white", "-p", str(cfg)]
-                try:
-                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90,
-                                          env=env, encoding="utf-8", errors="replace")
-                    last_err = (proc.stderr or "").strip()[:200]
-                except subprocess.TimeoutExpired:
-                    last_err = "diagram render timed out"
-                    continue
-                produced = _locate_output(out_path)
-                # The image is placed in the chat ONLY after server-side verification
-                # that the bytes are a real, decodable PNG — a 0 returncode is not
-                # enough (puppeteer can exit clean having written a truncated file).
-                if proc.returncode == 0 and produced is not None and _verify_png(produced):
-                    break
-                if produced is not None and not _verify_png(produced):
-                    last_err = (last_err or "render produced an invalid/empty PNG")
-                produced = None
-                logger.warning("[learning_media] mmdc attempt %d failed: %s", attempt, last_err[:300])
 
-    if produced is not None:
-        if produced != out_path:  # normalize the `-1`-suffixed name to the URL we return
-            produced.rename(out_path)
+    # Hybrid render, all server-side: hosted API first, local renderer as the
+    # offline/down fallback. The model's source is rendered AS-IS (no styling
+    # injected). Bytes are verified BEFORE they touch disk, so the chat only ever
+    # sees a real, decodable PNG. The browser NEVER renders mermaid.
+    data, api_err = _render_via_ink(code)
+    local_err = ""
+    source = "mermaid.ink"
+    if data is None:
+        logger.info("[learning_media] mermaid.ink unavailable (%s) — rendering locally", api_err)
+        data, local_err = _render_via_local(code, out_path)
+        source = "local renderer"
+    if data is not None:
+        # Flatten onto white + trim margins so the diagram fills its frame and its
+        # lines stay visible on any theme (mermaid.ink hands back a padded transparent PNG).
+        out_path.write_bytes(_finalize_png(data))
         url = f"/api/media/diagrams/{name}"
         record_artifact("diagram", url, title)
+        logger.info("[learning_media] diagram rendered server-side via %s", source)
         content = f"![{title}]({url})\n\n*{title}* · [⬇ Download diagram]({url})"
         return ToolResult(ok=True, content=content, data={"url": url, "kind": "diagram"})
 
-    # Render unavailable (no mmdc, or a transient puppeteer failure). The syntax is
-    # valid by construction, so this is never the model's fault — degrade to a clean
-    # text outline of the same data and KEEP TEACHING. ok=True so the turn (and any
-    # follow-up quiz) is never derailed by a missing picture.
-    logger.warning("[learning_media] diagram fell back to text outline: %s", last_err)
-    outline = _outline_fallback(args, title)
-    return ToolResult(ok=True, content=outline,
-                      data={"inline": outline, "kind": "diagram", "fallback": True})
+    # BOTH render methods failed (e.g. mermaid.ink rejected the syntax AND no local
+    # renderer is installed). Surface the failure so the model can fix its Mermaid and
+    # retry — a malformed diagram is now possible (the model authors the source), so
+    # an honest error beats silently swallowing it.
+    logger.warning("[learning_media] no server PNG (api: %s; local: %s)", api_err, local_err)
+    return ToolResult(
+        ok=False, content="",
+        error=f"diagram render failed (mermaid.ink: {api_err}; local: {local_err}). "
+              "If this looks like a syntax error, fix the Mermaid and call render_diagram again.")
 
 
 def _fetch_image(args: dict) -> ToolResult:
     query = (args.get("query") or "").strip()
     if not query:
         return ToolResult(ok=False, content="", error="'query' is required")
+    # Ask for several LARGE candidates (not one tiny thumbnail) so we can pick the
+    # highest-resolution hit — small images were what looked poor in the viewer.
     api = "https://api.openverse.org/v1/images/?" + urllib.parse.urlencode(
-        {"q": query, "page_size": 1, "license_type": "all"})
+        {"q": query, "page_size": 12, "license_type": "all", "size": "large",
+         "mature": "false"})
     req = urllib.request.Request(api, headers={"User-Agent": "FRIDAY-LearningRoom/2.0"})
     try:
         with urllib.request.urlopen(req, timeout=_TIMEOUT) as r:
@@ -279,7 +462,14 @@ def _fetch_image(args: dict) -> ToolResult:
     results = payload.get("results") or []
     if not results:
         return ToolResult(ok=True, content=f"No images found for “{query}”.")
-    hit = results[0]
+
+    def _area(h: dict) -> int:
+        try:
+            return int(h.get("width") or 0) * int(h.get("height") or 0)
+        except (TypeError, ValueError):
+            return 0
+    # Prefer the largest real-resolution result; ties/unknowns keep search order.
+    hit = max(results, key=_area) if any(_area(h) for h in results) else results[0]
     img_url = hit.get("url")
     creator = hit.get("creator") or "unknown"
     lic = (hit.get("license") or "").upper()
@@ -319,36 +509,16 @@ def _render_simulation(args: dict) -> ToolResult:
 def register(registry: ToolRegistry) -> None:
     registry.register(
         "render_diagram",
-        "Draw a clear diagram and show it inline (crisp, downloadable). You do NOT "
-        "write diagram code — just pick a type and give the labels + relationships; "
-        "the diagram is built for you, so it can never come out malformed. Types:\n"
-        "• 'flowchart' — a process / relationship: pass `links` [{from,to,label?}] "
-        "(node labels are the plain text; optional `direction` 'TD' or 'LR').\n"
-        "• 'tree' — a hierarchy / breakdown (X splits into A, B): pass `links` "
-        "[{from,to}] from parent to child.\n"
-        "• 'sequence' — a step-by-step interaction over time: pass `steps` "
-        "[{from,to,text}].\n"
-        "Keep labels short. Use this for EVERY major concept worth a visual.",
+        _DIAGRAM_TOOL_DESC,
         {
             "type": "object",
             "properties": {
-                "type": {"type": "string", "enum": list(_DIAGRAM_TYPES),
-                         "description": "flowchart | tree | sequence"},
-                "title": {"type": "string", "description": "short caption"},
-                "direction": {"type": "string", "enum": ["TD", "LR"],
-                              "description": "flowchart layout (top-down or left-right)"},
-                "links": {"type": "array", "description": "flowchart/tree edges",
-                          "items": {"type": "object", "properties": {
-                              "from": {"type": "string"}, "to": {"type": "string"},
-                              "label": {"type": "string"}}, "required": ["from", "to"]}},
-                "nodes": {"type": "array", "items": {"type": "string"},
-                          "description": "optional standalone flowchart node labels"},
-                "steps": {"type": "array", "description": "sequence messages",
-                          "items": {"type": "object", "properties": {
-                              "from": {"type": "string"}, "to": {"type": "string"},
-                              "text": {"type": "string"}}, "required": ["from", "to", "text"]}},
+                "code": {"type": "string",
+                         "description": "the complete Mermaid diagram source (see the rules "
+                                        "and examples in this tool's description)"},
+                "title": {"type": "string", "description": "short caption shown under the diagram"},
             },
-            "required": ["type", "title"],
+            "required": ["code", "title"],
         },
         _render_diagram,
     )

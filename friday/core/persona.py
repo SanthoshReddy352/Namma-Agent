@@ -6,6 +6,8 @@ tool-usage/narration preamble are appended at build time.
 """
 from __future__ import annotations
 
+import re
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -13,7 +15,11 @@ import yaml
 
 from friday.core.logger import logger
 
+# Built-in personas ship inside the package; user-created ones live in the home
+# dir so they persist outside the repo and a user persona can override a built-in
+# of the same id.
 _PERSONA_DIR = Path(__file__).resolve().parent.parent / "personas"
+_USER_PERSONA_DIR = Path("~/.friday/personas").expanduser()
 
 # Behavioral preamble shared by all personas: how to call tools and narrate.
 _AGENT_PREAMBLE = """\
@@ -45,12 +51,15 @@ procedure, then follow it. After you solve a NOVEL multi-step task well (one wit
 no matching skill), call `create_skill` to save the procedure so you're better
 next time; use `update_skill` to refine a skill that didn't go perfectly.
 
-MEMORY — you keep durable memory across sessions. Save a single structured fact
-with `remember_fact`; save free-form context (ongoing projects, decisions, how the
-user likes to work) with `remember_note`; refine the narrative user profile with
-`update_user_profile`. To recall, use `recall_facts`, `read_memory`,
-`search_conversations`, or `recall_sessions`. Save proactively when you learn
-something durable — but never invent facts, and don't announce routine saves.
+MEMORY — you keep durable memory across sessions. The moment the user states a
+stable fact about themselves — their name, where they live or study, their job or
+role, a strong preference, a relationship, a goal, or an ongoing project — call
+`remember_fact` to save it (key + value) BEFORE moving on with the task. Save
+free-form context (ongoing projects, decisions, how the user likes to work) with
+`remember_note`, and refine the narrative user profile with `update_user_profile`.
+To recall, use `recall_facts`, `read_memory`, `search_conversations`, or
+`recall_sessions`. Save proactively — but never invent facts, and don't announce
+routine saves.
 
 When a task may take a moment, say a short, natural spoken line FIRST (in the same
 turn as the tool call), e.g. "Sure, let me pull that up." Keep it human and brief
@@ -75,6 +84,28 @@ FORMATTING — your replies are rendered as rich text, so format cleanly:
   $\\ce{H2O}$, and $\\pu{3 mol}$ for quantities with units.
 """
 
+# Temporal anchor — without this the model defaults to its training-cutoff year
+# and types e.g. "...2025" into web searches, then trusts year-old results as the
+# "latest". Recomputed every turn so the assistant always lives in the present.
+def _temporal_block(now: Optional[datetime] = None) -> str:
+    now = now or datetime.now().astimezone()
+    tz = now.tzname() or ""
+    stamp = now.strftime("%A, %d %B %Y, %H:%M")
+    return (
+        "CURRENT DATE & TIME — this is the present moment; treat it as ground truth:\n"
+        f"  {stamp}{(' ' + tz) if tz else ''}.\n"
+        "Your training data has a knowledge cutoff in the PAST, but the real world has "
+        "moved on since then. You live in the present, not at your cutoff.\n"
+        "- When the user asks about anything current — \"latest\", \"recent\", \"news\", "
+        "\"today\", \"now\", \"what's new\" — anchor to the date above. Use the CURRENT "
+        "year/month in web searches; never hard-code your training-cutoff year.\n"
+        "- Always check the publication date of what a search returns. NEVER present "
+        "months- or years-old information as if it were current.\n"
+        "- If the freshest source you can find is still old, say so plainly rather than "
+        "implying it is up to date."
+    )
+
+
 # Pure-conversation preamble for chat mode: no tools, no skills, no actions.
 _CHAT_PREAMBLE = """\
 You are in CHAT mode: a normal conversation. You have NO tools and take NO
@@ -86,7 +117,7 @@ to switch to Agent mode for that.
 
 class Persona:
     def __init__(self, data: dict, display_name: Optional[str] = None):
-        self.id = data.get("persona_id", "friday_core")
+        self.id = data.get("persona_id", "core")
         # The assistant's display name comes from config (single source of truth);
         # the persona YAML's `name` is only a fallback when none is provided.
         self.name = (display_name or data.get("name") or "FRIDAY").strip()
@@ -106,6 +137,9 @@ class Persona:
         chat_mode: bool = False,
     ) -> str:
         parts: list[str] = [self.identity or f"You are {self.name}."]
+        # Anchor every turn to the real present so the assistant doesn't default to
+        # its training-cutoff year when searching/answering about current events.
+        parts.append(_temporal_block())
         if self.tone:
             parts.append(f"Tone: {self.tone}.")
         if self.dos:
@@ -131,10 +165,134 @@ class Persona:
         return prompt.replace("{name}", self.name)
 
 
-def load_persona(persona_id: str = "friday_core", display_name: Optional[str] = None) -> Persona:
-    path = _PERSONA_DIR / f"{persona_id}.yaml"
-    if not path.exists():
+def _persona_dirs() -> list[Path]:
+    """Search order: user personas (writable, override) then the built-ins."""
+    return [_USER_PERSONA_DIR, _PERSONA_DIR]
+
+
+def _persona_path(persona_id: str) -> Optional[Path]:
+    for directory in _persona_dirs():
+        candidate = directory / f"{persona_id}.yaml"
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def load_persona(persona_id: str = "core", display_name: Optional[str] = None) -> Persona:
+    path = _persona_path(persona_id)
+    if path is None:
         logger.warning("[persona] %s not found, using minimal default", persona_id)
         return Persona({"persona_id": persona_id}, display_name=display_name)
     data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    data.setdefault("persona_id", persona_id)
     return Persona(data, display_name=display_name)
+
+
+def slugify_persona_id(name: str) -> str:
+    """A filesystem-safe persona id derived from a display name."""
+    slug = re.sub(r"[^a-z0-9]+", "_", (name or "").lower()).strip("_")
+    return slug or "persona"
+
+
+def _identity_line(identity: str, display_name: str) -> str:
+    """First sentence of an identity, name-substituted — the dropdown subtitle."""
+    text = (identity or "").replace("{name}", display_name)
+    text = " ".join(text.split())  # collapse newlines/whitespace
+    first = re.split(r"(?<=[.!?])\s+", text, maxsplit=1)[0] if text else ""
+    return first[:160]
+
+
+def list_personas(display_name: str = "FRIDAY") -> list[dict]:
+    """Every available persona (user + built-in) with a one-line identity, for the
+    Settings dropdown. A user persona overrides a built-in sharing its id; the
+    ``source`` field marks which ones the user can edit/delete."""
+    out: list[dict] = []
+    seen: set[str] = set()
+    for directory in _persona_dirs():
+        if not directory.exists():
+            continue
+        source = "user" if directory == _USER_PERSONA_DIR else "builtin"
+        for path in sorted(directory.glob("*.yaml")):
+            pid = path.stem
+            if pid in seen:
+                continue
+            seen.add(pid)
+            try:
+                data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except Exception:  # noqa: BLE001 — skip an unreadable persona file
+                continue
+            raw_name = (data.get("name") or pid).strip()
+            out.append({
+                "id": pid,
+                "name": raw_name.replace("{name}", display_name),
+                "identity_line": _identity_line(data.get("identity", ""), display_name),
+                "tone": (data.get("tone") or "").strip(),
+                "source": source,
+            })
+    return out
+
+
+def get_persona_spec(persona_id: str) -> Optional[dict]:
+    """The full editable spec of one persona (identity, tone, dos, donts), for the
+    Settings editor / 'view all instructions'. Returns None if it doesn't exist."""
+    path = _persona_path(persona_id)
+    if path is None:
+        return None
+    try:
+        data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except Exception:  # noqa: BLE001
+        data = {}
+    source = "user" if path.parent == _USER_PERSONA_DIR else "builtin"
+    return {
+        "id": persona_id,
+        "name": (data.get("name") or persona_id).strip(),
+        "identity": (data.get("identity") or "").strip(),
+        "tone": (data.get("tone") or "").strip(),
+        "dos": [str(x).strip() for x in (data.get("dos") or []) if str(x).strip()],
+        "donts": [str(x).strip() for x in (data.get("donts") or []) if str(x).strip()],
+        "source": source,
+    }
+
+
+# Fields a user persona may carry (mirrors the built-in YAML shape).
+def save_persona(spec: dict) -> dict:
+    """Write a user persona YAML to ``~/.friday/personas`` and return ``{id, name}``.
+
+    ``spec`` needs at least ``name`` + ``identity``; ``tone`` and the ``dos`` /
+    ``donts`` lists are optional (lists may also arrive as newline-separated text
+    from the UI). The id is an explicit ``id`` or a slug of the name.
+    """
+    name = (spec.get("name") or "").strip()
+    identity = (spec.get("identity") or "").strip()
+    if not name or not identity:
+        raise ValueError("a persona needs a name and an identity")
+
+    pid = (spec.get("id") or "").strip() or slugify_persona_id(name)
+    data: dict = {"persona_id": pid, "name": name, "identity": identity}
+    for field in ("tone", "speech_style", "conversation_style"):
+        value = str(spec.get(field) or "").strip()
+        if value:
+            data[field] = value
+    for field in ("dos", "donts"):
+        items = spec.get(field)
+        if isinstance(items, str):
+            items = [ln.strip("-•* \t") for ln in items.splitlines()]
+        items = [str(x).strip() for x in (items or []) if str(x).strip()]
+        if items:
+            data[field] = items
+
+    _USER_PERSONA_DIR.mkdir(parents=True, exist_ok=True)
+    path = _USER_PERSONA_DIR / f"{pid}.yaml"
+    path.write_text(yaml.safe_dump(data, sort_keys=False, allow_unicode=True), encoding="utf-8")
+    logger.info("[persona] saved user persona %s", pid)
+    return {"id": pid, "name": name}
+
+
+def delete_user_persona(persona_id: str) -> bool:
+    """Delete a user persona file (built-ins are never touched). Returns success."""
+    path = _USER_PERSONA_DIR / f"{persona_id}.yaml"
+    if path.exists():
+        path.unlink()
+        logger.info("[persona] deleted user persona %s", persona_id)
+        return True
+    return False

@@ -91,7 +91,7 @@ def test_scope_memory_add_list_delete():
 
 def _service():
     return FridayService(
-        config={"persona": "friday_core", "conversation": {}},
+        config={"persona": "core", "conversation": {}},
         provider=ScriptedProvider([LLMResponse(content="ok")]),
         registry=ToolRegistry(),
         db=Database(":memory:"),

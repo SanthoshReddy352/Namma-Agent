@@ -27,7 +27,7 @@ class ScriptedProvider(Provider):
 
 def _svc():
     return FridayService(
-        config={"persona": "friday_core", "conversation": {}},
+        config={"persona": "core", "conversation": {}},
         provider=ScriptedProvider([LLMResponse(content="ok")]),
         registry=ToolRegistry(),
         db=Database(":memory:"),

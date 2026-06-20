@@ -40,6 +40,16 @@ export const loadSession = (id) => j(`/api/sessions/${id}`);
 export const deleteSession = (id) => j(`/api/sessions/${id}`, { method: "DELETE" });
 export const shutdownApi = () => j("/api/shutdown", { method: "POST" });
 
+// ── Personas ─────────────────────────────────────────────────────────────────
+const _post = (url, body) =>
+  j(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+export const fetchPersonas = () => j("/api/personas");
+export const fetchPersona = (id) => j(`/api/personas/${encodeURIComponent(id)}`);
+export const setPersona = (id) => _post("/api/persona", { id });
+export const savePersona = (persona) => _post("/api/personas", persona);
+export const generatePersona = (description) => _post("/api/personas/generate", { description });
+export const deletePersona = (id) => j(`/api/personas/${encodeURIComponent(id)}`, { method: "DELETE" });
+
 // ── Projects + chat organisation ────────────────────────────────────────────
 const jpost = (url, body) =>
   j(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
@@ -229,14 +239,16 @@ export function useFriday() {
   }, []);
 
   // Append a streamed assistant chunk, opening a fresh assistant bubble if needed.
-  const appendToken = (cur, text, finalize) => {
+  // `meta` (on finalize) carries per-turn stats — { ttft, tokens } — for the footer.
+  const appendToken = (cur, text, finalize, meta) => {
     let { messages, streamId } = cur;
     if (!streamId) {
       streamId = nextId();
       messages = [...messages, { id: streamId, role: "assistant", content: "", at: now() }];
     }
     messages = messages.map((x) => (x.id === streamId
-      ? { ...x, content: finalize ? (text ?? x.content) : x.content + text, ...(finalize ? { tools: finalize } : {}) }
+      ? { ...x, content: finalize ? (text ?? x.content) : x.content + text,
+          ...(finalize ? { tools: finalize } : {}), ...(meta ? { meta } : {}) }
       : x));
     return { messages, streamId };
   };
@@ -303,7 +315,11 @@ export function useFriday() {
         setPasswordReq({ id: msg.id, prompt: msg.prompt });
         break;
       case "turn_result": {
-        patch(key, (cur) => ({ ...appendToken(cur, msg.content, msg.tools_used || []), streamId: null, status: "idle" }));
+        patch(key, (cur) => ({
+          ...appendToken(cur, msg.content, msg.tools_used || [],
+                         { ttft: msg.ttft, tokens: msg.tokens }),
+          streamId: null, status: "idle",
+        }));
         if (voiceRef.current && msg.content && key === currentRef.current) browserSpeak(msg.content);
         refreshSessions();
         if ((msg.tools_used || []).includes("exit_friday")) {
@@ -446,18 +462,29 @@ export function useFriday() {
     if (existing && existing.status === "thinking") return;
     const r = await loadSession(id);
     if (!r) return;
+    const messages = (r.turns || [])
+      // "[quiz answer]" continuations and "[build path]" dashboard prompts are
+      // plumbing for the model — the quiz card shows the pick, the dashboard
+      // shows the path; neither needs a raw technical bubble in the history.
+      .filter((t) => !(t.role === "user" &&
+        (t.content?.startsWith("[quiz answer]") || t.content?.startsWith("[build path]"))))
+      .map((t) => (t.role === "quiz"
+        ? { id: nextId(), role: "quiz", quiz: t.quiz,
+            at: t.created_at ? Date.parse(t.created_at) : undefined }
+        : { id: nextId(), role: t.role === "user" ? "user" : "assistant", content: t.content,
+            at: t.created_at ? Date.parse(t.created_at) : undefined,
+            // Restore the assistant footer (tools used + stats) so it persists on reload.
+            ...(t.role === "assistant"
+              ? { tools: t.tools_used || [], meta: t.meta || null } : {}) }));
+    // Re-derive the "module complete → continue" card from persisted state. The
+    // live `learning_progress` event only appends it once and isn't saved with the
+    // turns, so without this the button vanishes on reload (or never shows if the
+    // event was missed). The server flags a finished module via topic.module_done.
+    if (r.topic?.module_done) {
+      messages.push({ id: nextId(), role: "module_done", info: r.topic.module_done, at: now() });
+    }
     patch(id, () => ({
-      messages: (r.turns || [])
-        // "[quiz answer]" continuations and "[build path]" dashboard prompts are
-        // plumbing for the model — the quiz card shows the pick, the dashboard
-        // shows the path; neither needs a raw technical bubble in the history.
-        .filter((t) => !(t.role === "user" &&
-          (t.content?.startsWith("[quiz answer]") || t.content?.startsWith("[build path]"))))
-        .map((t) => (t.role === "quiz"
-          ? { id: nextId(), role: "quiz", quiz: t.quiz,
-              at: t.created_at ? Date.parse(t.created_at) : undefined }
-          : { id: nextId(), role: t.role === "user" ? "user" : "assistant", content: t.content,
-              at: t.created_at ? Date.parse(t.created_at) : undefined })),
+      messages,
       timeline: [], status: "idle", streamId: null, model: r.model || "",
       context: { project: r.project || null, topic: r.topic || null, title: r.title || "" },
     }));

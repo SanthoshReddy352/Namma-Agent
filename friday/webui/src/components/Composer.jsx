@@ -1,5 +1,12 @@
-import { useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { uploadFile } from "../api.js";
+
+// Textarea never grows past this (the "net safety height") — it scrolls instead.
+const MAX_H = 200;
+// Flip the controls to the bottom as soon as the text needs a 2nd line. Measured
+// as a ratio of the *empty* single-line height (so it's robust to font size/zoom):
+// 1 line ≈ 1.0×, 2 lines ≈ 2.0×, so 1.5× cleanly means "wrapped past line one".
+const EXPAND_RATIO = 1.5;
 
 const SLASH_COMMANDS = [
   { cmd: "/new", desc: "Start a new chat" },
@@ -17,8 +24,35 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
   const [recording, setRecording] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const fileRef = useRef(null);
   const recRef = useRef(null);
+  const taRef = useRef(null);
+  const oneLineRef = useRef(0); // measured height of the empty (single-line) textarea
+
+  // Grow the textarea to fit its content (up to the safety cap) and flip to the
+  // bottom-bar layout once the text wraps past the first line. useLayoutEffect
+  // mutates the height *before* paint so it never flashes.
+  //
+  // The flip is "sticky": expanding widens the textarea (controls move below it),
+  // which can re-wrap a 2-line message back to 1 line — so collapsing on height
+  // would oscillate. Instead we only collapse when the field is actually empty
+  // (e.g. after sending), which makes the transition stable in both directions.
+  function autosize() {
+    const el = taRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    const content = el.scrollHeight;
+    if (!oneLineRef.current) oneLineRef.current = content; // first pass runs on the empty field
+    el.style.height = Math.min(content, MAX_H) + "px";
+    setExpanded((prev) => {
+      if (!el.value.trim()) return false; // empty → controls back on the side
+      return prev || content > oneLineRef.current * EXPAND_RATIO;
+    });
+  }
+  // Re-measure on text change *and* after an expand (the width changes with it, so
+  // the height must be recomputed); the sticky logic keeps this from looping.
+  useLayoutEffect(() => { autosize(); }, [text, expanded]);
   const sttSupported = typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
   function submit() {
@@ -93,39 +127,46 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
           ))}
         </div>
       )}
-      <div className="flex items-end gap-2 p-2.5">
+      {/* Short text → a single row with the controls on the side. As the text grows
+          the textarea expands (up to MAX_H) and, past EXPAND_AT, the layout flips to
+          a column so the controls drop to the bottom of the box. Same element order
+          in both layouts, so the textarea never remounts (keeps focus while typing). */}
+      <div className={`p-2.5 flex gap-2 ${expanded ? "flex-col" : "items-center"}`}>
         <input ref={fileRef} type="file" multiple className="hidden" onChange={onPick} />
-        <button title="Attach a document" onClick={() => fileRef.current?.click()}
-                className="h-9 w-9 grid place-items-center rounded-lg text-ink-soft dark:text-night-faint hover:bg-paper-soft dark:hover:bg-night-soft">
-          {uploading ? <span className="text-xs">…</span> : <PaperclipIcon />}
-        </button>
         <textarea
+          ref={taRef}
           value={text}
           autoFocus={autoFocus}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
           rows={1}
           placeholder={mode === "chat" ? `Chat with ${name}…` : `Ask ${name} to do something…`}
-          className="flex-1 resize-none bg-transparent outline-none px-1.5 py-2 text-[15px] placeholder:text-ink-faint dark:placeholder:text-night-faint max-h-44"
+          className={`resize-none bg-transparent outline-none px-1.5 py-2 text-[15px] placeholder:text-ink-faint dark:placeholder:text-night-faint overflow-y-auto max-h-[200px] ${expanded ? "w-full" : "flex-1 min-w-0"}`}
         />
-        <ModePill mode={mode} setMode={setMode} />
-        {sttSupported && (
-          <button title={recording ? "Stop dictation" : "Dictate (browser speech-to-text)"} onClick={record}
-                  className={`h-9 w-9 grid place-items-center rounded-lg hover:bg-paper-soft dark:hover:bg-night-soft ${recording ? "text-brand animate-pulse" : "text-ink-soft dark:text-night-faint"}`}>
-            <MicIcon />
+        <div className={`flex items-center gap-1.5 ${expanded ? "w-full justify-end" : "shrink-0"}`}>
+          <button title="Attach a document" onClick={() => fileRef.current?.click()}
+                  className="h-9 w-9 grid place-items-center rounded-lg text-ink-soft dark:text-night-faint hover:bg-paper-soft dark:hover:bg-night-soft">
+            {uploading ? <span className="text-xs">…</span> : <PaperclipIcon />}
           </button>
-        )}
-        {busy ? (
-          <button title="Stop" onClick={onStop}
-                  className="h-9 w-9 grid place-items-center rounded-lg bg-ink dark:bg-night-ink text-paper dark:text-night">
-            <StopIcon />
-          </button>
-        ) : (
-          <button title="Send" onClick={submit} disabled={!text.trim() && attachments.length === 0}
-                  className="h-9 w-9 grid place-items-center rounded-lg bg-brand text-white disabled:opacity-30 hover:bg-brand-deep transition">
-            <SendIcon />
-          </button>
-        )}
+          <ModePill mode={mode} setMode={setMode} />
+          {sttSupported && (
+            <button title={recording ? "Stop dictation" : "Dictate (browser speech-to-text)"} onClick={record}
+                    className={`h-9 w-9 grid place-items-center rounded-lg hover:bg-paper-soft dark:hover:bg-night-soft ${recording ? "text-brand animate-pulse" : "text-ink-soft dark:text-night-faint"}`}>
+              <MicIcon />
+            </button>
+          )}
+          {busy ? (
+            <button title="Stop" onClick={onStop}
+                    className="h-9 w-9 grid place-items-center rounded-lg bg-ink dark:bg-night-ink text-paper dark:text-night">
+              <StopIcon />
+            </button>
+          ) : (
+            <button title="Send" onClick={submit} disabled={!text.trim() && attachments.length === 0}
+                    className="h-9 w-9 grid place-items-center rounded-lg bg-brand text-white disabled:opacity-30 hover:bg-brand-deep transition">
+              <SendIcon />
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

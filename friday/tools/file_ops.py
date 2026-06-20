@@ -39,7 +39,7 @@ def _read_file(args: dict) -> ToolResult:
 
 def _write_file(args: dict) -> ToolResult:
     path = args.get("path", "")
-    ok, reason = check_path(path)
+    ok, reason = check_path(path, write=True)
     if not ok:
         return ToolResult(ok=False, content="", error=reason)
     p = Path(path).expanduser()
@@ -71,9 +71,10 @@ def _bucket_for(ext: str) -> str:
 
 
 def _move_path(args: dict) -> ToolResult:
+    # A move both removes the source and creates the dest, so BOTH ends are writes.
     src, dst = args.get("source", ""), args.get("dest", "")
     for path in (src, dst):
-        ok, reason = check_path(path)
+        ok, reason = check_path(path, write=True)
         if not ok:
             return ToolResult(ok=False, content="", error=reason)
     sp, dp = Path(src).expanduser(), Path(dst).expanduser()
@@ -87,9 +88,11 @@ def _move_path(args: dict) -> ToolResult:
 
 
 def _copy_path(args: dict) -> ToolResult:
+    # Source is only read; dest is written — so a copy OUT of a system dir is fine,
+    # but a copy INTO one is refused.
     src, dst = args.get("source", ""), args.get("dest", "")
-    for path in (src, dst):
-        ok, reason = check_path(path)
+    for path, is_write in ((src, False), (dst, True)):
+        ok, reason = check_path(path, write=is_write)
         if not ok:
             return ToolResult(ok=False, content="", error=reason)
     sp, dp = Path(src).expanduser(), Path(dst).expanduser()
@@ -109,7 +112,7 @@ def _copy_path(args: dict) -> ToolResult:
 
 def _delete_path(args: dict) -> ToolResult:
     path = args.get("path", "")
-    ok, reason = check_path(path)
+    ok, reason = check_path(path, write=True)
     if not ok:
         return ToolResult(ok=False, content="", error=reason)
     p = Path(path).expanduser()
@@ -124,7 +127,7 @@ def _delete_path(args: dict) -> ToolResult:
 
 def _make_dir(args: dict) -> ToolResult:
     path = args.get("path", "")
-    ok, reason = check_path(path)
+    ok, reason = check_path(path, write=True)
     if not ok:
         return ToolResult(ok=False, content="", error=reason)
     Path(path).expanduser().mkdir(parents=True, exist_ok=True)
@@ -157,7 +160,7 @@ def _find_files(args: dict) -> ToolResult:
 
 def _organize_dir(args: dict) -> ToolResult:
     path = args.get("path", "")
-    ok, reason = check_path(path)
+    ok, reason = check_path(path, write=True)
     if not ok:
         return ToolResult(ok=False, content="", error=reason)
     base = Path(path).expanduser()

@@ -241,13 +241,50 @@ class BrowserController:
             self._thread = threading.Thread(target=self._run, name="friday-browser", daemon=True)
             self._thread.start()
 
+    @staticmethod
+    def _is_dead(page) -> bool:
+        try:
+            return page is None or page.is_closed()
+        except Exception:  # noqa: BLE001
+            return True
+
+    @staticmethod
+    def _closed_error(exc: Exception) -> bool:
+        """True for Playwright errors that mean the page/context/browser is gone."""
+        msg = str(exc).lower()
+        return ("has been closed" in msg or "target page" in msg
+                or "target closed" in msg or "browser closed" in msg)
+
+    def _boot(self, pw):
+        """Launch the configured context and return a live ``(context, page)``.
+
+        Re-runs the *configured* launch (so the persistent profile — and any logins
+        cached in it, e.g. a YouTube Premium sign-in — are reused), then probes
+        liveness: driving the user's *real* browser while it is already running hands
+        the launch off to the existing instance, which then exits and kills our
+        context — but the page only dies on the FIRST navigation, so the launch looks
+        successful. If the probe shows it dead, recover on bundled Chromium."""
+        context = self._launch_context(pw)
+        page = context.pages[0] if context.pages else context.new_page()
+        try:
+            page.goto("about:blank", timeout=5_000)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[browser] %s context died on probe (%s); recovering on bundled Chromium",
+                           self.active_browser, exc)
+            try:
+                context.close()
+            except Exception:  # noqa: BLE001
+                pass
+            context = self._launch_bundled(pw)
+            page = context.pages[0] if context.pages else context.new_page()
+        return context, page
+
     def _run(self) -> None:
         try:
             from playwright.sync_api import sync_playwright
 
             pw = sync_playwright().start()
-            context = self._launch_context(pw)
-            page = context.pages[0] if context.pages else context.new_page()
+            context, page = self._boot(pw)
         except Exception as exc:  # noqa: BLE001
             self._start_error = str(exc)
             self._ready.set()
@@ -263,9 +300,27 @@ class BrowserController:
                     break
                 fn, fut = item
                 try:
+                    # The user may have closed the window between turns. If the page is
+                    # gone — or the command fails because it's gone — relaunch (reusing
+                    # the same signed-in profile) and retry once, so a second "play"
+                    # actually plays instead of falling back to a plain search link.
+                    if self._is_dead(page):
+                        raise RuntimeError("browser window was closed")
                     fut["result"] = fn(page)
                 except Exception as exc:  # noqa: BLE001
-                    fut["error"] = str(exc)
+                    if self._is_dead(page) or self._closed_error(exc):
+                        logger.info("[browser] page/context gone (%s); relaunching and retrying", exc)
+                        try:
+                            try:
+                                context.close()
+                            except Exception:  # noqa: BLE001
+                                pass
+                            context, page = self._boot(pw)
+                            fut["result"] = fn(page)
+                        except Exception as exc2:  # noqa: BLE001
+                            fut["error"] = str(exc2)
+                    else:
+                        fut["error"] = str(exc)
                 finally:
                     fut["done"].set()
         finally:
@@ -318,7 +373,14 @@ class BrowserController:
             logger.warning("[browser] %s launch failed (%s); falling back to bundled Chromium",
                            browser_id, exc)
 
-        # Fallback: bundled Chromium on a dedicated profile (UA spoof so YT Music works).
+        return self._launch_bundled(pw)
+
+    def _launch_bundled(self, pw):
+        """Bundled Chromium on a dedicated profile (UA spoof so YT Music works).
+
+        Used both as the launch fallback and as the runtime recovery path when the
+        configured browser's context dies — it has its own user-data-dir, so it never
+        conflicts with the user's already-running browser."""
         fallback = str(Path(self.profile_dir).expanduser().with_name(
             Path(self.profile_dir).name + "-bundled"))
         Path(fallback).mkdir(parents=True, exist_ok=True)

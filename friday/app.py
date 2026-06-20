@@ -223,6 +223,67 @@ def _enable_clipboard_access() -> None:
     GLib.timeout_add(200, _tick)
 
 
+def _patch_pywebview_for_windows() -> None:
+    """Patch pywebview's WebView2 backend so copy/paste + the right-click menu work
+    and the title bar tracks the page title. No-op off Windows / the WinForms backend.
+
+    Two things pywebview does that we undo, both done ON the WebView2 UI thread (so
+    there's no cross-thread COM access — that was the InvalidCast crash):
+
+    * It HARD-DISABLES ``AreBrowserAcceleratorKeysEnabled`` (Ctrl+C/V/X/A) and
+      ``AreDefaultContextMenusEnabled`` (right-click → Copy) whenever debug is off —
+      which is exactly why you can't copy from the desktop window. We flip both back
+      on inside ``load_url``, right BEFORE each navigation, so the setting is live for
+      the loaded page (no reload needed).
+    * It never syncs the document ``<title>`` to the native window title. We
+      subscribe to ``DocumentTitleChanged`` so renaming the assistant (the web UI
+      updates ``document.title``) updates the title bar live.
+    """
+    if os.name != "nt":
+        return
+    try:
+        from webview.platforms import edgechromium as ec  # type: ignore
+    except Exception:  # noqa: BLE001 — not the WinForms/EdgeChromium backend
+        return
+    if getattr(ec.EdgeChrome, "_friday_patched", False):
+        return
+
+    _orig_load_url = ec.EdgeChrome.load_url
+
+    def load_url(self, url):  # runs on the WebView2 UI thread (the safe place)
+        try:
+            core = self.webview.CoreWebView2
+            if core is not None:
+                core.Settings.AreBrowserAcceleratorKeysEnabled = True
+                core.Settings.AreDefaultContextMenusEnabled = True
+        except Exception as exc:  # noqa: BLE001 — best-effort; still navigate
+            logger.debug("[app] webview2 settings enable failed: %s", exc)
+        return _orig_load_url(self, url)
+
+    _orig_ready = ec.EdgeChrome.on_webview_ready
+
+    def on_webview_ready(self, sender, args):
+        _orig_ready(self, sender, args)
+        try:
+            if args.IsSuccess:
+                core = sender.CoreWebView2
+
+                def _sync_title(_s, _a):
+                    try:
+                        self.form.Text = core.DocumentTitle
+                    except Exception:  # noqa: BLE001
+                        pass
+
+                core.DocumentTitleChanged += _sync_title
+        except Exception as exc:  # noqa: BLE001
+            logger.debug("[app] webview2 title sync setup failed: %s", exc)
+
+    ec.EdgeChrome.load_url = load_url
+    ec.EdgeChrome.on_webview_ready = on_webview_ready
+    ec.EdgeChrome._friday_patched = True
+    logger.info("[app] patched WebView2 for copy/paste + live title")
+
+
 def _launch_window(service: FridayService, server_thread: threading.Thread) -> None:
     """Open the native desktop window; fall back to a browser tab only if no GUI
     toolkit is available at all."""
@@ -235,6 +296,8 @@ def _launch_window(service: FridayService, server_thread: threading.Thread) -> N
     except Exception as exc:  # noqa: BLE001
         logger.info("[app] pywebview not installed (%s); opening browser", exc)
         return _open_browser(server_thread)
+
+    _patch_pywebview_for_windows()  # copy/paste + live title on WebView2 (no-op elsewhere)
 
     title = assistant_name(service.config)
     _set_windows_app_id(title)
@@ -255,7 +318,7 @@ def _launch_window(service: FridayService, server_thread: threading.Thread) -> N
             # private_mode=False keeps a disk cache between launches → faster
             # warm starts and smoother navigation (esp. on Windows/WebView2).
             webview.start(
-                _enable_clipboard_access,  # runs once the GUI loop is up
+                _enable_clipboard_access,  # Linux/GTK clipboard once the GUI loop is up
                 gui=gui, icon=icon, private_mode=False,
                 storage_path=str(_ASSETS.parent / ".webview"),
             )

@@ -93,6 +93,9 @@ export default function ImageViewer() {
         </Ctrl>
       </div>
 
+      {/* White matte behind every image: diagrams are dark lines/text on white, so a
+          light backdrop keeps the node-connection lines visible regardless of app
+          theme (a dark backdrop would swallow them). */}
       <img src={img.src} alt={img.alt || "image"} draggable={false}
            onClick={(e) => e.stopPropagation()}
            onWheel={onWheel}
@@ -102,7 +105,7 @@ export default function ImageViewer() {
            style={{ transform: `translate(${pos.x}px, ${pos.y}px) scale(${scale})`,
                     cursor: scale > 1 ? (drag.current ? "grabbing" : "grab") : "zoom-in",
                     transition: drag.current ? "none" : "transform 0.12s ease-out" }}
-           className="max-w-[92vw] max-h-[88vh] object-contain rounded-lg shadow-2xl select-none" />
+           className="max-w-[92vw] max-h-[88vh] object-contain rounded-lg shadow-2xl select-none bg-white" />
     </div>
   );
 }

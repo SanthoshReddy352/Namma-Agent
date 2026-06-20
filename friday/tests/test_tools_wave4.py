@@ -146,14 +146,19 @@ def test_delegate_inherits_main_tool_loop_limit(wired):
 def test_list_personas(wired):
     reg, _, agent = wired
     r = reg.execute("list_personas", {})
-    assert r.ok and "friday_core" in r.content
+    assert r.ok and "core" in r.content
     assert agent.persona.id in r.data["available"]
 
 
-def test_switch_persona(wired):
+def test_switch_persona(wired, tmp_path, monkeypatch):
     reg, _, agent = wired
-    r = reg.execute("switch_persona", {"persona": "friday_concise"})
-    assert r.ok and agent.persona.id == "friday_concise"
+    # Create a user persona (in a temp dir so we don't touch ~/.friday), then switch.
+    import friday.core.persona as P
+    monkeypatch.setattr(P, "_USER_PERSONA_DIR", tmp_path / "personas")
+    c = reg.execute("create_persona", {"name": "Sage", "identity": "You are {name}, a sage."})
+    assert c.ok
+    r = reg.execute("switch_persona", {"persona": "sage"})
+    assert r.ok and agent.persona.id == "sage"
 
 
 def test_switch_unknown_persona(wired):

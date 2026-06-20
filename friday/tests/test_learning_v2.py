@@ -38,62 +38,19 @@ def _module_sid(db, topic, mid):
     return db.module_session(topic["id"], mid)
 
 
-def test_dangling_check_is_repaired_with_pose_quiz(db, topic):
-    """In a module thread, when the model ends with a check invitation but DOESN'T
-    call pose_quiz, the agent forces the quiz so the learner still gets a card."""
+def test_dangling_visual_is_repaired_with_render(db, topic, monkeypatch):
+    """In a module thread, when the model says it'll draw a diagram but DOESN'T call
+    render_diagram, the agent forces one render so the promised picture appears."""
     from friday.core.agent import Agent
     from friday.core.persona import load_persona
     from friday.core.providers.base import LLMResponse, Provider, ToolCall
 
-    class Scripted(Provider):
-        name = "scripted"
-
-        def __init__(self, responses):
-            super().__init__(model="scripted")
-            self._r = list(responses)
-
-        def is_available(self):
-            return True
-
-        def generate(self, messages, tools=None, stream=False, on_token=None):
-            resp = self._r.pop(0)
-            if stream and on_token and resp.content:
-                on_token(resp.content)
-            return resp
-
-    sid = _module_sid(db, topic, "m1")
-    reg = ToolRegistry()
-    register_learning_tools(reg, db)
-    events = []
-    responses = [
-        # 1) final answer that promises a check but calls no tool
-        LLMResponse(content="Great. Let's check if that sits right with you 👇"),
-        # 2) the forced repair turn supplies the pose_quiz call
-        LLMResponse(tool_calls=[ToolCall(id="q1", name="pose_quiz", args={
-            "question": "What is abstraction?", "options": ["A simplified model", "Memorizing data"],
-            "answer_index": 0})]),
-    ]
-    agent = Agent(Scripted(responses), reg, db, load_persona())
-    # The quiz card reaches the UI via the turn-local event sink (as in the real app).
-    set_event_sink(lambda e, p: events.append((e, p)))
-    try:
-        result = agent.process_turn("[quiz answer] correct — continue", session_id=sid)
-    finally:
-        set_event_sink(None)
-
-    assert "pose_quiz" in result.tools_used
-    quizzes = [p for e, p in events if e == "quiz"]
-    assert quizzes and quizzes[0]["question"] == "What is abstraction?"
-    # and it's persisted as a quiz turn so it survives reload
-    assert any(t["role"] == "quiz" for t in db.session_turns(sid))
-
-
-def test_dangling_check_promise_stripped_when_repair_fails(db, topic):
-    """If the forced repair still doesn't pose a quiz, the empty check invitation is
-    removed so the learner isn't left staring at a promise with no card."""
-    from friday.core.agent import Agent
-    from friday.core.persona import load_persona
-    from friday.core.providers.base import LLMResponse, Provider
+    # Keep the render hermetic/offline — pretend the API returned a real PNG.
+    import friday.tools.learning_media as lm
+    from friday.tools.learning_media import register as register_media
+    fake_png = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+                b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" + b"\x00" * 300)
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (fake_png, ""))
 
     class Scripted(Provider):
         name = "scripted"
@@ -114,16 +71,175 @@ def test_dangling_check_promise_stripped_when_repair_fails(db, topic):
     sid = _module_sid(db, topic, "m1")
     reg = ToolRegistry()
     register_learning_tools(reg, db)
+    register_media(reg)
     responses = [
-        LLMResponse(content="Abstraction keeps the signal.\nQuick check: take a look 👇"),
-        LLMResponse(content="Sorry!"),  # repair fails to call pose_quiz
+        # 1) prose promising a visual but calling no tool
+        LLMResponse(content="A list is ordered. Let me draw how it looks."),
+        # 2) the forced repair turn supplies the render_diagram call
+        LLMResponse(tool_calls=[ToolCall(id="d1", name="render_diagram", args={
+            "title": "List", "code": "flowchart LR\n    A --> B"})]),
     ]
     agent = Agent(Scripted(responses), reg, db, load_persona())
     result = agent.process_turn("[quiz answer] correct — continue", session_id=sid)
 
-    assert "pose_quiz" not in result.tools_used
-    assert "Abstraction keeps the signal." in result.content
-    assert "take a look" not in result.content.lower()  # the empty promise was dropped
+    assert "render_diagram" in result.tools_used
+    assert "/api/media/diagrams/" in result.content  # the picture made it into the answer
+
+
+def _fake_png():
+    return (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+            b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" + b"\x00" * 300)
+
+
+def _agent_with_media(db, responses):
+    from friday.core.agent import Agent
+    from friday.core.persona import load_persona
+    from friday.core.providers.base import Provider
+    from friday.tools.learning_media import register as register_media
+
+    class Scripted(Provider):
+        name = "scripted"
+
+        def __init__(self, r):
+            super().__init__(model="scripted")
+            self._r = list(r)
+
+        def is_available(self):
+            return True
+
+        def generate(self, messages, tools=None, stream=False, on_token=None):
+            resp = self._r.pop(0)
+            if stream and on_token and resp.content:
+                on_token(resp.content)
+            return resp
+
+    reg = ToolRegistry()
+    register_learning_tools(reg, db)
+    register_media(reg)
+    return Agent(Scripted(responses), reg, db, load_persona()), reg
+
+
+def test_teaching_turn_without_cue_still_forces_a_visual(db, topic, monkeypatch):
+    """Any substantive teaching turn must get a picture — even when the prose never
+    promises one ("here's how it flows…" used to slip through the old cue list)."""
+    import friday.tools.learning_media as lm
+    from friday.core.providers.base import LLMResponse, ToolCall
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (_fake_png(), ""))
+
+    sid = _module_sid(db, topic, "m1")
+    responses = [
+        # A real lesson with NO visual cue phrase and no tool call.
+        LLMResponse(content="An `if` checks a condition, then runs one branch. "
+                            "Here's how it flows when the percentage decides a grade. "
+                            "Indentation marks what belongs to each branch."),
+        # The forced repair turn draws the diagram.
+        LLMResponse(tool_calls=[ToolCall(id="d1", name="render_diagram", args={
+            "title": "Grade flow", "code": "flowchart TD\n    A --> B"})]),
+    ]
+    agent, _ = _agent_with_media(db, responses)
+    result = agent.process_turn("explain if/elif/else", session_id=sid)
+    assert "render_diagram" in result.tools_used
+    assert "/api/media/diagrams/" in result.content
+
+
+def test_greeting_turn_does_not_force_a_visual(db, topic, monkeypatch):
+    """A bare greeting answered briefly needs no diagram — we don't force one."""
+    import friday.tools.learning_media as lm
+    from friday.core.providers.base import LLMResponse
+    # If a render were attempted it would succeed; the point is it must NOT be.
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (_fake_png(), ""))
+
+    sid = _module_sid(db, topic, "m1")
+    agent, _ = _agent_with_media(db, [LLMResponse(content="Hey! Ready when you are. 😊")])
+    result = agent.process_turn("hi", session_id=sid)
+    assert "render_diagram" not in result.tools_used
+    assert "/api/media/diagrams/" not in result.content
+
+
+def test_forced_visual_retries_after_a_failed_render(db, topic, monkeypatch):
+    """When the first forced render FAILS (bad Mermaid), the agent feeds the error back
+    and retries, so the learner still ends up with a picture."""
+    import friday.tools.learning_media as lm
+    from friday.core.providers.base import LLMResponse, ToolCall
+    # No local renderer, and mermaid.ink fails the first time, succeeds the second.
+    monkeypatch.setattr(lm, "_render_via_local", lambda code, out: (None, "no renderer"))
+    calls = {"n": 0}
+
+    def flaky_ink(code):
+        calls["n"] += 1
+        return (None, "mermaid.ink returned 400") if calls["n"] == 1 else (_fake_png(), "")
+    monkeypatch.setattr(lm, "_render_via_ink", flaky_ink)
+
+    sid = _module_sid(db, topic, "m1")
+    responses = [
+        LLMResponse(content="A loop repeats a body while a condition holds."),
+        # First forced attempt — render fails downstream.
+        LLMResponse(tool_calls=[ToolCall(id="d1", name="render_diagram", args={
+            "title": "Loop", "code": "flowchart TD\n    A --> B"})]),
+        # Retry after the failure — this one renders.
+        LLMResponse(tool_calls=[ToolCall(id="d2", name="render_diagram", args={
+            "title": "Loop", "code": "flowchart TD\n    A --> B --> A"})]),
+    ]
+    agent, _ = _agent_with_media(db, responses)
+    result = agent.process_turn("explain while loops", session_id=sid)
+    assert calls["n"] == 2  # it retried the render
+    assert "/api/media/diagrams/" in result.content
+
+
+def test_forced_visual_lands_at_phantom_slot_not_end(db, topic, monkeypatch):
+    """When the model writes a phantom image link in the MIDDLE of its lesson, the
+    forced render is slotted back at that exact spot — between the lead-in and the
+    closing line — not appended at the end of the message."""
+    import friday.tools.learning_media as lm
+    from friday.core.providers.base import LLMResponse, ToolCall
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (_fake_png(), ""))
+
+    sid = _module_sid(db, topic, "m1")
+    responses = [
+        # Lesson with a phantom image link sitting BETWEEN two paragraphs.
+        LLMResponse(content="A neuron sums its inputs.\n\n"
+                            "![neuron](/api/media/diagrams/phantom-slot.png)\n\n"
+                            "Then it fires if the sum crosses a threshold."),
+        # Forced repair renders the real diagram.
+        LLMResponse(tool_calls=[ToolCall(id="d1", name="render_diagram", args={
+            "title": "Neuron", "code": "flowchart LR\n    In --> Sum --> Out"})]),
+    ]
+    agent, _ = _agent_with_media(db, responses)
+    result = agent.process_turn("how does a neuron work", session_id=sid)
+
+    assert "phantom-slot.png" not in result.content      # phantom gone
+    img = result.content.find("/api/media/diagrams/")
+    assert img != -1                                     # real image present
+    lead = result.content.index("A neuron sums its inputs.")
+    tail = result.content.index("Then it fires")
+    assert lead < img < tail                             # placed IN the slot, not at the end
+
+
+def test_teaching_turn_streams_image_in_place_after_render(db, topic, monkeypatch):
+    """A teaching turn DEFERS streaming: the answer is generated and its visual rendered
+    first, then replayed through the token stream — so the image appears in the live
+    stream in place (between lead-in and closing line), never tacked on at the end."""
+    import friday.tools.learning_media as lm
+    from friday.core.providers.base import LLMResponse, ToolCall
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (_fake_png(), ""))
+
+    sid = _module_sid(db, topic, "m1")
+    responses = [
+        LLMResponse(content="Lead in.\n\n![n](/api/media/diagrams/ph.png)\n\nClosing line."),
+        LLMResponse(tool_calls=[ToolCall(id="d1", name="render_diagram", args={
+            "title": "N", "code": "flowchart LR\n    A --> B"})]),
+    ]
+    agent, _ = _agent_with_media(db, responses)
+    chunks = []
+    result = agent.process_turn("teach me", session_id=sid, on_token=chunks.append)
+
+    streamed = "".join(chunks)
+    # The image was part of the LIVE stream (replay), not only the final content …
+    assert "/api/media/diagrams/" in streamed
+    # … and it streamed IN PLACE: after the lead-in, before the closing line.
+    assert streamed.index("Lead in.") < streamed.index("/api/media/diagrams/") \
+        < streamed.index("Closing line.")
+    assert "ph.png" not in streamed                      # the phantom never streamed
 
 
 # ── path chat vs module contract ────────────────────────────────────────────
@@ -260,16 +376,32 @@ def test_done_module_chat_is_review_only(db, topic):
     assert "Activation functions" in block  # redirected to the next module by name
 
 
-def test_pedagogy_mandates_quiz_cards_and_confidence_gate(db, topic):
+def test_pedagogy_mandates_conversational_assessment_and_gate(db, topic):
     block = learning_block(db, db.get_learning_topic(topic["id"]),
                            _module_sid(db, topic, "m1"))
-    assert "pose_quiz" in block and "NOT tracked" in block      # checks must be cards
+    assert "ASSESS THROUGH CONVERSATION" in block                # dialogue, not cards
+    assert "pose_quiz" not in block                              # MCQ cards are gone
+    assert "LIVING MODEL OF THIS LEARNER" in block               # persistent cross-module model
+    assert "record_understanding" in block                       # understanding captured from dialogue
     assert "CONFIDENCE GATE" in block                            # gated completion
     assert "MUST CALL `mark_module_complete`" in block
     assert "own chat" in block                                   # no mixed-module chats
     assert "under-taught" in block                               # visuals per concept
-    assert "dangling promise" in block                           # no turn ends on "Check:"
     assert "NEVER write an image markdown link" in block         # no fabricated URLs
+
+
+def test_learner_model_surfaces_persisted_insights(db, topic):
+    """The persisted understanding score + analysis + gaps are surfaced as the LEARNER
+    MODEL block, so a later module teaches to the real person instead of cold-starting."""
+    db.set_learning_insights(topic["id"], {
+        "understanding": 72, "analysis": "Picks up syntax fast; shaky on recursion.",
+        "gaps": ["recursion"], "strengths": ["loops"]})
+    block = learning_block(db, db.get_learning_topic(topic["id"]),
+                           _module_sid(db, topic, "m2"))
+    assert "LEARNER MODEL" in block
+    assert "72/100" in block
+    assert "shaky on recursion" in block
+    assert "recursion" in block and "loops" in block
 
 
 def test_repoint_learning_session_module(db, topic):
@@ -346,6 +478,67 @@ def test_pose_quiz_attributes_to_session_module(db, topic):
     assert quiz["module_id"] == "m1"
 
 
+def test_learning_session_scopes_tools(db, topic):
+    """A Learning-Room session exposes ONLY the teaching toolset to the model — not the
+    full ~90-tool registry — so tool selection stays sharp and the prompt stays small."""
+    from friday.core.agent import Agent
+    from friday.core.learning import LEARNING_TOOLS
+    from friday.core.persona import load_persona
+    from friday.core.providers.base import LLMResponse, Provider
+
+    captured: dict = {}
+
+    class Capturing(Provider):
+        name = "capt"
+
+        def __init__(self):
+            super().__init__(model="capt")
+
+        def is_available(self):
+            return True
+
+        def generate(self, messages, tools=None, stream=False, on_token=None):
+            captured["tools"] = tools
+            return LLMResponse(content="ok")
+
+    reg = ToolRegistry()
+    register_learning_tools(reg, db)
+    # An unrelated tool that must be filtered out of a learning session.
+    reg.register("port_scan", "scan", {"type": "object", "properties": {}}, lambda a: None)
+    sid = _module_sid(db, topic, "m1")
+    Agent(Capturing(), reg, db, load_persona()).process_turn("hi", session_id=sid)
+
+    names = {t["name"] for t in (captured["tools"] or [])}
+    assert "record_understanding" in names   # teaching tools are present
+    assert "pose_quiz" not in names          # MCQ cards are gone (conversational assessment)
+    assert "port_scan" not in names          # unrelated tools are filtered out
+    assert names <= set(LEARNING_TOOLS)      # nothing outside the teaching toolset leaks in
+
+
+def test_pose_quiz_dedupes_code_block(db, topic):
+    """When the model puts the snippet in BOTH the question (a fenced block) and the
+    code field, the card shows it ONCE: the fenced block is stripped from the question
+    and the dedicated code slot carries it."""
+    from friday.core.interactive import set_event_sink
+    registry = ToolRegistry()
+    register_learning_tools(registry, db)
+    set_current_session(_module_sid(db, topic, "m1"))
+    events = []
+    set_event_sink(lambda e, p: events.append((e, p)))
+    snippet = "age = 18\nif age >= 21:\n    print('Adult')"
+    try:
+        registry.execute("pose_quiz", {
+            "question": f"What will this code print?\n\n```\n{snippet}\n```",
+            "code": snippet, "options": ["Adult", "Minor"], "answer_index": 1})
+    finally:
+        set_current_session(None)
+        set_event_sink(None)
+    quiz = [p for e, p in events if e == "quiz"][0]
+    assert "```" not in quiz["question"]          # fenced block hoisted out of the question
+    assert quiz["question"].strip() == "What will this code print?"
+    assert "if age >= 21" in quiz["code"]          # still present, exactly once, in the code slot
+
+
 # ── quiz cards persist across chat reopen ───────────────────────────────────
 
 def _pose(db, topic, mid):
@@ -412,6 +605,49 @@ def test_quiz_insights_include_full_payload(db, topic):
     assert item["explanation"] == "because a"
 
 
+# ── "continue to next module" card survives reload ──────────────────────────
+
+def test_session_history_exposes_module_done_for_finished_module(db, topic):
+    """A completed module's thread must carry module_done so the chat view can
+    re-derive the 'Continue to the next module' card on reload — the live
+    learning_progress event is transient and otherwise lost."""
+    from fastapi.testclient import TestClient
+    from friday.server.api import create_app
+
+    sid = _module_sid(db, topic, "m1")
+    db.mark_module(topic["id"], "m1", "done")
+
+    client = TestClient(create_app(_service(db, ["ok"])))
+    body = client.get(f"/api/sessions/{sid}").json()
+    md = body["topic"]["module_done"]
+    assert md["module_title"] == "What is a neuron"
+    assert md["done"] == 1 and md["total"] == 3
+    assert md["next"] == {"id": "m2", "title": "Activation functions"}
+    assert md["topic_id"] == topic["id"]
+
+
+def test_session_history_omits_module_done_while_module_in_progress(db, topic):
+    """An unfinished module's thread carries no module_done — no premature card."""
+    from fastapi.testclient import TestClient
+    from friday.server.api import create_app
+
+    sid = _module_sid(db, topic, "m1")
+    client = TestClient(create_app(_service(db, ["ok"])))
+    assert "module_done" not in client.get(f"/api/sessions/{sid}").json()["topic"]
+
+
+def test_session_history_module_done_has_no_next_on_final_module(db, topic):
+    """Finishing the last module yields module_done with next=None (path complete)."""
+    from fastapi.testclient import TestClient
+    from friday.server.api import create_app
+
+    sid = _module_sid(db, topic, "m3")
+    db.mark_module(topic["id"], "m3", "done")
+    client = TestClient(create_app(_service(db, ["ok"])))
+    md = client.get(f"/api/sessions/{sid}").json()["topic"]["module_done"]
+    assert md["next"] is None
+
+
 # ── quiz history in the prompt ──────────────────────────────────────────────
 
 def test_quiz_history_appears_in_block(db, topic):
@@ -444,7 +680,7 @@ def _service(db, responses):
     from friday.service import FridayService
     from friday.tests.test_projects import ScriptedProvider
 
-    return FridayService(config={"persona": "friday_core", "conversation": {}},
+    return FridayService(config={"persona": "core", "conversation": {}},
                          provider=ScriptedProvider([LLMResponse(content=r) for r in responses]),
                          registry=ToolRegistry(), db=db)
 

@@ -118,6 +118,12 @@ export default function ChatView() {
 
   const empty = messages.length === 0;
   const busy = status === "thinking";
+  // Show the "thinking…" dots while a turn is in flight but nothing is on screen yet:
+  // no tool steps in the timeline and no assistant text streaming. Covers the compose
+  // gap before the first token — long for deferred teaching turns that render first.
+  const last = messages[messages.length - 1];
+  const awaitingOutput = busy && timeline.length === 0
+    && (!last || last.role !== "assistant" || !last.content);
 
   return (
     <>
@@ -219,6 +225,7 @@ export default function ChatView() {
                 }
                 return <Message key={m.id} {...m} />;
               })}
+              {awaitingOutput && <ThinkingRow name={assistantName} />}
               {busy && timeline.length > 0 && <Timeline items={timeline} />}
               {/* Gentle "want to go deeper?" nudge, centered below the reply — solo
                   chats only (never inside a project workspace or the Learning Room). */}
@@ -244,6 +251,25 @@ export default function ChatView() {
         </>
       )}
     </>
+  );
+}
+
+// "{name} is thinking …" with three gently bobbing dots — shown during the compose
+// gap before the first token streams (and while a deferred teaching turn renders its
+// visual). Mirrors the assistant message layout (avatar + left-aligned body).
+function ThinkingRow({ name }) {
+  return (
+    <div className="flex gap-3 animate-rise" aria-live="polite">
+      <div className="mt-0.5 h-7 w-7 shrink-0 grid place-items-center"><Logo size={26} /></div>
+      <div className="flex-1 min-w-0 flex items-center gap-2 text-[13.5px] text-ink-faint dark:text-night-faint">
+        <span>{name} is thinking</span>
+        <span className="inline-flex items-center gap-1 text-ink-soft dark:text-night-ink">
+          <span className="thinking-dot" style={{ animationDelay: "0ms" }} />
+          <span className="thinking-dot" style={{ animationDelay: "160ms" }} />
+          <span className="thinking-dot" style={{ animationDelay: "320ms" }} />
+        </span>
+      </div>
+    </div>
   );
 }
 

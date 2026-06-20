@@ -25,7 +25,7 @@ friday/
 │   ├── narration.py / events.py — spoken progress + event bus
 │   └── browser_controller.py    — Playwright-driven visible browser
 ├── tools/                       — auto-discovered tool modules (one register() per file)
-├── personas/                    — friday_core / friday_concise / friday_playful
+├── personas/                    — friday_core (built-in default; users add their own to ~/.friday/personas)
 ├── comms/  voice/  mcp/  server/  webui/   — bridges, TTS+STT, MCP client, FastAPI, React UI
 └── tests/                       — the test suite (offline/mocked)
 ```

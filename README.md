@@ -47,6 +47,22 @@ Pick the provider in [`friday/config.yaml`](friday/config.yaml) → `provider.ty
 **Local Ollama / LM Studio need no key** — point `provider.type: ollama` at a
 running server for a fully offline setup.
 
+### Build the web UI
+
+Both the desktop window and `--server` mode serve a **pre-built** React bundle
+from `friday/webui/dist`. Build it once before the first run (and again after any
+UI change). Node 18+ is required:
+
+```bash
+cd friday/webui
+npm install        # install JS dependencies
+npm run build      # emit friday/webui/dist
+cd ../..
+```
+
+For UI development with hot-reload, run `npm run dev` in `friday/webui` (Vite dev
+server) alongside `python -m friday --server`.
+
 ### Run it
 
 ```bash
@@ -80,27 +96,27 @@ tokens) are intentionally left unchanged.
 
 ## What it can do
 
-| Area | Tools |
-|------|-------|
-| Files | `read_file` `write_file` `list_dir` `move_path` `copy_path` `delete_path` `make_dir` `find_files` `organize_dir` |
-| Shell / System | `run_shell` `system_info` `open_app` `list_open_apps` |
-| Web | `web_search` `web_extract` `web_crawl` |
-| Browser | `open_browser_url` `search_google` `play_youtube` `play_youtube_music` `media_control` |
-| Network | `ping_host` `dns_lookup` `check_port` `public_ip` |
-| Security\* | `port_scan` `ping_sweep` `dir_enum` `dns_enum` |
-| Weather / News | `get_weather` `get_news` |
-| Smart home† | `ha_turn_on` `ha_turn_off` `ha_get_state` `ha_set_temperature` |
-| Vision | `take_screenshot` `read_text_from_image` |
-| Documents | `read_document` (pdf/docx/pptx/xlsx/html via MarkItDown) |
-| Scheduler | `add_reminder` `list_reminders` `remove_reminder` (fire in background) |
-| Memory | `remember_fact` `recall_facts` `forget_fact` `remember_note` `read_memory` `search_conversations` `recall_sessions` |
-| Agent | `delegate_task` `switch_persona` `list_personas` `about_friday` |
-| Tasks / Goals | `add_task` `list_tasks` `complete_task` `remove_task` · `add_goal` `list_goals` `update_goal_progress` `remove_goal` |
-| Focus | `start_focus` `focus_status` `end_focus` |
-| Skills | `list_skills` `use_skill` `create_skill` `update_skill` |
-| Comms‡ | `send_notification` (+ inbound Telegram chat bridge) |
-| Workspace | `gmail_list` `gmail_read` `gmail_send` `calendar_agenda` `calendar_create_event` |
-| MCP§ | `mcp_list_servers` + `mcp_<server>_<tool>` per connected server |
+| Area           | Tools                                                                                                                              |
+| ----------------| ------------------------------------------------------------------------------------------------------------------------------------|
+| Files          | `read_file` `write_file` `list_dir` `move_path` `copy_path` `delete_path` `make_dir` `find_files` `organize_dir`                   |
+| Shell / System | `run_shell` `system_info` `open_app` `list_open_apps`                                                                              |
+| Web            | `web_search` `web_extract` `web_crawl`                                                                                             |
+| Browser        | `open_browser_url` `search_google` `play_youtube` `play_youtube_music` `media_control`                                             |
+| Network        | `ping_host` `dns_lookup` `check_port` `public_ip`                                                                                  |
+| Security\*     | `port_scan` `ping_sweep` `dir_enum` `dns_enum`                                                                                     |
+| Weather / News | `get_weather` `get_news`                                                                                                           |
+| Smart home†    | `ha_turn_on` `ha_turn_off` `ha_get_state` `ha_set_temperature`                                                                     |
+| Vision         | `take_screenshot` `read_text_from_image`                                                                                           |
+| Documents      | `read_document` (pdf/docx/pptx/xlsx/html via MarkItDown) · `convert_document` (Markdown → docx/pdf/pptx/html/txt/odt/… via pandoc) |
+| Scheduler      | `add_reminder` `list_reminders` `remove_reminder` (fire in background)                                                             |
+| Memory         | `remember_fact` `recall_facts` `forget_fact` `remember_note` `read_memory` `search_conversations` `recall_sessions`                |
+| Agent          | `delegate_task` `switch_persona` `list_personas` `about_friday`                                                                    |
+| Tasks / Goals  | `add_task` `list_tasks` `complete_task` `remove_task` · `add_goal` `list_goals` `update_goal_progress` `remove_goal`               |
+| Focus          | `start_focus` `focus_status` `end_focus`                                                                                           |
+| Skills         | `list_skills` `use_skill` `create_skill` `update_skill`                                                                            |
+| Comms‡         | `send_notification` (+ inbound Telegram chat bridge)                                                                               |
+| Workspace      | `gmail_list` `gmail_read` `gmail_send` `calendar_agenda` `calendar_create_event`                                                   |
+| MCP§           | `mcp_list_servers` + `mcp_<server>_<tool>` per connected server                                                                    |
 
 \* off until `security.lab_mode: true` + `authorized_scopes` in config.
 † off until `smart_home.url` + `HASS_TOKEN` are set.
@@ -127,6 +143,17 @@ Each degrades gracefully — if the binary is missing, the tool returns a clear
 - **Vision:** `grim` / `scrot` / `gnome-screenshot` (capture), `tesseract` (OCR).
 - **Security:** `nmap`, `gobuster`, `dig`.
 - **Real browser control:** Playwright (`pip install playwright && playwright install chromium`).
+- **Document conversion:** `convert_document` turns the Markdown the agent writes
+  into the format a user actually asks for (Word, PDF, PowerPoint, etc.). With
+  [`pandoc`](https://pandoc.org/installing.html) on PATH (a system binary, not a pip
+  package) it handles every format at high fidelity. Without it, the built-in
+  fallbacks still cover `md`, `txt`, `html`, and `docx` (the last via
+  `python-docx`); any other target returns an "install pandoc" message.
+- **Diagrams (Learning Room):** `render_diagram` produces PNGs **entirely
+  server-side** — the browser never renders mermaid. It uses the hosted
+  `mermaid.ink` API first (needs `requests`), then falls back to a fully local
+  renderer for offline use (`pip install mermaid-cli && playwright install
+  chromium`). If both are unavailable it degrades to a text outline.
 
 ## Documentation
 

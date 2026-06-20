@@ -110,9 +110,15 @@ class ToolRegistry:
     def __contains__(self, name: str) -> bool:
         return name in self._tools
 
-    def definitions(self) -> list[dict]:
-        """Provider-neutral tool defs for the agent loop."""
-        return [t.definition() for t in self._tools.values()]
+    def definitions(self, only: Optional[set[str]] = None) -> list[dict]:
+        """Provider-neutral tool defs for the agent loop. Pass ``only`` (a set of
+        tool names) to expose just a scoped subset — fewer, more relevant tools sharpen
+        the model's tool selection and shrink the prompt. Unknown names in ``only`` are
+        ignored; the registration order is preserved."""
+        tools = self._tools.values()
+        if only is not None:
+            tools = [t for t in tools if t.name in only]
+        return [t.definition() for t in tools]
 
     # -- execution ---------------------------------------------------------
 

@@ -161,12 +161,12 @@ def test_media_tool_output_surfaced_in_answer():
     assert "/api/media/diagrams/abc.png" in db.recent_turns(result.session_id)[-1]["content"]
 
 
-def test_media_in_final_answer_but_not_streamed():
-    """The final answer carries the generated media markdown in order (preamble,
-    diagram, closing line) — but the media is DELIBERATELY withheld from the live
-    token stream. Streaming the image markdown made the chat bubble re-parse on
-    every later token and flicker the diagram; painting it once, when the turn
-    finalizes, keeps the server-rendered image rock-steady."""
+def test_media_streamed_inline_in_order():
+    """The generated media markdown is placed into the LIVE token stream at the exact
+    point the tool finished — so the diagram appears in order (preamble, diagram,
+    closing line), before the rest of the reply keeps streaming, and matches the
+    canonical/persisted answer. (It doesn't flicker because the chat memoises each
+    <img> on its src across re-parses.)"""
     reg = ToolRegistry()
     media_md = "![Water cycle](/api/media/diagrams/x.png)\n\n*Water cycle* · [⬇ Download](/api/media/diagrams/x.png)"
 
@@ -184,10 +184,100 @@ def test_media_in_final_answer_but_not_streamed():
 
     # The image markdown is in the canonical/persisted answer, in order …
     assert result.content == f"Here's the picture:\n\n{media_md}\n\nAnd that's the cycle."
-    # … but never pushed through the token stream (no mid-turn image = no flicker).
+    # … and it was pushed through the token stream in place (between the preamble and
+    # the closing line) so the learner sees it appear where it belongs.
     streamed = "".join(chunks)
-    assert "/api/media/diagrams/x.png" not in streamed
-    assert "Here's the picture:" in streamed and "And that's the cycle." in streamed
+    assert "/api/media/diagrams/x.png" in streamed
+    assert streamed.index("Here's the picture:") < streamed.index("/api/media/diagrams/x.png") < streamed.index("And that's the cycle.")
+
+
+def test_turn_reports_ttft_and_summed_tokens():
+    """A streamed turn records time-to-first-token and sums token usage across every
+    model call (here: a tool round + the final answer)."""
+    reg = ToolRegistry()
+    reg.register("noop", "noop", {"type": "object", "properties": {}},
+                 lambda a: ToolResult(ok=True, content="done"))
+    responses = [
+        LLMResponse(tool_calls=[ToolCall(id="t1", name="noop", args={})],
+                    usage={"input_tokens": 100, "output_tokens": 20}),
+        LLMResponse(content="All set.", usage={"input_tokens": 130, "output_tokens": 8}),
+    ]
+    agent, _db, _ = _agent(responses, registry=reg)
+    result = agent.process_turn("go", on_token=lambda _t: None)
+    assert result.ttft is not None and result.ttft >= 0
+    # 100+20 + 130+8 summed across both generations
+    assert result.usage == {"input_tokens": 230, "output_tokens": 28}
+
+
+def test_turn_stats_persist_in_db():
+    """Per-turn stats are saved with the assistant turn (so they survive a reload):
+    session_turns returns the meta {ttft, tokens} for that turn."""
+    responses = [LLMResponse(content="Hi there.", usage={"input_tokens": 10, "output_tokens": 4})]
+    agent, db, _ = _agent(responses)
+    result = agent.process_turn("hello", on_token=lambda _t: None)
+    asst = [t for t in db.session_turns(result.session_id) if t["role"] == "assistant"][-1]
+    assert asst["meta"]["tokens"] == 14
+    assert asst["meta"]["ttft"] is not None
+
+
+def test_ttft_is_none_when_not_streamed():
+    """Non-streamed turns (no on_token — e.g. Telegram) report no first-token time."""
+    agent, _db, _ = _agent([LLMResponse(content="hi", usage={"input_tokens": 5, "output_tokens": 2})])
+    result = agent.process_turn("hello")
+    assert result.ttft is None
+    assert result.usage == {"input_tokens": 5, "output_tokens": 2}
+
+
+class CharStreamProvider(Provider):
+    """Streams each response one character at a time, to exercise the live media
+    filter's incremental holding (a phantom link arrives across many tokens)."""
+
+    name = "scripted"
+
+    def __init__(self, responses):
+        super().__init__(model="scripted")
+        self._r = list(responses)
+
+    def is_available(self):
+        return True
+
+    def generate(self, messages, tools=None, stream=False, on_token=None):
+        resp = self._r.pop(0)
+        if stream and on_token and resp.content:
+            for ch in resp.content:
+                on_token(ch)
+        return resp
+
+
+def test_stream_media_filter_holds_and_strips_phantom():
+    """Unit: the live filter never emits a phantom /api/media/ link even when fed one
+    character at a time, and passes ordinary text (and the stray '!') through."""
+    from friday.core.agent import _StreamMediaFilter
+
+    out = []
+    f = _StreamMediaFilter(out.append)
+    for ch in "See ![X](/api/media/diagrams/nope.png) and wow! done":
+        f(ch)
+    f.flush()
+    streamed = "".join(out)
+    assert "/api/media/" not in streamed     # the broken image never streamed
+    assert "See " in streamed and "wow!" in streamed and "done" in streamed
+
+
+def test_streamed_phantom_link_is_filtered_live():
+    """Integration: a model that writes a phantom image link in its prose never
+    flickers an 'unavailable' image — the link is gone from the live token stream and
+    from the final answer."""
+    db = Database(":memory:")
+    content = "Here's a diagram:\n\n![X](/api/media/diagrams/nope-live.png)\n\nThat's it."
+    agent = Agent(CharStreamProvider([LLMResponse(content=content)]),
+                  ToolRegistry(), db, load_persona())
+    chunks = []
+    result = agent.process_turn("teach", on_token=chunks.append)
+    streamed = "".join(chunks)
+    assert "/api/media/" not in streamed
+    assert "Here's a diagram:" in streamed and "That's it." in streamed
+    assert "/api/media/" not in result.content
 
 
 def test_phantom_media_link_is_stripped():
@@ -234,5 +324,6 @@ def test_does_not_duplicate_repeated_media():
     chunks = []
     result = agent.process_turn("draw twice", on_token=chunks.append)
     assert result.content.count("same.png") == 1
-    # never streamed mid-turn, so the live bubble can't flicker the diagram
-    assert "".join(chunks).count("same.png") == 0
+    # placed into the stream exactly once too — the dedup guard keeps the repeated
+    # render from streaming a second copy.
+    assert "".join(chunks).count("same.png") == 1

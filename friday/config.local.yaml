@@ -44,6 +44,27 @@ models:
   type: ''
   base_url: ''
   api_key_env: ''
+- id: mustafaege/qwen3.5-0.8b
+  label: Qwen 3.5 0.8B Q4_K_M
+  provider: LM Studio
+  model: mustafaege/qwen3.5-0.8b
+  type: ''
+  base_url: ''
+  api_key_env: ''
+- id: llama3.2:1b
+  label: Llama 3.2 1B
+  provider: Ollama
+  model: llama3.2:1b
+  type: ''
+  base_url: ''
+  api_key_env: ''
+- id: gemma-4-e4b-uncensored-hauhaucs-aggressive
+  label: Gemma 4 E4B
+  provider: LM Studio
+  model: gemma-4-e4b-uncensored-hauhaucs-aggressive
+  type: ''
+  base_url: ''
+  api_key_env: ''
 providers:
 - id: Opencode
   label: Opencode
@@ -55,3 +76,16 @@ providers:
   type: openai_compat
   base_url: https://api.groq.com/openai/v1
   api_key_env: GROQ_API_KEY
+- id: LM Studio
+  label: LM Studio
+  type: lmstudio
+  base_url: http://localhost:1234/v1
+  api_key_env: L_API_KEY
+- id: Ollama
+  label: Ollama
+  type: ollama
+  base_url: http://localhost:11434/v1
+  api_key_env: OLLAMA_API_KEY
+persona: core
+assistant:
+  name: Aria

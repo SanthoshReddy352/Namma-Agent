@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { clearMemory, exportPack, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchModels, fetchModelsForProvider, fetchPackItems, fetchProviders, fetchSettings, inspectPack, installPack, packDownloadUrl, saveConfiguredModels, saveConfiguredProviders, saveSettings } from "../api.js";
+import { clearMemory, deletePersona, exportPack, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchModels, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, generatePersona, inspectPack, installPack, packDownloadUrl, savePersona, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona } from "../api.js";
 
 // Suggest an .env variable name for a provider's key. ONLY the native providers
 // (OpenAI/Anthropic/Google) use their conventional shared var; every OpenAI-
@@ -31,7 +31,7 @@ function deepMerge(a, b) {
 
 const TABS = ["Providers", "Models", "Behavior", "Persona", "Browser", "Voice", "Telegram", "Packs", "Appearance", "Memory"];
 
-export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleared, onModelsChanged }) {
+export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleared, onModelsChanged, onAssistantNameChanged }) {
   const [tab, setTab] = useState("Providers");
   const [data, setData] = useState(null);
   const [providers, setProviders] = useState([]);  // catalog of provider TYPES
@@ -101,11 +101,7 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
                   </Section>
                 )}
 
-                {tab === "Persona" && (
-                  <Section title="Persona" hint="Which personality FRIDAY loads from personas/<id>.yaml.">
-                    <Field label="Persona"><Input value={cur("persona", "friday_core")} onChange={(v) => setC("persona", v)} /></Field>
-                  </Section>
-                )}
+                {tab === "Persona" && <PersonaTab onAssistantNameChanged={onAssistantNameChanged} />}
 
                 {tab === "Browser" && (
                   <Section title="Browser & media">
@@ -161,6 +157,167 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
           <button onClick={save} className="px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep">Save</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// The "Persona" tab: rename the assistant, pick a personality from a dropdown
+// (each shown with a one-line identity), and create new personas — either by
+// describing one and letting the assistant draft it, or by writing the
+// instructions yourself. User personas live in ~/.friday/personas and can be
+// deleted; the built-ins that ship with FRIDAY can't.
+const _pinput = "w-full rounded-lg border border-line dark:border-night-line bg-paper dark:bg-night px-3 py-1.5 text-[13px] outline-none focus:border-brand";
+
+function PersonaTab({ onAssistantNameChanged }) {
+  const [list, setList] = useState(null);
+  const [active, setActive] = useState("");
+  const [name, setName] = useState("");
+  const [nameSaved, setNameSaved] = useState(false);
+  const [showManual, setShowManual] = useState(false);
+  const blankDraft = { id: "", name: "", identity: "", tone: "", dos: "", donts: "" };
+  const [draft, setDraft] = useState(blankDraft);
+  const [desc, setDesc] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    fetchPersonas().then((r) => {
+      if (!r) return;
+      setList(r.personas || []); setActive(r.active || "");
+      if (r.assistant_name) setName(r.assistant_name);
+    });
+  }, []);
+
+  async function choosePersona(id) {
+    setActive(id);
+    await setPersona(id);
+  }
+  async function saveName() {
+    const n = name.trim(); if (!n) return;
+    await saveSettings({ assistant: { name: n } }, {});
+    onAssistantNameChanged?.(n);
+    setNameSaved(true); setTimeout(() => setNameSaved(false), 2000);
+  }
+  async function generate() {
+    setBusy(true); setMsg("");
+    const r = await generatePersona(desc);
+    setBusy(false);
+    if (r?.ok && r.persona) {
+      const p = r.persona;
+      setDraft({ id: "", name: p.name || "", identity: p.identity || "", tone: p.tone || "",
+                 dos: (p.dos || []).join("\n"), donts: (p.donts || []).join("\n") });
+      setShowManual(true); setMsg("Drafted below — review, tweak, then Save persona.");
+    } else setMsg(r?.error || "couldn't generate a persona");
+  }
+  async function editPersona(id) {
+    setMsg("");
+    const r = await fetchPersona(id);
+    if (r?.ok && r.persona) {
+      const p = r.persona;
+      // Keep the id so saving edits this persona in place (editing a built-in
+      // writes an editable copy that overrides it).
+      setDraft({ id: p.id, name: p.name || "", identity: p.identity || "", tone: p.tone || "",
+                 dos: (p.dos || []).join("\n"), donts: (p.donts || []).join("\n") });
+      setShowManual(true);
+      if (p.source === "builtin") setMsg("Editing a built-in saves your own editable copy that overrides it.");
+    } else setMsg("couldn't load that persona");
+  }
+  function newDraft() { setDraft(blankDraft); setShowManual(true); setMsg(""); }
+  async function saveDraft() {
+    setBusy(true); setMsg("");
+    const r = await savePersona(draft);
+    setBusy(false);
+    if (r?.ok) {
+      setList(r.personas || list);
+      setDraft(blankDraft); setDesc(""); setShowManual(false); setMsg("");
+      if (r.saved?.id) choosePersona(r.saved.id);
+    } else setMsg(r?.error || "couldn't save the persona");
+  }
+  async function remove(id) {
+    const r = await deletePersona(id);
+    if (r) { setList(r.personas || []); setActive(r.active || active); }
+  }
+
+  if (list === null) return <div className="text-ink-faint">Loading…</div>;
+  return (
+    <div className="space-y-5">
+      <Section title="Assistant name" hint="What your assistant is called everywhere — chat, voice, Telegram, the window title.">
+        <div className="flex gap-2">
+          <input value={name} onChange={(e) => setName(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter") saveName(); }}
+                 placeholder="e.g. Heaven, Jarvis, Aria" className={_pinput} />
+          <button onClick={saveName} className={_btn}>Save name</button>
+        </div>
+        {nameSaved && <div className="text-brand-deep dark:text-emerald-400 text-[13px]">Saved — applied live.</div>}
+      </Section>
+
+      <div className="border-t border-line dark:border-night-line" />
+
+      <Section title="Persona" hint="The personality your assistant uses. Switching applies immediately.">
+        <select value={active} onChange={(e) => choosePersona(e.target.value)}
+                className="w-full rounded-lg border border-line dark:border-night-line bg-paper dark:bg-night px-2 py-1.5 text-[13px] outline-none focus:border-brand">
+          {list.map((p) => <option key={p.id} value={p.id}>{p.name}{p.identity_line ? ` — ${p.identity_line}` : ""}</option>)}
+        </select>
+        <div className="space-y-1.5 mt-1">
+          {list.map((p) => (
+            <div key={p.id} className="flex items-center gap-2 text-[13px]">
+              <span className={`h-2 w-2 rounded-full shrink-0 ${p.id === active ? "bg-brand" : "bg-line dark:bg-night-line"}`} />
+              <span className="font-medium shrink-0">{p.name}</span>
+              <span className="text-ink-faint dark:text-night-faint truncate flex-1">{p.identity_line}</span>
+              <button onClick={() => editPersona(p.id)} title="Edit / view full instructions"
+                      className="text-[12px] underline text-ink-faint dark:text-night-faint hover:text-ink dark:hover:text-night-ink shrink-0">
+                {p.source === "user" ? "edit" : "view"}
+              </button>
+              {p.source === "user"
+                ? <button onClick={() => remove(p.id)} title="Delete persona" className="px-1 text-ink-faint hover:text-red-500 text-base leading-none shrink-0">×</button>
+                : <span className="text-[11px] text-ink-faint dark:text-night-faint shrink-0">built-in</span>}
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      <div className="border-t border-line dark:border-night-line" />
+
+      <Section title="Create a persona" hint="Describe one and let your assistant draft it, or write the instructions yourself.">
+        <div className="flex gap-2">
+          <input value={desc} onChange={(e) => setDesc(e.target.value)}
+                 onKeyDown={(e) => { if (e.key === "Enter" && desc.trim()) generate(); }}
+                 placeholder="Describe it, e.g. “a calm stoic mentor who teaches by asking questions”"
+                 className={_pinput} />
+          <button onClick={generate} disabled={busy || !desc.trim()} className={_btn}>
+            {busy ? "…" : "Generate"}
+          </button>
+        </div>
+        <button type="button" onClick={() => (showManual ? setShowManual(false) : newDraft())}
+                className="text-[12.5px] underline text-ink-faint dark:text-night-faint">
+          {showManual ? "hide editor" : "or write it manually"}
+        </button>
+
+        {showManual && (
+          <div className="space-y-2 rounded-xl border border-line dark:border-night-line p-3">
+            <div className="text-[12px] text-ink-faint dark:text-night-faint">
+              {draft.id ? `Editing “${draft.id}”` : "New persona"}
+            </div>
+            <input value={draft.name} onChange={(e) => setDraft((d) => ({ ...d, name: e.target.value }))}
+                   placeholder="Persona name (e.g. “Sage”)" className={_pinput} />
+            <textarea value={draft.identity} onChange={(e) => setDraft((d) => ({ ...d, identity: e.target.value }))}
+                      rows={4} placeholder="Identity — the “You are …” system-prompt text. Use {name} where the assistant's name should appear."
+                      className={`${_pinput} resize-y`} />
+            <input value={draft.tone} onChange={(e) => setDraft((d) => ({ ...d, tone: e.target.value }))}
+                   placeholder="Tone (comma-separated, e.g. warm, witty, capable)" className={_pinput} />
+            <div className="flex gap-2">
+              <textarea value={draft.dos} onChange={(e) => setDraft((d) => ({ ...d, dos: e.target.value }))}
+                        rows={3} placeholder="Do — one rule per line" className={`${_pinput} resize-y`} />
+              <textarea value={draft.donts} onChange={(e) => setDraft((d) => ({ ...d, donts: e.target.value }))}
+                        rows={3} placeholder="Don't — one rule per line" className={`${_pinput} resize-y`} />
+            </div>
+            <button onClick={saveDraft} disabled={busy || !draft.name.trim() || !draft.identity.trim()} className={_btn}>
+              {busy ? "Saving…" : "Save persona"}
+            </button>
+          </div>
+        )}
+        {msg && <div className="text-[13px] text-brand-deep dark:text-emerald-400">{msg}</div>}
+      </Section>
     </div>
   );
 }

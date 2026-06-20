@@ -30,7 +30,14 @@ _USER_AGENT = (
 # ── HTML → plain text ────────────────────────────────────────────────────────
 
 class _TextExtractor(html.parser.HTMLParser):
-    _SKIP = {"script", "style", "noscript", "head", "nav", "footer"}
+    # Drop non-content chrome before any text reaches the model — this *is* the
+    # "pre-parser" that keeps web_extract's token footprint small. Widened beyond
+    # the basics to strip page furniture (headers, sidebars, forms, SVG, etc.)
+    # that otherwise pads bulk extraction with noise.
+    _SKIP = {
+        "script", "style", "noscript", "head", "nav", "footer",
+        "header", "aside", "form", "button", "svg", "iframe", "template",
+    }
 
     def __init__(self):
         super().__init__()
@@ -174,12 +181,20 @@ def _extract(args: dict) -> ToolResult:
     url = (args.get("url") or "").strip()
     if not url.startswith("http"):
         return ToolResult(ok=False, content="", error="a full http(s) URL is required")
+    # Per-call ceiling on returned text. Defaults to 4000 chars; the model can ask
+    # for less (e.g. when fanning out over many pages, where each result is re-sent
+    # on every subsequent tool round and a tight cap keeps the context lean).
+    try:
+        cap = int(args.get("max_chars") or 4000)
+    except (TypeError, ValueError):
+        cap = 4000
+    cap = max(500, min(cap, 8000))
     try:
         text, _ = _html_to_text(_fetch_url(url))
     except Exception as exc:  # noqa: BLE001
         return ToolResult(ok=False, content="", error=f"couldn't fetch {url}: {exc}")
-    if len(text) > 4000:
-        text = text[:4000] + "…"
+    if len(text) > cap:
+        text = text[:cap] + "…"
     return ToolResult(ok=True, content=text or "(page had no readable text)")
 
 
@@ -226,7 +241,12 @@ def register(registry: ToolRegistry) -> None:
 
     registry.register("web_extract", "Fetch a web page and return its readable text.", {
         "type": "object",
-        "properties": {"url": {"type": "string", "description": "full http(s) URL"}},
+        "properties": {
+            "url": {"type": "string", "description": "full http(s) URL"},
+            "max_chars": {"type": "integer",
+                          "description": "cap on returned text (500-8000, default 4000); "
+                                         "use a smaller value when extracting many pages"},
+        },
         "required": ["url"],
     }, _extract)
 

@@ -31,7 +31,17 @@ function CopyButton({ text, className = "" }) {
 
 // claude.ai-style: user messages in a soft bubble on the right; assistant
 // messages as full-width rich text (no bubble), with an "F" avatar. Each shows time.
-export default function Message({ role, content, tools, attachments, at }) {
+// "responded in 2.4s · 1,318 tokens" — per-turn stats shown under an assistant reply.
+function TurnStats({ meta }) {
+  if (!meta) return null;
+  const bits = [];
+  if (typeof meta.ttft === "number") bits.push(`${meta.ttft.toFixed(1)}s to first token`);
+  if (meta.tokens) bits.push(`${meta.tokens.toLocaleString()} tokens`);
+  if (!bits.length) return null;
+  return <span title="Time to first token · total tokens for this request">· {bits.join(" · ")}</span>;
+}
+
+export default function Message({ role, content, tools, attachments, at, meta }) {
   const isUser = role === "user";
   const isError = role === "error";
   const time = fmtTime(at);
@@ -74,9 +84,10 @@ export default function Message({ role, content, tools, attachments, at }) {
         )}
         <div className="mt-2 flex items-center gap-2 text-[10.5px] text-ink-faint dark:text-night-faint">
           {content && !isError && <ReadAloud text={content} />}
-          {content && !isError && <CopyButton text={content} className="opacity-0 group-hover:opacity-100 focus:opacity-100" />}
+          {content && !isError && <CopyButton text={content} />}
           {time && <span>{time}</span>}
           {tools?.length > 0 && <span>· used: {tools.join(", ")}</span>}
+          <TurnStats meta={meta} />
         </div>
       </div>
     </div>

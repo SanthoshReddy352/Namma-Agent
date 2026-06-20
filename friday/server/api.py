@@ -44,6 +44,19 @@ class PersonaBody(BaseModel):
     id: str
 
 
+class PersonaSaveBody(BaseModel):
+    id: str = ""
+    name: str = ""
+    identity: str = ""
+    tone: str = ""
+    dos: list | str = []      # list, or newline-separated text from the UI
+    donts: list | str = []
+
+
+class PersonaGenerateBody(BaseModel):
+    description: str = ""
+
+
 class OnboardingBody(BaseModel):
     name: str = ""
     facts: dict = {}
@@ -333,10 +346,66 @@ def create_app(service: Optional[FridayService] = None) -> FastAPI:
             return {"error": str(exc)}
         return {"ok": True, "summary": summary}
 
+    @app.get("/api/personas")
+    def list_personas_ep():
+        """Available personas (user + built-in) with a one-line identity, plus the
+        active one and the current assistant name — drives the Settings dropdown."""
+        from friday.config import assistant_name
+        from friday.core.persona import list_personas
+
+        name = assistant_name(service.config)
+        return {"personas": list_personas(name), "active": service.persona.id,
+                "assistant_name": name}
+
+    @app.get("/api/personas/{persona_id}")
+    def get_persona_ep(persona_id: str):
+        """Full editable spec of one persona — for the editor / 'view all instructions'."""
+        from friday.core.persona import get_persona_spec
+        spec = get_persona_spec(persona_id)
+        if spec is None:
+            return {"ok": False, "error": "persona not found"}
+        return {"ok": True, "persona": spec}
+
     @app.post("/api/persona")
     def set_persona(body: PersonaBody):
+        from friday.config import update_config
+
         service.set_persona(body.id)
+        update_config({"persona": body.id})  # persist the choice across restarts
         return {"persona": service.persona.id}
+
+    @app.post("/api/personas")
+    def save_persona_ep(body: PersonaSaveBody):
+        """Create/update a user persona (manual or AI-drafted) and return the
+        refreshed list so the dropdown updates immediately."""
+        from friday.config import assistant_name
+        from friday.core.persona import list_personas, save_persona
+
+        try:
+            saved = save_persona(body.model_dump())
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        return {"ok": True, "saved": saved,
+                "personas": list_personas(assistant_name(service.config))}
+
+    @app.post("/api/personas/generate")
+    def generate_persona_ep(body: PersonaGenerateBody):
+        """Have the assistant draft a persona spec from a freeform description."""
+        return service.generate_persona(body.description)
+
+    @app.delete("/api/personas/{persona_id}")
+    def delete_persona_ep(persona_id: str):
+        """Delete a user persona (built-ins are immutable). If it was active, fall
+        back to the default."""
+        from friday.config import assistant_name, update_config
+        from friday.core.persona import delete_user_persona, list_personas
+
+        ok = delete_user_persona(persona_id)
+        if ok and service.persona.id == persona_id:
+            service.set_persona("core")
+            update_config({"persona": "core"})
+        return {"ok": ok, "active": service.persona.id,
+                "personas": list_personas(assistant_name(service.config))}
 
     @app.post("/api/session")
     def new_session():
@@ -365,9 +434,26 @@ def create_app(service: Optional[FridayService] = None) -> FastAPI:
         if (meta.get("kind") or "chat") == "learning":
             t = service.db.get_topic_by_session(session_id)
             if t:
-                mod = next((m for m in (t.get("plan") or [])
+                plan = t.get("plan") or []
+                mod = next((m for m in plan
                             if m.get("session_id") == session_id), None)
                 topic = {"id": t["id"], "title": t["title"], "module": (mod or {}).get("title")}
+                # If this module's lesson is finished, carry the "module complete →
+                # continue" info so the chat view can re-derive the card on every
+                # load. The live `learning_progress` event is transient (lost on
+                # reload / if it never reached the client); deriving it from
+                # persisted state guarantees the learner always has a next step.
+                if mod and (mod.get("status") or "todo") == "done":
+                    idx = plan.index(mod)
+                    nxt = plan[idx + 1] if idx + 1 < len(plan) else None
+                    prog = t.get("progress") or {}
+                    topic["module_done"] = {
+                        "topic_id": t["id"],
+                        "module_title": mod.get("title", ""),
+                        "done": prog.get("done", 0),
+                        "total": prog.get("total", 0),
+                        "next": ({"id": nxt["id"], "title": nxt["title"]} if nxt else None),
+                    }
         return {"session_id": session_id,
                 "turns": _restore_turns(service.db, session_id),
                 "project": project, "topic": topic,
@@ -861,11 +947,17 @@ def create_app(service: Optional[FridayService] = None) -> FastAPI:
                     make_approval(sid), mode, lambda: flag["stop"], askpass,
                     effective_model,
                 )
+                _u = result.usage or {}
                 push({
                     "type": "turn_result",
                     "content": result.content,
                     "session_id": result.session_id,
                     "tools_used": result.tools_used,
+                    # Per-turn stats for the UI: time-to-first-token (seconds) and the
+                    # total tokens the request spent (input + output, summed across the
+                    # whole tool loop).
+                    "ttft": result.ttft,
+                    "tokens": (_u.get("input_tokens", 0) or 0) + (_u.get("output_tokens", 0) or 0),
                 })
                 # Auto-title the chat from its first exchange (background, best-effort)
                 # so the sidebar shows a concise label, not the raw first message.

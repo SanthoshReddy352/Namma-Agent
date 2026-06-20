@@ -70,7 +70,7 @@ provider:
 #     model: llama-3.3-70b
 
 # ── Persona ────────────────────────────────────────────────────────
-persona: friday_core              # loaded from personas/<id>.yaml
+persona: core              # loaded from personas/<id>.yaml
 
 # ── Skills (procedural memory / learning loop, ported from hermes) ──
 skills:
@@ -140,6 +140,17 @@ database:
 security:
   lab_mode: false                 # set true to expose port_scan/ping_sweep/dir_enum/dns_enum
   authorized_scopes: []           # e.g. ["192.168.1.0/24", "10.0.0.0/8", "lab.example.com"]
+  # ── Filesystem access policy ──
+  # FRIDAY can READ files anywhere on the machine (your docs live all over the
+  # disk). WRITES / deletes / renames are blocked inside the OS + installed-
+  # software trees (C:\Windows, Program Files, ProgramData on Windows; /usr,
+  # /etc, /bin, /lib, /opt, /System… on Linux/macOS) so it can read those files
+  # but can't corrupt the OS or your programs. Secret files (ssh/gpg/aws keys,
+  # /etc/shadow) stay blocked for reads too. Tune it here:
+  filesystem:
+    # extra_protected_write_paths: ["D:\\Games", "/mnt/backups"]  # ALSO read-only
+    # protected_write_paths: [...]   # REPLACE the OS/software read-only roots
+    # writable_anywhere: false       # true = allow writes everywhere except secrets
   # nmap_binary: nmap
   # gobuster_binary: gobuster
   # dig_binary: dig

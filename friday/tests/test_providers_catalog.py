@@ -50,7 +50,7 @@ def test_models_endpoint_returns_source(monkeypatch):
 
 def test_provider_endpoints():
     svc = FridayService(
-        config={"persona": "friday_core", "conversation": {}, "provider": {"type": "anthropic", "model": "claude-x"}},
+        config={"persona": "core", "conversation": {}, "provider": {"type": "anthropic", "model": "claude-x"}},
         provider=ts.ScriptedProvider([LLMResponse(content="hi")]),
         registry=ToolRegistry(), db=Database(":memory:"))
     c = TestClient(create_app(svc))
@@ -62,7 +62,7 @@ def test_provider_endpoints():
 
 def _svc_with_models(models):
     return FridayService(
-        config={"persona": "friday_core", "conversation": {},
+        config={"persona": "core", "conversation": {},
                 "provider": {"type": "opencode", "model": "big-pickle",
                              "base_url": "https://opencode.ai/zen/v1", "api_key_env": "OPENAI_API_KEY"},
                 "models": models},

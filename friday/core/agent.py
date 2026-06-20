@@ -19,6 +19,7 @@ the backend WebSocket (Phase 4), and TTS can all subscribe to the same stream.
 from __future__ import annotations
 
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Optional
@@ -40,22 +41,43 @@ _MEDIA_URL_RE = re.compile(r"/api/media/[^)\s\"'<>]+")               # bare url,
 # caption separator, dashes/pipes) — a line that's ONLY this is an orphan caption.
 _CAPTION_DECORATION = " *_·•|–—-\t\r"
 
-# Cues that mean "a comprehension check is coming". In a teaching session these
-# MUST be backed by a pose_quiz card; if the model promised one but didn't call
-# the tool, we repair the turn (and, failing that, drop the empty promise).
-_CHECK_CUES = (
-    "quick check", "let's check", "lets check", "let us check", "take a look at the card",
-    "take a look at the question", "pick the option", "let me know your answer",
-    "check if that", "check if this", "check to see", "check below", "see if that",
-    "see if this", "👇",
-)
+# Every substantive teaching turn must carry a visual — the teacher routinely
+# explains a concept (often promising a picture: "here's how it flows…") and then
+# forgets to call render_diagram, so no image appears. In a teaching session we
+# force one render whenever a teaching turn produced no visual of its own. The only
+# turns that legitimately skip it are social pleasantries and the module-completion
+# recap (see `_should_force_visual`).
+_VISUAL_TOOLS = ("render_diagram", "fetch_image", "render_simulation")
 
-_QUIZ_REPAIR_INSTRUCTION = (
-    "[system] Your last teaching message invited a comprehension check, but you did NOT "
-    "call pose_quiz — so the learner sees no question card and is stuck. Call pose_quiz "
-    "RIGHT NOW for the concept you just taught: a clear multiple-choice question, 3–4 "
-    "options, the correct 0-based answer_index, and a one-line explanation. Respond with "
-    "ONLY the pose_quiz tool call — no prose."
+# Pure greeting / smalltalk from the learner — the one kind of turn that doesn't
+# need a picture. Matched against the WHOLE user message, so a real question that
+# merely opens with "hi" is not misclassified.
+_GREETING_RE = re.compile(
+    r"^\s*(hi+|hey+|hello+|yo|hiya|howdy|sup|"
+    r"how(\s+are|'?s)\s+(you|it going|things|you doing)|what'?s up|wassup|"
+    r"good\s+(morning|afternoon|evening|night)|"
+    r"thanks?(\s+you)?|thank\s+you|thx|ty|cheers|"
+    r"ok(ay)?|kk?|cool|nice|great|awesome|perfect|got\s+it|makes\s+sense|"
+    r"sounds?\s+good|will\s+do|alright|"
+    r"bye|goodbye|see\s+(you|ya)|cya)"
+    r"[\s.!,?]*$",
+    re.IGNORECASE,
+)
+_VISUAL_REPAIR_INSTRUCTION = (
+    "[system] This is a Learning-Room teaching turn, and every concept you teach must "
+    "be shown with a visual — but your last message drew NONE (you did not call "
+    "render_diagram). Render one NOW for the main concept you just taught: call "
+    "render_diagram with Mermaid `code` you write yourself (follow that tool's rules + "
+    "examples so it parses the first time) and a short `title` — or fetch_image if a "
+    "real photo fits the idea better. Respond with ONLY the tool call — no prose."
+)
+# Fed back when a forced render FAILS (most often a Mermaid syntax error) so the
+# model corrects the source and tries again instead of leaving the learner imageless.
+_VISUAL_RETRY_HINT = (
+    "[system] That render FAILED, so no picture appeared yet. Fix the problem — most "
+    "often a Mermaid syntax error: check the declaration line, short alphanumeric node "
+    "ids, and that every label with spaces/punctuation is quoted — then call "
+    "render_diagram again NOW. Respond with ONLY the corrected tool call."
 )
 
 
@@ -68,18 +90,43 @@ def _media_missing(url: str) -> bool:
         return True
 
 
-def _strip_phantom_media(text: str) -> str:
+# A placeholder dropped where the model wrote a PHANTOM image, so a forced render
+# can be slotted back into that exact spot in the final answer (instead of dumped at
+# the end). NUL-wrapped so it can never collide with real model text. Never streamed.
+_PHANTOM_SLOT = "\x00FRIDAY_MEDIA_SLOT\x00"
+
+
+def _strip_phantom_inline(text: str) -> str:
+    """Remove COMPLETE phantom media markdown / bare urls from a text fragment,
+    verbatim otherwise (no line-dropping, no trimming). Used by the live stream
+    filter so a fabricated image link never flickers as 'unavailable' mid-stream —
+    real tool-produced media (file exists on disk) is left untouched."""
+    if not text or "/api/media/" not in text:
+        return text
+    text = _MEDIA_MD_RE.sub(lambda m: "" if _media_missing(m.group(1)) else m.group(0), text)
+    text = _MEDIA_URL_RE.sub(lambda m: "" if _media_missing(m.group(0)) else m.group(0), text)
+    return text
+
+
+def _mark_phantom_media(text: str) -> str:
     """Scrub model-authored references to /api/media artifacts that don't exist on
-    disk — the broken image link, the orphan ``*Title* · [⬇ Download …](…)`` caption
-    line, standalone download links, and any bare leftover URL — so a fabricated
-    diagram never surfaces as a broken image or a dangling caption. Real, tool-
-    produced media (whose file exists) is left completely untouched.
+    disk, but leave a :data:`_PHANTOM_SLOT` marker exactly where a phantom IMAGE was —
+    so a forced render can be placed back at the spot the model intended. The orphan
+    ``*Title* · [⬇ Download …](…)`` caption/download line, standalone download links,
+    and bare leftover urls are removed. Real, tool-produced media (file on disk) is
+    left completely untouched.
 
     Works line by line so we can drop a whole caption/download line wholesale while
     keeping ordinary prose that merely happens to mention a (real) link.
     """
     if not text or "/api/media/" not in text:
         return text
+
+    def _repl(m: "re.Match") -> str:
+        if not _media_missing(m.group(1)):
+            return m.group(0)                       # real link — keep
+        # A phantom IMAGE leaves a placement slot; a phantom plain link just vanishes.
+        return _PHANTOM_SLOT if m.group(0).lstrip().startswith("!") else ""
 
     out: list[str] = []
     for line in text.split("\n"):
@@ -92,27 +139,80 @@ def _strip_phantom_media(text: str) -> str:
         low = line.lower()
         if "·" in line or "⬇" in line or "download" in low:
             continue
-        # Otherwise strip just the dead image/link markdown (and any bare URL),
-        # keeping the surrounding prose intact.
-        cleaned = _MEDIA_MD_RE.sub(lambda m: m.group(0) if not _media_missing(m.group(1)) else "", line)
+        cleaned = _MEDIA_MD_RE.sub(_repl, line)
         cleaned = _MEDIA_URL_RE.sub(lambda m: m.group(0) if not _media_missing(m.group(0)) else "", cleaned)
-        # If nothing meaningful remains (just caption decoration), drop the line.
-        if cleaned.strip(_CAPTION_DECORATION):
+        # Keep the line if it still carries prose or a placement slot.
+        if cleaned.strip(_CAPTION_DECORATION) or _PHANTOM_SLOT in cleaned:
             out.append(cleaned)
     return re.sub(r"\n{3,}", "\n\n", "\n".join(out)).strip()
 
 
-def _promises_check(text: str) -> bool:
-    low = (text or "").lower()
-    return any(cue in low for cue in _CHECK_CUES)
+def _place_media(text: str, image_md: str) -> str:
+    """Resolve phantom-image slots in the assembled answer: drop a freshly rendered
+    ``image_md`` into the FIRST slot (where the model wanted it), append it at the end
+    if there was no slot, then remove any leftover slots. With no image, slots are just
+    stripped — leaving the same clean text the old scrubber produced."""
+    if image_md and _PHANTOM_SLOT in text:
+        text = text.replace(_PHANTOM_SLOT, image_md, 1)
+    elif image_md:
+        text = (text.rstrip() + "\n\n" + image_md).strip()
+    text = text.replace(_PHANTOM_SLOT, "")
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
 
 
-def _strip_check_promise(text: str) -> str:
-    """Last-resort: drop short lines that only invite a (now-missing) check, so the
-    learner isn't left staring at a promise with no card."""
-    kept = [ln for ln in (text or "").split("\n")
-            if not (_promises_check(ln) and len(ln.strip()) <= 200)]
-    return "\n".join(kept).strip()
+# A trailing buffer fragment that might still grow into a media link/url we must
+# strip — so the live filter holds it back rather than emit a half-formed
+# "![…](/api/media…" that the UI would briefly paint as a broken/"unavailable" image.
+# Matches (anchored to end): an open `![`/`[` with optional `]`/`(partial-url`, or a
+# bare `/api/media/…` still being typed.
+_OPEN_MEDIA_TAIL = re.compile(
+    r"(?:!?\[[^\]\n]*(?:\](?:\([^)\n]*)?)?|/api/media/[^\s)\"'<>]*|!)$"
+)
+
+
+class _StreamMediaFilter:
+    """Wraps an ``on_token`` sink to suppress model-authored ``/api/media/`` links as
+    they stream, so a fabricated image link never flickers as 'image unavailable'.
+    Tokens arrive in fragments, so a possibly-incomplete trailing link is buffered
+    until it either completes (and is stripped if phantom) or proves harmless.
+
+    ONLY the model's own token stream is routed through this. Real, agent-injected
+    media (from a verified tool result) is pushed to the raw sink directly and never
+    passes through the filter, so it streams intact and in place."""
+
+    _HOLD_LIMIT = 512  # never hold back more than this (safety valve against a stall)
+
+    def __init__(self, sink: TokenFn):
+        self._sink = sink
+        self._buf = ""
+
+    def __call__(self, text: str) -> None:
+        if not text:
+            return
+        self._buf += text
+        m = _OPEN_MEDIA_TAIL.search(self._buf)
+        cut = m.start() if (m and len(self._buf) - m.start() <= self._HOLD_LIMIT) else len(self._buf)
+        if cut:
+            safe = _strip_phantom_inline(self._buf[:cut])
+            if safe:
+                self._sink(safe)
+        self._buf = self._buf[cut:]
+
+    def flush(self) -> None:
+        """Emit whatever is still held (called when a generation finishes), stripping
+        any complete phantom link in it first."""
+        if self._buf:
+            safe = _strip_phantom_inline(self._buf)
+            self._buf = ""
+            if safe:
+                self._sink(safe)
+
+
+def _is_greeting(text: str) -> bool:
+    """True for a bare greeting / thanks / acknowledgement — the only learner turn
+    that doesn't warrant a teaching visual."""
+    return bool(_GREETING_RE.match(text or ""))
+
 
 # emit(event_type, payload_dict)
 EmitFn = Callable[[str, dict], None]
@@ -120,6 +220,17 @@ EmitFn = Callable[[str, dict], None]
 TokenFn = Callable[[str], None]
 # approval(tool_name, args) -> True to proceed (may block awaiting the user)
 ApprovalFn = Callable[[str, dict], bool]
+
+
+def _accumulate_usage(usage: dict, delta: Optional[dict]) -> None:
+    """Sum token counts across every model call in a turn (the tool loop + any forced
+    visual-repair), so the reported total reflects the WHOLE request, not just the last
+    generation."""
+    if not delta:
+        return
+    for k in ("input_tokens", "output_tokens"):
+        if delta.get(k):
+            usage[k] = usage.get(k, 0) + delta[k]
 
 
 def _short_args(args: dict, limit: int = 160) -> str:
@@ -137,6 +248,9 @@ class AgentResult:
     session_id: str
     tools_used: list[str] = field(default_factory=list)
     usage: dict = field(default_factory=dict)
+    # Seconds from turn start to the FIRST token shown to the user (time-to-first-
+    # token). None when the turn wasn't streamed (e.g. Telegram / tests).
+    ttft: Optional[float] = None
 
 
 class Agent:
@@ -153,6 +267,7 @@ class Agent:
         skills=None,
         memory_notes=None,
         nudge_every: int = 6,
+        memory_extractor=None,
     ):
         self.provider = provider
         self.registry = registry
@@ -164,6 +279,10 @@ class Agent:
         self.skills = skills  # optional SkillStore; injects a catalog into the prompt
         self.memory_notes = memory_notes  # optional MemoryNotes; injects USER.md/MEMORY.md
         self.nudge_every = nudge_every  # inject a memory-curation nudge every N exchanges
+        # Optional MemoryExtractor: after each turn, deterministically capture
+        # durable user facts (the model rarely calls remember_fact itself). Left
+        # None for sub-agents (delegate_task) so research turns don't write memory.
+        self.memory_extractor = memory_extractor
 
     # -- sessions ----------------------------------------------------------
 
@@ -196,15 +315,28 @@ class Agent:
         if not session_id:
             session_id = self.new_session()
 
+        # Turn timing: stamp the start and capture the moment the FIRST token reaches
+        # the user (time-to-first-token), by funnelling every token sink through a thin
+        # wrapper. Works for live streaming AND the deferred teaching replay.
+        t_start = time.monotonic()
+        ttft: dict = {"t": None}
+        if on_token is not None:
+            _raw_on_token = on_token
+
+            def on_token(text: str, _raw=_raw_on_token) -> None:  # noqa: A001
+                if ttft["t"] is None and text:
+                    ttft["t"] = time.monotonic() - t_start
+                _raw(text)
+
         # Expose the session to scope-aware tools (project / learning memory).
         from friday.core.interactive import set_current_session
         set_current_session(session_id)
 
         # chat mode = pure conversation: no tools, no skills, no memory writes via tools.
         chat_mode = (mode or "agent").lower() == "chat"
-        # In a Learning-Room MODULE thread the teacher must back every "let's check"
-        # with a pose_quiz card; guard against the model promising one and not calling it.
-        quiz_guard = (not chat_mode) and self._is_teaching_session(session_id)
+        # True in a Learning-Room MODULE thread, where teaching guards apply (e.g. a
+        # promised diagram that the model didn't actually draw gets rendered).
+        teaching_session = (not chat_mode) and self._is_teaching_session(session_id)
         logger.info("[turn] mode=%s session=%s :: %s", "chat" if chat_mode else "agent",
                     session_id[:8], user_input[:120].replace("\n", " "))
         emit("turn_started", {"session_id": session_id, "text": user_input, "mode": mode})
@@ -212,7 +344,7 @@ class Agent:
         messages = self._build_messages(user_input, session_id, chat_mode=chat_mode)
         self.db.add_turn(session_id, "user", user_input)
 
-        tool_defs = [] if chat_mode else self.registry.definitions()
+        tool_defs = [] if chat_mode else self._tool_defs_for(session_id)
         tools_used: list[str] = []
         usage: dict = {}
         final_content = ""
@@ -229,6 +361,19 @@ class Agent:
         # tool_loop_limit <= 0 means UNLIMITED (the user drives complex tasks; the
         # stop button / should_cancel is the control). Otherwise it's a hard cap.
         unlimited = self.tool_loop_limit <= 0
+        # Learning-Room teaching turns DEFER streaming: we generate the whole answer
+        # first (rendering every visual — inline OR forced — along the way) and only
+        # THEN replay the finished answer through `on_token`, so the picture is always
+        # produced and placed BEFORE the surrounding text types out, never popped in
+        # after. Plain chats stream live, token by token, as before.
+        replay_stream = teaching_session and on_token is not None
+        live_on_token = None if replay_stream else on_token
+        # The model's live token stream goes through a filter that drops any phantom
+        # /api/media/ link as it's typed, so a fabricated image never flickers as
+        # "unavailable" mid-stream. Real media (injected by the agent from a verified
+        # tool result) bypasses the filter via the raw `on_token` and streams intact.
+        # (Deferred/teaching turns don't stream live, so they need no filter.)
+        stream_filter = _StreamMediaFilter(live_on_token) if live_on_token is not None else None
         step = 0
         while True:
             if not unlimited and step >= self.tool_loop_limit:
@@ -243,13 +388,18 @@ class Agent:
                 emit("turn_cancelled", {"session_id": session_id})
                 break
             step += 1
-            stream = on_token is not None
-            resp = provider.generate(messages, tools=tool_defs, stream=stream, on_token=on_token)
-            usage = resp.usage or usage
+            stream = live_on_token is not None
+            resp = provider.generate(messages, tools=tool_defs, stream=stream,
+                                     on_token=stream_filter)
+            # Emit any link fragment the filter held back before we inject anything,
+            # so streamed text stays in order.
+            if stream_filter is not None:
+                stream_filter.flush()
+            _accumulate_usage(usage, resp.usage)
 
             if not resp.has_tool_calls:
                 final_content = resp.content
-                cleaned = _strip_phantom_media(resp.content.strip())
+                cleaned = _mark_phantom_media(resp.content.strip())
                 if cleaned:
                     segments.append(cleaned)
                 logger.info("[turn] final answer (%d step(s), tools=%s)", step,
@@ -260,13 +410,13 @@ class Agent:
             # AND keep it in the visible answer.
             if resp.content.strip():
                 emit("preamble", {"session_id": session_id, "text": resp.content})
-                segments.append(_strip_phantom_media(resp.content.strip()))
+                segments.append(_mark_phantom_media(resp.content.strip()))
                 # Mirror the final assembly in the live stream: the next round's
                 # tokens (or injected media) must start a new paragraph, exactly
                 # like the "\n\n" join below — so the bubble doesn't reflow when
                 # the canonical answer lands at turn end.
-                if on_token is not None:
-                    on_token("\n\n")
+                if live_on_token is not None:
+                    live_on_token("\n\n")
 
             # Record the assistant's tool-call turn in the working message list.
             messages.append({"role": "assistant", "content": resp.content, "tool_calls": resp.tool_calls})
@@ -304,13 +454,17 @@ class Agent:
                 # download link in their result content and tag data.url.
                 #
                 # The media is appended to `segments` (so it lands, in order, in the
-                # finalized answer that's persisted and replayed) but is DELIBERATELY
-                # NOT pushed into the live token stream. Streaming the image markdown
-                # mid-turn makes the chat bubble re-parse its whole markdown on every
-                # subsequent token, which remounts the <img> and makes the diagram
-                # flicker. By withholding media from the token stream, the image is
-                # painted exactly once — when the finalized turn_result lands — so the
-                # server-rendered, verified PNG appears as a single stable artifact.
+                # finalized answer that's persisted and replayed) AND pushed into the
+                # live token stream RIGHT HERE — at the exact point the tool finished —
+                # so the diagram appears in place, before the rest of the reply keeps
+                # streaming. The tool render is synchronous (the hybrid mermaid
+                # pipeline blocks until a verified PNG exists), so streaming naturally
+                # pauses while the image is produced, then resumes after it's placed —
+                # never the old behaviour of streaming past an empty gap and dropping
+                # the picture in late. The image doesn't flicker on later tokens
+                # because the chat memoises each <img> on its src (and remembers ones
+                # it has already painted), so re-parsing the growing markdown re-uses
+                # the same element instead of remounting it.
                 data = getattr(result, "data", None) or {}
                 media_md = ""
                 if result.ok and isinstance(data, dict):
@@ -323,6 +477,13 @@ class Agent:
                         media_md = data["inline"].strip()
                 if media_md:
                     segments.append(media_md)
+                    # Place it live, in order. The surrounding blank lines keep the
+                    # image on its own paragraph between the prose before and after it;
+                    # the canonical answer (segments joined by "\n\n") lands at turn end
+                    # and reconciles any stray whitespace. (Teaching turns defer this to
+                    # the replay below, so the image is produced before any text shows.)
+                    if live_on_token is not None:
+                        live_on_token("\n\n" + media_md + "\n\n")
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -330,31 +491,68 @@ class Agent:
                     "content": result.as_message_content(),
                 })
 
-        # Teaching guard: the model promised a check but never posed the card. Force
-        # the pose_quiz so the learner actually gets a question; if even that fails,
-        # drop the empty promise so they're not left staring at nothing.
-        if quiz_guard and "pose_quiz" not in tools_used:
+        # Teaching guard: a teaching turn that drew no visual of its own. Every concept
+        # taught in the Learning Room must come with a picture, but the model regularly
+        # explains (often promising "here's how it flows…") without ever calling a render
+        # tool. Force one render so the learner actually gets the visual — retried on a
+        # render failure, and skipped only for greetings / module-completion turns. The
+        # rendered image is slotted back where the model wanted it (its phantom-link
+        # position) by `_place_media` below, never dumped at the end. Safe from hangs
+        # because the render itself is time-bounded.
+        forced_media = ""
+        if teaching_session and not any(t in tools_used for t in _VISUAL_TOOLS):
             visible = "\n\n".join(s for s in segments if s).strip()
-            if _promises_check(visible):
-                if self._repair_dangling_quiz(messages, visible, provider, tool_defs,
-                                               emit, session_id):
-                    tools_used.append("pose_quiz")
-                else:
-                    segments = [_strip_check_promise(s) for s in segments]
+            decision_text = visible.replace(_PHANTOM_SLOT, " ").strip()
+            if self._should_force_visual(user_input, decision_text, tools_used):
+                forced_media = self._repair_dangling_visual(
+                    messages, decision_text, provider, tool_defs, emit, session_id,
+                    tools_used, usage=usage)
 
-        final_content = "\n\n".join(s for s in segments if s).strip() or final_content
-        self.db.add_turn(session_id, "assistant", final_content, tools_used)
+        assembled = "\n\n".join(s for s in segments if s).strip()
+        final_content = _place_media(assembled, forced_media) or final_content
+        # Deferred teaching turns: the answer is fully built and every visual already
+        # rendered and placed — NOW type it out through the stream, so the learner sees
+        # the picture appear in place and the prose flow around it (never an image
+        # tacked on after the text has finished).
+        if replay_stream and on_token is not None and final_content:
+            self._replay_stream(final_content, on_token, should_cancel)
+        # Persist per-turn stats alongside the answer so the footer (time-to-first-
+        # token + tokens) survives a reload — same shape the live `turn_result` sends.
+        total_tokens = (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0)
+        turn_meta = ({"ttft": ttft["t"], "tokens": total_tokens}
+                     if (ttft["t"] is not None or total_tokens) else None)
+        self.db.add_turn(session_id, "assistant", final_content, tools_used, meta=turn_meta)
+        # Deterministic memory capture: if the user revealed a durable fact about
+        # themselves, save it now (background, best-effort) so future sessions
+        # recall it — independent of whether the model called remember_fact.
+        if self.memory_extractor is not None:
+            self.memory_extractor.capture_async(provider, user_input, final_content)
         emit("turn_completed", {
             "session_id": session_id, "content": final_content, "tools_used": tools_used,
         })
         return AgentResult(content=final_content, session_id=session_id,
-                           tools_used=tools_used, usage=usage)
+                           tools_used=tools_used, usage=usage, ttft=ttft["t"])
 
     # -- helpers -----------------------------------------------------------
 
+    def _tool_defs_for(self, session_id: str) -> list[dict]:
+        """Scope the tools exposed to the model by context. A Learning-Room session
+        sees ONLY the teaching toolset (`LEARNING_TOOLS`) — a handful of relevant tools
+        instead of the full ~90. That sharpens tool selection (the model actually
+        reaches for render_diagram/render_simulation instead of losing them in the
+        noise) and shrinks the prompt. Every other session gets the full registry."""
+        try:
+            sess = self.db.get_session(session_id)
+        except Exception:  # noqa: BLE001
+            sess = None
+        if sess and (sess.get("kind") or "") == "learning":
+            from friday.core.learning import LEARNING_TOOLS
+            return self.registry.definitions(only=set(LEARNING_TOOLS))
+        return self.registry.definitions()
+
     def _is_teaching_session(self, session_id: str) -> bool:
-        """True for a Learning-Room MODULE thread (where the pedagogy contract — and
-        thus the pose_quiz requirement — applies), not the path chat or a plain chat."""
+        """True for a Learning-Room MODULE thread (where the pedagogy contract and the
+        teaching guards apply), not the path chat or a plain chat."""
         try:
             sess = self.db.get_session(session_id)
             if (sess or {}).get("kind") != "learning":
@@ -365,33 +563,134 @@ class Agent:
         except Exception:  # noqa: BLE001
             return False
 
-    def _repair_dangling_quiz(self, messages: list[dict], visible_answer: str,
-                              provider: Provider, tool_defs: list, emit: EmitFn,
-                              session_id: str) -> bool:
-        """One forced attempt to get the model to call pose_quiz for the check it just
-        promised. Returns True if a quiz card was posed. The card emits + persists via
-        the pose_quiz tool itself, so nothing is added to the visible answer here."""
+    def _should_force_visual(self, user_input: str, visible: str,
+                             tools_used: list[str]) -> bool:
+        """Whether this teaching turn must be backed by a forced render. Every
+        substantive teaching turn does; the exceptions are:
+        - the module-completion turn (a congratulations/recap, not a lesson), and
+        - a bare greeting/thanks from the learner answered with a short, code-free
+          reply (no concept to picture).
+        """
+        if "mark_module_complete" in tools_used:
+            return False
+        body = (visible or "").strip()
+        if not body:
+            return False
+        if _is_greeting(user_input) and len(body) < 400 and "```" not in body:
+            return False
+        return True
+
+    def _replay_stream(self, text: str, on_token: TokenFn,
+                       should_cancel: Optional[Callable[[], bool]] = None) -> None:
+        """Type out an already-assembled answer through the token stream, so a deferred
+        teaching turn streams with its visuals already rendered and in place. Each image
+        markdown is sent as ONE atomic chunk (never split, so a partial link can't flash
+        a broken image); prose is sent in small word-groups with light pacing for a
+        natural typing feel. Honors the Stop button between chunks."""
+        import time
+
+        if should_cancel is not None and should_cancel():
+            return
+
+        def _emit_prose(chunk: str) -> bool:
+            if not chunk:
+                return True
+            # Group a few whitespace-delimited tokens at a time for snappy pacing.
+            tokens = re.findall(r"\S+\s*|\s+", chunk)
+            group: list[str] = []
+            for tok in tokens:
+                group.append(tok)
+                if len(group) >= 3:
+                    if should_cancel is not None and should_cancel():
+                        return False
+                    on_token("".join(group))
+                    group = []
+                    time.sleep(0.012)
+            if group:
+                on_token("".join(group))
+            return True
+
+        pos = 0
+        for m in _MEDIA_MD_RE.finditer(text):
+            if not _emit_prose(text[pos:m.start()]):
+                return
+            if should_cancel is not None and should_cancel():
+                return
+            on_token(m.group(0))           # image markdown — atomic, never split
+            time.sleep(0.012)
+            pos = m.end()
+        _emit_prose(text[pos:])
+
+    def _repair_dangling_visual(self, messages: list[dict], visible_answer: str,
+                                provider: Provider, tool_defs: list, emit: EmitFn,
+                                session_id: str, tools_used: list[str],
+                                *, usage: Optional[dict] = None,
+                                max_attempts: int = 3) -> str:
+        """Force the teaching visual this turn is missing: ask the model for ONE render
+        tool call and execute it. If the render fails (e.g. malformed Mermaid) or the
+        model answers with prose instead of a tool call, feed that back and retry — up
+        to ``max_attempts`` — so a transient or syntax failure doesn't leave the learner
+        with no picture. Returns the rendered media markdown (the caller slots it into
+        the answer where the model wanted it), or "" if every attempt failed.
+
+        The image is intentionally NOT pushed into the live token stream here: it is
+        placed by `_place_media` at the model's phantom-image position so the final
+        answer shows it IN PLACE, not tacked on at the end."""
         convo = messages + [
             {"role": "assistant", "content": visible_answer},
-            {"role": "user", "content": _QUIZ_REPAIR_INSTRUCTION},
+            {"role": "user", "content": _VISUAL_REPAIR_INSTRUCTION},
         ]
-        try:
-            resp = provider.generate(convo, tools=tool_defs, stream=False)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[turn] quiz-repair generation failed: %s", exc)
-            return False
-        posed = False
-        for tc in getattr(resp, "tool_calls", None) or []:
-            if tc.name != "pose_quiz":
+        for attempt in range(1, max_attempts + 1):
+            try:
+                resp = provider.generate(convo, tools=tool_defs, stream=False)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[turn] visual-repair generation failed: %s", exc)
+                return ""
+            if usage is not None:
+                _accumulate_usage(usage, resp.usage)
+            call = next((tc for tc in (getattr(resp, "tool_calls", None) or [])
+                         if tc.name in _VISUAL_TOOLS), None)
+            if call is None:
+                # The model replied with prose instead of drawing — nudge it again
+                # (bounded). Keep strict user/assistant alternation for the providers.
+                if attempt >= max_attempts:
+                    logger.warning("[turn] visual-repair: model never called a render tool")
+                    return ""
+                convo += [
+                    {"role": "assistant", "content": resp.content or "(no diagram)"},
+                    {"role": "user", "content": _VISUAL_REPAIR_INSTRUCTION},
+                ]
                 continue
-            logger.info("[turn] quiz-repair posing missing check")
-            emit("tool_started", {"session_id": session_id, "tool": tc.name, "args": tc.args})
-            result = self.registry.execute("pose_quiz", tc.args)
-            emit("tool_finished", {"session_id": session_id, "tool": tc.name,
+            logger.info("[turn] visual-repair rendering %s (attempt %d/%d)",
+                        call.name, attempt, max_attempts)
+            tools_used.append(call.name)
+            emit("tool_started", {"session_id": session_id, "tool": call.name, "args": call.args})
+            result = self.registry.execute(call.name, call.args)
+            emit("tool_finished", {"session_id": session_id, "tool": call.name,
                                    "ok": result.ok, "summary": result.as_message_content()[:200]})
-            self.db.log_audit(session_id, tc.name, tc.args, result.as_message_content(), result.ok)
-            posed = posed or result.ok
-        return posed
+            self.db.log_audit(session_id, call.name, call.args, result.as_message_content(), result.ok)
+            data = getattr(result, "data", None) or {}
+            if result.ok and isinstance(data, dict):
+                md = (result.as_message_content().strip() if data.get("url")
+                      else (data.get("inline") or "").strip())
+                if md:
+                    return md
+            # Render failed. Replay it as a proper tool exchange (assistant tool_use →
+            # tool_result carrying the error + retry hint) so the model sees what broke
+            # and can fix the Mermaid, then loop. Only the visual call is replayed, so
+            # every tool_use has a matching tool_result (providers require this).
+            if attempt >= max_attempts:
+                logger.warning("[turn] visual-repair gave up after %d attempts: %s",
+                               attempt, (result.error or "")[:160])
+                return ""
+            logger.info("[turn] visual-repair render failed, retrying: %s",
+                        (result.error or "")[:160])
+            convo += [
+                {"role": "assistant", "content": "", "tool_calls": [call]},
+                {"role": "tool", "tool_call_id": call.id, "name": call.name,
+                 "content": result.as_message_content() + "\n\n" + _VISUAL_RETRY_HINT},
+            ]
+        return ""
 
     def _build_messages(self, user_input: str, session_id: str, chat_mode: bool = False) -> list[dict]:
         facts = self.db.all_facts()

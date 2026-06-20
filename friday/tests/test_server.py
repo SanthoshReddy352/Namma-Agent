@@ -30,7 +30,7 @@ class ScriptedProvider(Provider):
 def _service(responses, registry=None):
     db = Database(":memory:")
     return FridayService(
-        config={"persona": "friday_core", "conversation": {}},
+        config={"persona": "core", "conversation": {}},
         provider=ScriptedProvider(responses),
         registry=registry or ToolRegistry(),
         db=db,
@@ -55,7 +55,7 @@ def test_rest_health_and_config():
     assert client.get("/api/health").json() == {"ok": True}
     cfg = client.get("/api/config").json()
     assert "remember_fact" in cfg["tools"]
-    assert cfg["persona"] == "friday_core"
+    assert cfg["persona"] == "core"
 
 
 def test_rest_tools_and_persona():
@@ -63,7 +63,7 @@ def test_rest_tools_and_persona():
     client = TestClient(app)
     tools = client.get("/api/tools").json()["tools"]
     assert any(t["name"] == "recall_facts" for t in tools)
-    assert client.post("/api/persona", json={"id": "friday_core"}).json()["persona"] == "friday_core"
+    assert client.post("/api/persona", json={"id": "core"}).json()["persona"] == "core"
 
 
 # -- WebSocket -------------------------------------------------------------
@@ -170,7 +170,7 @@ def test_ws_concurrent_turns_do_not_crosstalk():
     """Two chats running at once: every token / result must carry the session id
     of the chat that produced it, and tokens must never leak across sessions."""
     app = create_app(FridayService(
-        config={"persona": "friday_core", "conversation": {}},
+        config={"persona": "core", "conversation": {}},
         provider=EchoProvider(), registry=ToolRegistry(), db=Database(":memory:"),
     ))
     client = TestClient(app)

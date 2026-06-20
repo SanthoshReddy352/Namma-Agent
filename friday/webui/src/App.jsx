@@ -144,6 +144,10 @@ function Shell() {
         <Settings onClose={() => setShowSettings(false)} theme={theme}
                   onThemeToggle={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
                   onModelsChanged={() => friday.reloadConfiguredModels?.()}
+                  onAssistantNameChanged={(n) => {
+                    setAssistantName(n);
+                    localStorage.setItem("friday-assistant-name", n);
+                  }}
                   onMemoryCleared={() => { friday.refreshSessions(); newChat(); }} />
       )}
     </div>

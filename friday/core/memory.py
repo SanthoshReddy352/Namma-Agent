@@ -30,7 +30,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     id          TEXT PRIMARY KEY,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL,
-    persona     TEXT DEFAULT 'friday_core',
+    persona     TEXT DEFAULT 'core',
     summary     TEXT
 );
 
@@ -180,6 +180,9 @@ _SESSION_MIGRATIONS = [
     "ALTER TABLE learning_quizzes ADD COLUMN answer_index INTEGER",
     "ALTER TABLE learning_quizzes ADD COLUMN picked_index INTEGER",
     "ALTER TABLE learning_quizzes ADD COLUMN explanation TEXT",
+    # Per-turn stats (time-to-first-token + token count) so they persist across
+    # reloads, shown in the message footer. JSON: {"ttft": float, "tokens": int}.
+    "ALTER TABLE turns ADD COLUMN meta TEXT",
 ]
 
 
@@ -230,7 +233,7 @@ class Database:
 
     # -- sessions ----------------------------------------------------------
 
-    def create_session(self, persona: str = "friday_core",
+    def create_session(self, persona: str = "core",
                         model: Optional[str] = None) -> str:
         sid = str(uuid.uuid4())
         now = _now()
@@ -261,12 +264,14 @@ class Database:
     # -- turns -------------------------------------------------------------
 
     def add_turn(self, session_id: str, role: str, content: str,
-                 tools_used: Optional[list[str]] = None) -> None:
+                 tools_used: Optional[list[str]] = None,
+                 meta: Optional[dict] = None) -> None:
         with self._lock:
             cur = self.conn.execute(
-                "INSERT INTO turns (session_id, role, content, tools_used, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (session_id, role, content, json.dumps(tools_used or []), _now()),
+                "INSERT INTO turns (session_id, role, content, tools_used, meta, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (session_id, role, content, json.dumps(tools_used or []),
+                 json.dumps(meta) if meta else None, _now()),
             )
             # Only real conversation enters the search index — UI-only turns
             # (persisted quiz cards) would surface as JSON noise in recall.
@@ -399,13 +404,28 @@ class Database:
         return int(row["c"])
 
     def session_turns(self, session_id: str, limit: int = 200) -> list[dict]:
-        """All turns for a session in chronological order (for summarization)."""
+        """All turns for a session in chronological order (for summarization and the
+        UI history). Carries persisted per-turn stats (`meta`) and `tools_used` so a
+        reloaded chat shows the same footer (time-to-first-token, tokens, tools used)."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT role, content, created_at FROM turns WHERE session_id=? ORDER BY id LIMIT ?",
+                "SELECT role, content, tools_used, meta, created_at FROM turns "
+                "WHERE session_id=? ORDER BY id LIMIT ?",
                 (session_id, limit),
             ).fetchall()
-        return [{"role": r["role"], "content": r["content"], "created_at": r["created_at"]} for r in rows]
+        out: list[dict] = []
+        for r in rows:
+            try:
+                tools = json.loads(r["tools_used"]) if r["tools_used"] else []
+            except (ValueError, TypeError):
+                tools = []
+            try:
+                meta = json.loads(r["meta"]) if r["meta"] else None
+            except (ValueError, TypeError):
+                meta = None
+            out.append({"role": r["role"], "content": r["content"], "tools_used": tools,
+                        "meta": meta, "created_at": r["created_at"]})
+        return out
 
     def set_session_summary(self, session_id: str, summary: str) -> None:
         with self._lock:
@@ -522,7 +542,7 @@ class Database:
         return cur.rowcount > 0
 
     def create_session_in(self, project_id: Optional[str] = None, kind: str = "chat",
-                          persona: str = "friday_core") -> str:
+                          persona: str = "core") -> str:
         """Create a session pre-attached to a project and/or with a kind."""
         sid = str(uuid.uuid4())
         now = _now()

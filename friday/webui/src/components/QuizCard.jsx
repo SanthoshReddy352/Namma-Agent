@@ -1,12 +1,29 @@
 import { useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { recordLearningQuiz } from "../api.js";
+import Markdown from "./Markdown.jsx";
+
+// Inline markdown for option labels: a button may only hold inline content, so we
+// flatten paragraphs to a fragment and keep just inline code styling. This lets an
+// option like `True` or `int` render as code without invalid <p>/<pre>-in-<button>.
+const INLINE_MD = {
+  p: ({ children }) => <>{children}</>,
+  code: ({ children }) => (
+    <code className="px-1 py-0.5 rounded bg-paper-sink dark:bg-night-soft font-mono text-[12.5px]">{children}</code>
+  ),
+};
+const InlineMd = ({ children }) => (
+  <ReactMarkdown remarkPlugins={[remarkGfm]} components={INLINE_MD}>{children || ""}</ReactMarkdown>
+);
 
 // An interactive multiple-choice check posed by the teacher agent (`pose_quiz`).
 // Picking an option reveals correct/incorrect + an explanation, records the
 // result (insights / understanding score), and — via onAnswered — hands the
 // result back to the teacher so the lesson CONTINUES instead of stalling.
 export default function QuizCard({ quiz, onAnswered }) {
-  const { question, options = [], answer_index = 0, explanation = "", topic_id, module_id, quiz_id } = quiz || {};
+  const { question, code = "", options = [], answer_index = 0, explanation = "",
+          topic_id, module_id, quiz_id } = quiz || {};
   // `quiz.picked` is set when a previously-answered card is restored from
   // history — the card reopens already answered, exactly as it was left.
   const [picked, setPicked] = useState(quiz?.picked ?? null);
@@ -32,7 +49,11 @@ export default function QuizCard({ quiz, onAnswered }) {
       </div>
       <div className="flex-1 min-w-0 rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel p-4">
         <div className="text-[11px] uppercase tracking-wider text-ink-faint dark:text-night-faint mb-1.5">Quick check</div>
-        <div className="font-medium text-[15px] mb-3">{question}</div>
+        {/* Question (and any code it embeds) renders as markdown. */}
+        <div className="font-medium text-[15px] mb-2 md-question"><Markdown>{question}</Markdown></div>
+        {/* The dedicated code slot — shown as a code block so the learner can read
+            the snippet the question asks about. */}
+        {code ? <div className="mb-3"><Markdown>{"```\n" + code + "\n```"}</Markdown></div> : null}
         <div className="space-y-1.5">
           {options.map((opt, i) => {
             const isAnswer = i === answer_index;
@@ -47,7 +68,7 @@ export default function QuizCard({ quiz, onAnswered }) {
                 <span className="h-5 w-5 shrink-0 grid place-items-center rounded-full border border-current text-[11px] text-ink-faint dark:text-night-faint">
                   {String.fromCharCode(65 + i)}
                 </span>
-                <span className="flex-1">{opt}</span>
+                <span className="flex-1"><InlineMd>{String(opt)}</InlineMd></span>
                 {answered && isAnswer && <CheckIcon />}
                 {answered && isPicked && !isAnswer && <XIcon />}
               </button>
@@ -55,11 +76,13 @@ export default function QuizCard({ quiz, onAnswered }) {
           })}
         </div>
         {answered && (
-          <div className={`mt-3 text-[13.5px] rounded-xl px-3 py-2 ${picked === answer_index
+          <div className={`mt-3 text-[13.5px] rounded-xl px-3 py-2 md-explanation ${picked === answer_index
             ? "bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"
             : "bg-brand-wash dark:bg-night-soft text-ink-soft dark:text-night-ink"}`}>
             <span className="font-medium">{picked === answer_index ? "Correct! " : "Not quite. "}</span>
-            {explanation || (picked === answer_index ? "Nice work." : `The answer is ${String.fromCharCode(65 + answer_index)}.`)}
+            {explanation
+              ? <InlineMd>{explanation}</InlineMd>
+              : (picked === answer_index ? "Nice work." : `The answer is ${String.fromCharCode(65 + answer_index)}.`)}
           </div>
         )}
       </div>

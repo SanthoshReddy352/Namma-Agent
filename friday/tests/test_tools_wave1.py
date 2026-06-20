@@ -45,6 +45,26 @@ def test_path_security_blocks_sensitive():
     assert not ok
 
 
+def test_reads_allowed_but_writes_blocked_in_system_dir():
+    # OS / installed-software trees are READ-ONLY: the agent may read them...
+    sys_file = r"C:\Windows\friday_probe.txt" if os.name == "nt" else "/usr/friday_probe.txt"
+    ok_read, _ = check_path(sys_file, write=False)
+    ok_write, reason = check_path(sys_file, write=True)
+    assert ok_read                                   # ...reading a system path is fine
+    assert not ok_write and "read-only" in reason    # ...but writing it is refused
+
+
+def test_writes_allowed_outside_system(tmp_path):
+    # Documents / project folders (here: a temp dir) stay fully writable.
+    ok, _ = check_path(str(tmp_path / "x.txt"), write=True)
+    assert ok
+
+
+def test_secret_keys_blocked_even_for_read():
+    ok, _ = check_path(os.path.expanduser("~/.ssh/id_rsa"))
+    assert not ok
+
+
 def test_run_shell(reg):
     r = reg.execute("run_shell", {"command": "echo hello-shell"})
     assert r.ok and "hello-shell" in r.content

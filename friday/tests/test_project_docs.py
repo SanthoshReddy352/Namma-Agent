@@ -190,7 +190,7 @@ def service(db):
     from friday.service import FridayService
     from friday.tests.test_projects import ScriptedProvider  # reuse the suite's stub
 
-    return FridayService(config={"persona": "friday_core", "conversation": {}},
+    return FridayService(config={"persona": "core", "conversation": {}},
                          provider=ScriptedProvider([LLMResponse(content="ok")]),
                          registry=ToolRegistry(), db=db)
 

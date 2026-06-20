@@ -12,9 +12,58 @@ they can't live in the stateless auto-discovery package under ``friday/tools``:
 """
 from __future__ import annotations
 
+import html as _html
+import re as _re
+
 from friday.core.memory import Database
-from friday.core.persona import _PERSONA_DIR, load_persona
+from friday.core.persona import (
+    delete_user_persona, list_personas as _list_personas, load_persona, save_persona,
+)
 from friday.core.tools import ToolRegistry, ToolResult
+
+# ── Quiz text normalisation ──────────────────────────────────────────────────
+# The model sometimes writes a check in HTML (`<code>type(x)</code>`, `<br>`) or
+# entity-encoded snippets (`&lt;class 'int'&gt;`) instead of markdown. The quiz
+# card renders text as markdown, which DROPS bare HTML tags and leaves the rest
+# looking broken. We convert it to clean markdown up front so the card always
+# renders correctly, whatever form the model used.
+_CODE_RE = _re.compile(r"<code>(.*?)</code>", _re.DOTALL | _re.IGNORECASE)
+_BR_RE = _re.compile(r"<br\s*/?>", _re.IGNORECASE)
+_TAG_RE = _re.compile(r"</?(?:b|i|strong|em|p|span|div|pre|tt|kbd|samp|code)\b[^>]*>", _re.IGNORECASE)
+
+
+def _quiz_md(text: str, *, inline: bool = False) -> str:
+    """Normalise model-authored quiz text to clean markdown.
+
+    - ``<code>…</code>`` → backticks (a fenced block when it spans lines),
+    - ``<br>`` → a line break,
+    - HTML entities (``&lt;`` …) decoded,
+    - stray inline tags stripped.
+
+    ``inline=True`` (an option label, which is a single-line button) collapses
+    newlines to spaces and wraps any bare ``<…>`` snippet (e.g. ``<class 'int'>``)
+    in backticks so it shows as a code chip instead of being eaten as an HTML tag.
+    """
+    if not text:
+        return ""
+
+    def _code_sub(m):
+        # <br> inside the snippet are real line breaks; convert them before deciding
+        # inline-vs-fenced so a multi-line snippet becomes a proper code block.
+        inner = _html.unescape(_BR_RE.sub("\n", m.group(1))).strip("\n")
+        return f"\n```\n{inner}\n```\n" if "\n" in inner else f"`{inner}`"
+
+    t = _CODE_RE.sub(_code_sub, str(text))
+    t = _BR_RE.sub("\n", t)
+    t = _TAG_RE.sub("", t)
+    t = _html.unescape(t)
+    if inline:
+        t = _re.sub(r"\s*\n\s*", " ", t).strip()
+        if "`" not in t and ("<" in t or ">" in t):
+            t = f"`{t}`"
+        return t
+    return _re.sub(r"[ \t]+\n", "\n", t).strip()
+
 
 #: Read-only tools a delegated sub-agent may use to research/answer a sub-task.
 _RESEARCH_TOOLS = (
@@ -406,14 +455,29 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
         topic = _topic()
         if not topic:
             return ToolResult(ok=False, content="", error="Not in a learning topic.")
-        # Resolve the module from THIS chat thread first — the global "current"
-        # pointer can lag the thread the teacher is actually in.
+        # Resolve which module to complete — robustly. The model often passes a
+        # positional guess ("1", "module 2") that does NOT match the real id
+        # ("mod1"); blindly trusting it makes mark_module a silent no-op (the path
+        # never advances, the React flow never updates). So: accept an explicit id
+        # ONLY if it's real; otherwise prefer the thread we're teaching in, then the
+        # topic's current pointer, and finally a positional index as a last resort.
+        plan = topic.get("plan") or []
+        valid_ids = {m["id"] for m in plan}
         own = _session_module(topic)
-        mid = (args.get("module_id") or (own or {}).get("id")
-               or topic.get("progress", {}).get("current_module") or "").strip()
+        raw = str(args.get("module_id") or "").strip()
+        cur = topic.get("progress", {}).get("current_module")
+        mid = ""
+        for cand in (raw, (own or {}).get("id"), cur):
+            if cand and str(cand).strip() in valid_ids:
+                mid = str(cand).strip()
+                break
+        if not mid:  # positional fallback: "1" / "module 2" → the nth module
+            num = _re.search(r"\d+", raw)
+            if num and 0 <= int(num.group()) - 1 < len(plan):
+                mid = plan[int(num.group()) - 1]["id"]
         if not mid:
             return ToolResult(ok=False, content="", error="no current module to complete")
-        module = next((m for m in (topic.get("plan") or []) if m["id"] == mid), None)
+        module = next((m for m in plan if m["id"] == mid), None)
         # Cross-module continuity: persist a recap (concepts + the running example)
         # to topic memory so EVERY later module teaches on top of it.
         recap = (args.get("recap") or "").strip()
@@ -464,8 +528,20 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
 
     def pose_quiz(args: dict) -> ToolResult:
         topic = _topic()
-        question = (args.get("question") or "").strip()
-        options = [str(o).strip() for o in (args.get("options") or []) if str(o).strip()]
+        # Normalise any HTML/entities the model used into clean markdown so the card
+        # renders right (question/explanation as block markdown, options inline).
+        question = _quiz_md(args.get("question") or "")
+        code = _html.unescape(args.get("code") or "").strip()
+        # The card has a DEDICATED code slot. If the model ALSO put the snippet in the
+        # question as a fenced block, it would render twice — hoist it out: drop the
+        # fenced block from the question, and use it as the code if no code field was
+        # given. This kills the duplicate while keeping the snippet visible once.
+        fenced = _re.findall(r"```[A-Za-z0-9]*\n(.*?)```", question, _re.DOTALL)
+        if fenced:
+            question = _re.sub(r"```[A-Za-z0-9]*\n.*?```", "", question, flags=_re.DOTALL).strip()
+            if not code:
+                code = fenced[0].strip()
+        options = [_quiz_md(o, inline=True) for o in (args.get("options") or []) if str(o).strip()]
         if not question:
             return ToolResult(ok=False, content="",
                               error="pose_quiz needs a 'question'. The check question must "
@@ -488,9 +564,13 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
         payload = {
             "quiz_id": _uuid.uuid4().hex,  # ties the persisted card to its answer
             "question": question,
+            # Code the question refers to, shown as a code block in the card so the
+            # learner can actually read it before answering (never just in chat).
+            # Already entity-decoded and de-duplicated against the question above.
+            "code": code,
             "options": options,
             "answer_index": answer_index,
-            "explanation": (args.get("explanation") or "").strip(),
+            "explanation": _quiz_md(args.get("explanation") or ""),
             "topic_id": topic["id"] if topic else None,
             # Attribute the check to the module whose THREAD it was posed in, not
             # the global pointer (they diverge when revisiting other modules).
@@ -598,9 +678,18 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
     registry.register(
         "pose_quiz",
         "Show the learner an interactive multiple-choice check. Provide the question, "
-        "options, the 0-based answer_index, and a short explanation.",
+        "options, the 0-based answer_index, and a short explanation. If the question "
+        "refers to a code snippet (e.g. 'what does this print?'), you MUST include that "
+        "code in the `code` field — it renders as a code block in the card so the learner "
+        "can read it. NEVER ask about code without putting it in `code`; the learner "
+        "cannot see anything you only wrote in chat. Question/options/explanation render "
+        "as MARKDOWN — use inline `backticks` for short code or literal output (e.g. "
+        "`type(x)`, `<class 'int'>`). Do NOT write raw HTML such as <code> or <br>.",
         {"type": "object", "properties": {
             "question": {"type": "string"},
+            "code": {"type": "string",
+                     "description": "code the question is about, shown as a code block "
+                                    "(required whenever the question references code)"},
             "options": {"type": "array", "items": {"type": "string"}},
             "answer_index": {"type": "integer"},
             "explanation": {"type": "string"}},
@@ -799,7 +888,7 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
         return ToolResult(ok=True, content=summary or "(empty summary)")
 
     def _persona_ids() -> list[str]:
-        return sorted(p.stem for p in _PERSONA_DIR.glob("*.yaml"))
+        return [p["id"] for p in _list_personas()]
 
     def switch_persona(args: dict) -> ToolResult:
         name = (args.get("persona") or "").strip()
@@ -812,12 +901,43 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
         return ToolResult(ok=True, content=f"Switched persona to {load_persona(name).name} ({name}).")
 
     def list_personas(_args: dict) -> ToolResult:
-        ids = _persona_ids()
-        if not ids:
+        rows = _list_personas()
+        if not rows:
             return ToolResult(ok=True, content="No personas installed.")
-        lines = [f"- {pid}: {load_persona(pid).name}" for pid in ids]
+        lines = [f"- {r['id']} ({r['source']}): {r['name']} — {r['identity_line']}" for r in rows]
         return ToolResult(ok=True, content="Available personas:\n" + "\n".join(lines),
-                          data={"current": agent.persona.id, "available": ids})
+                          data={"current": agent.persona.id, "available": [r["id"] for r in rows]})
+
+    def create_persona(args: dict) -> ToolResult:
+        """Create or edit a persona the user describes (editing = same id/name).
+        Saves to the user persona dir; optionally switch to it right away."""
+        try:
+            saved = save_persona({
+                "id": (args.get("id") or "").strip(),
+                "name": args.get("name") or "",
+                "identity": args.get("identity") or "",
+                "tone": args.get("tone") or "",
+                "dos": args.get("dos") or [],
+                "donts": args.get("donts") or [],
+            })
+        except ValueError as exc:
+            return ToolResult(ok=False, content="", error=str(exc))
+        if args.get("activate"):
+            agent.set_persona(saved["id"])
+        verb = "Activated" if args.get("activate") else "Saved"
+        return ToolResult(ok=True, content=f"{verb} persona {saved['name']} ({saved['id']}).",
+                          data=saved)
+
+    def delete_persona(args: dict) -> ToolResult:
+        pid = (args.get("persona") or "").strip()
+        if not pid:
+            return ToolResult(ok=False, content="", error="'persona' is required")
+        if not delete_user_persona(pid):
+            return ToolResult(ok=False, content="",
+                              error=f"no user persona {pid!r} to delete (built-ins can't be removed)")
+        if agent.persona.id == pid:  # deleted the active one → fall back to default
+            agent.set_persona("core")
+        return ToolResult(ok=True, content=f"Deleted persona {pid!r}.")
 
     registry.register(
         name="delegate_task",
@@ -837,7 +957,7 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
         description="Switch FRIDAY's active persona for the rest of the session.",
         parameters={
             "type": "object",
-            "properties": {"persona": {"type": "string", "description": "persona id, e.g. 'friday_concise'"}},
+            "properties": {"persona": {"type": "string", "description": "persona id, e.g. 'core' or a user persona"}},
             "required": ["persona"],
         },
         handler=switch_persona,
@@ -845,9 +965,43 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
 
     registry.register(
         name="list_personas",
-        description="List the available personas and which one is active.",
+        description="List the available personas (with a one-line identity) and which is active.",
         parameters={"type": "object", "properties": {}},
         handler=list_personas,
+    )
+
+    registry.register(
+        name="create_persona",
+        description=("Create a NEW persona — or EDIT an existing user persona by reusing its "
+                     "id — from a design the user asks for. Provide a name and an identity "
+                     "(the 'You are …' system-prompt text; use the literal token {name} where "
+                     "the assistant's name belongs). Optionally set activate=true to switch to "
+                     "it immediately."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "description": "display name for the persona"},
+                "identity": {"type": "string", "description": "the 'You are …' identity; use {name} for the assistant's name"},
+                "tone": {"type": "string", "description": "a few comma-separated tone words"},
+                "dos": {"type": "array", "items": {"type": "string"}, "description": "short DO rules"},
+                "donts": {"type": "array", "items": {"type": "string"}, "description": "short DON'T rules"},
+                "id": {"type": "string", "description": "reuse an existing id to EDIT it (optional)"},
+                "activate": {"type": "boolean", "description": "switch to this persona now"},
+            },
+            "required": ["name", "identity"],
+        },
+        handler=create_persona,
+    )
+
+    registry.register(
+        name="delete_persona",
+        description="Delete a user-created persona by id (built-in personas can't be removed).",
+        parameters={
+            "type": "object",
+            "properties": {"persona": {"type": "string", "description": "persona id to delete"}},
+            "required": ["persona"],
+        },
+        handler=delete_persona,
     )
 
     registry.register(
