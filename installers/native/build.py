@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Build the branded native installer for the CURRENT operating system.
 
-It freezes the Tkinter installer (`installer/`) with PyInstaller, bundling the app
-source (incl. the prebuilt web UI) inside — so the resulting installer shows the
-Namma Agent UI even on a machine with no Python, then installs everything. Outputs
-land in ``installers/native/dist/``:
+It freezes the React/pywebview installer (`installer/`) with PyInstaller, bundling
+the installer's own built UI (`installer/webui/dist`) and the app source (incl. the
+app's prebuilt web UI) inside — so the resulting installer shows the modern Namma
+Agent UI even on a machine with no Python, then installs everything silently.
+Outputs land in ``installers/native/dist/``:
 
     Windows -> NammaAgentInstaller-<ver>.exe          (single file)
     macOS   -> NammaAgent-<ver>.dmg                    (contains the .app)
@@ -34,6 +35,7 @@ BUILD = NATIVE / "build"
 DIST = NATIVE / "dist"
 APP = BUILD / "app"
 NAME = "NammaAgentInstaller"
+INSTALLER_UI = ROOT / "installer" / "webui"
 
 
 def version() -> str:
@@ -53,6 +55,14 @@ def run_npm(args, cwd):
         run(["cmd", "/c", "npm", *args], cwd=cwd)
     else:
         run(["npm", *args], cwd=cwd)
+
+
+def build_installer_ui():
+    """Build the installer's own React UI (installer/webui) → dist/, so it can be
+    bundled into the frozen installer and shown in the pywebview window."""
+    if not (INSTALLER_UI / "dist" / "index.html").exists():
+        run_npm(["install"], cwd=INSTALLER_UI)
+        run_npm(["run", "build"], cwd=INSTALLER_UI)
 
 
 def stage_app():
@@ -94,8 +104,14 @@ def freeze(ver: str):
     onefile = platform.system() != "Darwin"   # macOS wants a .app (onedir) for the .dmg
     # `python -m PyInstaller` (not the `pyinstaller` script) so it works regardless
     # of whether the Scripts/bin dir is on PATH.
+    ui_dist = INSTALLER_UI / "dist"
     args = [sys.executable, "-m", "PyInstaller", "--noconfirm", "--clean", "--windowed", "--name", NAME,
             "--add-data", f"{APP}{sep}app",
+            # The installer's React UI, shown in the pywebview window.
+            "--add-data", f"{ui_dist}{sep}installer_ui",
+            # pywebview's backend (incl. the Windows EdgeChromium/pythonnet bits) is
+            # loaded dynamically — pull it all in so the frozen installer can render.
+            "--collect-all", "webview",
             "--distpath", DIST, "--workpath", BUILD / "pyi", "--specpath", BUILD]
     if onefile:
         args.append("--onefile")
@@ -148,6 +164,7 @@ def package(ver: str):
 def main():
     ver = version()
     print(f"== Building Namma Agent installer {ver} on {platform.system()} ==")
+    build_installer_ui()
     stage_app()
     freeze(ver)
     package(ver)

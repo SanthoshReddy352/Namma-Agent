@@ -86,8 +86,8 @@ if (-not (Test-Path $VenvPy)) {
 
 # 4. dependencies ------------------------------------------------------------
 Write-Host "[4/8] Installing dependencies (a few minutes on first run) ..."
-& $VenvPy -m pip install --upgrade pip | Out-Null
-& $VenvPy -m pip install -r namma_agent\requirements.txt
+& $VenvPy -m pip install --upgrade pip --no-cache-dir | Out-Null
+& $VenvPy -m pip install --no-cache-dir -r namma_agent\requirements.txt
 
 # 5. web UI ------------------------------------------------------------------
 if (Test-Path "namma_agent\webui\dist\index.html") {

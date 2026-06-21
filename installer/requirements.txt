@@ -1,0 +1,14 @@
+# Build/runtime deps for the Namma Agent *installer* (separate from the app).
+# The installer is a small pywebview window hosting the React UI in installer/webui.
+#
+#   pip install -r installer/requirements.txt
+#
+# Building the one-file native installer additionally needs PyInstaller and Node
+# (to build installer/webui) — see installers/native/build.py.
+
+pywebview            # native window that renders the React installer UI
+# Platform web engines (same as the app):
+#   Windows: WebView2 runtime (preinstalled on Win10/11) + pythonnet (pulled in by
+#            pywebview on win32). EdgeChromium is forced for a crisp UI.
+#   macOS:   WKWebView via pyobjc (pulled in by pywebview on darwin).
+#   Linux:   GTK + WebKit2 — apt: python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1

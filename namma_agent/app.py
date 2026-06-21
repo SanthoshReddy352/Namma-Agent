@@ -26,6 +26,10 @@ _HOST = "127.0.0.1"
 _PORT = int(os.environ.get("PORT", 8000))
 _URL = f"http://{_HOST}:{_PORT}"
 
+# Set by _serve() if uvicorn/create_app raises on the background thread, so main()
+# can surface the *real* reason instead of a silent "did not come up in time".
+_serve_error: BaseException | None = None
+
 # Brand window icon — the "sparkle" mark rendered from webui/public/logo.svg.
 # We ship a multi-res .ico for Windows and a 256px .png for GTK/Qt so the native
 # window + taskbar show the Namma Agent spark, never the stock Python/pywebview icon.
@@ -46,20 +50,32 @@ def _build_service() -> NammaAgentService:
 
 
 def _serve(service: NammaAgentService) -> None:
-    import uvicorn
+    # Runs on a daemon thread. ANY exception here (a bad import in create_app, a
+    # port already in use, a uvicorn failure) would otherwise die silently and the
+    # only symptom would be the window's "127.0.0.1 refused to connect" page. Catch
+    # it, log the full traceback, and record it so main() can report the real cause.
+    global _serve_error
+    try:
+        import uvicorn
 
-    from namma_agent.server.api import create_app
+        from namma_agent.server.api import create_app
 
-    uvicorn.run(create_app(service), host=_HOST, port=_PORT, log_level="warning")
+        uvicorn.run(create_app(service), host=_HOST, port=_PORT, log_level="warning")
+    except BaseException as exc:  # noqa: BLE001 — surface every startup failure
+        _serve_error = exc
+        logger.exception("[app] backend failed to start")
 
 
-def _wait_for_server(timeout: float = 30.0) -> bool:
+def _wait_for_server(timeout: float = 60.0) -> bool:
     # Generous so the native window never paints before the backend is reachable
-    # (cold first boot — importing providers/playwright — can take >10s).
+    # (cold first boot — importing providers/playwright — can take >10s). Bails out
+    # early if the server thread already crashed.
     import urllib.request
 
     deadline = time.time() + timeout
     while time.time() < deadline:
+        if _serve_error is not None:
+            return False
         with suppress(Exception):
             urllib.request.urlopen(f"{_URL}/api/health", timeout=1)
             return True
@@ -285,9 +301,36 @@ def _patch_pywebview_for_windows() -> None:
     logger.info("[app] patched WebView2 for copy/paste + live title")
 
 
-def _launch_window(service: NammaAgentService, server_thread: threading.Thread) -> None:
+def _error_html(detail: str) -> str:
+    """A friendly in-window page shown when the backend never became reachable —
+    so the user sees an explanation + Retry instead of WebView2's raw
+    '127.0.0.1 refused to connect' error."""
+    safe = (detail or "The local server did not respond.").replace("<", "&lt;")
+    return f"""<!doctype html><html><head><meta charset='utf-8'>
+<style>
+  body{{margin:0;height:100vh;display:flex;align-items:center;justify-content:center;
+       font-family:Inter,Segoe UI,system-ui,sans-serif;background:#faf9f5;color:#2d2a26}}
+  .card{{max-width:520px;text-align:center;padding:40px}}
+  h1{{font-size:22px;margin:0 0 10px}} p{{color:#6b6760;line-height:1.6;font-size:14px}}
+  code{{display:block;margin-top:14px;padding:12px;background:#efece3;border-radius:10px;
+        font-family:Consolas,monospace;font-size:12px;color:#b8623f;word-break:break-word}}
+  button{{margin-top:22px;border:0;border-radius:10px;background:#cc785c;color:#fff;
+          padding:12px 26px;font-size:15px;font-weight:600;cursor:pointer}}
+</style></head><body><div class='card'>
+  <h1>Starting up is taking longer than usual</h1>
+  <p>The app's local engine didn't respond yet. This can happen on a cold first
+     start. Click retry, or relaunch Namma Agent.</p>
+  <code>{safe}</code>
+  <button onclick="location.href='{_URL}'">Retry</button>
+</div></body></html>"""
+
+
+def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
+                   healthy: bool = True) -> None:
     """Open the native desktop window; fall back to a browser tab only if no GUI
-    toolkit is available at all."""
+    toolkit is available at all. When ``healthy`` is False the window shows a
+    friendly error/retry page instead of the backend URL (which would render as a
+    'connection refused' error)."""
     from namma_agent.config import assistant_name
 
     _ensure_linux_gui_backend()
@@ -308,13 +351,17 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread) 
     for gui in _gui_order():
         with suppress(Exception):
             webview.windows.clear()  # drop any window from a failed prior attempt
-        webview.create_window(
-            title, _URL,
+        win_kwargs = dict(
             width=1100, height=760, min_size=(720, 560),
             # Match the app's default (light) shell so there's no jarring flash of
             # plain white before React paints. (webui body bg is #faf9f5.)
             background_color="#faf9f5",
         )
+        if healthy:
+            webview.create_window(title, _URL, **win_kwargs)
+        else:
+            detail = f"{type(_serve_error).__name__}: {_serve_error}" if _serve_error else ""
+            webview.create_window(title, html=_error_html(detail), **win_kwargs)
         try:
             # private_mode=False keeps a disk cache between launches → faster
             # warm starts and smoother navigation (esp. on Windows/WebView2).
@@ -348,15 +395,20 @@ def main(server_only: bool = False) -> None:
     server_thread = threading.Thread(target=_serve, args=(service,), daemon=True)
     server_thread.start()
 
-    if not _wait_for_server():
-        logger.error("[app] backend did not come up in time")
+    healthy = _wait_for_server()
+    if not healthy:
+        if _serve_error is not None:
+            logger.error("[app] backend crashed on startup: %s: %s",
+                         type(_serve_error).__name__, _serve_error)
+        else:
+            logger.error("[app] backend did not come up in time")
 
     if server_only:
         logger.info("[app] backend running at %s (server-only mode)", _URL)
         server_thread.join()
         return
 
-    _launch_window(service, server_thread)
+    _launch_window(service, server_thread, healthy=healthy)
 
 
 if __name__ == "__main__":  # pragma: no cover

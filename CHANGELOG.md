@@ -3,6 +3,12 @@
 All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [2.2.3] — Namma Agent Installer
+
+### Changed
+- **Installer Updated for Better User Experience**  
+- **Used Pywebview2 + React for the Installer UI**  
+
 ## [2.2.2] — Namma Agent Build/Release
 
 ### Changed

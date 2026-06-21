@@ -1,13 +1,17 @@
-"""UI-free installer logic (driven by installer/gui.py).
+"""UI-free installer logic (driven by installer/app.py).
 
-Flow, in order: ensure Python/Git/Node -> get the source onto the user's Desktop
-(copy the bundled source when frozen, else git-clone) -> create a .venv ->
-install requirements -> build the UI if needed -> write the chosen provider +
-the onboarding answers into the app's config/DB -> done.
+Flow, in order: ensure Python/Git/Node -> get the source onto the chosen install
+dir (copy the bundled source when frozen, else git-clone) -> create a .venv ->
+install requirements -> build the UI if needed -> create shortcuts -> write the
+chosen provider + the onboarding answers into the app's config/DB -> done.
 
 Everything that touches the network / filesystem is a plain function so the GUI
 can run it on a worker thread and stream progress; the pure helpers below are unit
 tested.
+
+Subprocess calls are all spawned *windowless* on Windows (see ``_NO_WINDOW`` /
+``_startupinfo``) so the installer never flashes a console window for git, pip,
+winget or npm — the whole install runs silently under the modern UI.
 """
 from __future__ import annotations
 
@@ -18,8 +22,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
+import urllib.request
+from contextlib import contextmanager, suppress
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Callable, Iterator, Optional
 
 REPO = "SanthoshReddy352/Namma-Agent"
 REPO_URL = f"https://github.com/{REPO}.git"
@@ -27,6 +35,23 @@ APP_DIR_NAME = "Namma-Agent"
 
 Log = Callable[[str], None]
 _PY_CANDIDATES = ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")
+
+
+# ── windowless subprocess (no flashing consoles on Windows) ──────────────────
+
+# CREATE_NO_WINDOW keeps console children (git/pip/winget/npm) from popping a
+# window when the installer itself is a windowed (no-console) process.
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
+def _startupinfo():
+    """A STARTUPINFO that hides any window, on Windows; None elsewhere."""
+    if os.name != "nt":
+        return None
+    si = subprocess.STARTUPINFO()
+    si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+    si.wShowWindow = subprocess.SW_HIDE  # type: ignore[attr-defined]
+    return si
 
 
 # ── locations ────────────────────────────────────────────────────────────────
@@ -38,14 +63,38 @@ def desktop_dir() -> Path:
 
 
 def default_install_dir() -> Path:
-    """Where the app lands: <Desktop>/Namma-Agent."""
+    """Where the app lands by default: <Desktop>/Namma-Agent. The user can pick
+    any other folder in the UI — every step takes ``install_dir`` as a parameter."""
     return desktop_dir() / APP_DIR_NAME
+
+
+def resolve_install_dir(chosen: Optional[str | os.PathLike]) -> Path:
+    """Normalise a user-chosen install location.
+
+    The folder picker returns the *parent* a user navigated to (e.g. they pick
+    ``C:/Apps``); if they didn't already pick a folder literally named
+    ``Namma-Agent`` we append it, so the app never spills its tree loose into a
+    directory the user expected to keep tidy — and we never double-nest
+    ``Namma-Agent/Namma-Agent``.
+    """
+    if not chosen:
+        return default_install_dir()
+    p = Path(chosen).expanduser()
+    if p.name == APP_DIR_NAME:
+        return p
+    return p / APP_DIR_NAME
 
 
 def venv_python(install_dir: Path) -> Path:
     if os.name == "nt":
         return install_dir / ".venv" / "Scripts" / "python.exe"
     return install_dir / ".venv" / "bin" / "python"
+
+
+def venv_pythonw(install_dir: Path) -> Path:
+    """Windows pythonw.exe (no console) for launching the app; falls back to python."""
+    pyw = install_dir / ".venv" / "Scripts" / "pythonw.exe"
+    return pyw if pyw.exists() else venv_python(install_dir)
 
 
 def bundled_source() -> Optional[Path]:
@@ -67,7 +116,8 @@ def _has(cmd: str) -> bool:
 def _is_py310(exe: str) -> bool:
     try:
         out = subprocess.run([exe, "-c", "import sys;print(sys.version_info[0],sys.version_info[1])"],
-                             capture_output=True, text=True, timeout=15)
+                             capture_output=True, text=True, timeout=15,
+                             creationflags=_NO_WINDOW, startupinfo=_startupinfo())
         major, minor = out.stdout.split()[:2]
         return (int(major), int(minor)) >= (3, 10)
     except Exception:  # noqa: BLE001
@@ -118,7 +168,107 @@ def install_dep_command(tool: str, system: Optional[str] = None) -> Optional[lis
     return None
 
 
+# ── progress reporting ───────────────────────────────────────────────────────
+
+# The named, ordered steps the install runs through. The UI renders this list up
+# front (all "pending") and lights each one up as bootstrap drives it — exactly
+# the stepper look the design calls for.
+INSTALL_STEPS: list[tuple[str, str]] = [
+    ("python", "Verifying Python 3.10+"),
+    ("tools", "Checking Git & Node.js"),
+    ("source", "Getting the app files"),
+    ("venv", "Creating the Python environment"),
+    ("deps", "Installing Python dependencies"),
+    ("ui", "Building the interface"),
+    ("shortcuts", "Creating shortcuts"),
+]
+
+
+@dataclass
+class _Step:
+    key: str
+    label: str
+    status: str = "pending"  # pending | active | done | error
+
+
+class StepReporter:
+    """Drives the ordered install steps + free-text log lines for the GUI.
+
+    ``on_update(steps)`` gets the full step list (list of dicts) on every state
+    change so the UI can re-render the stepper; ``on_log(line)`` gets each command
+    output line for the collapsible "Show details" drawer.
+    """
+
+    def __init__(self, steps: list[tuple[str, str]],
+                 on_update: Optional[Callable[[list[dict]], None]] = None,
+                 on_log: Optional[Log] = None):
+        self.steps = [_Step(k, l) for k, l in steps]
+        self._by_key = {s.key: s for s in self.steps}
+        self._on_update = on_update or (lambda _steps: None)
+        self._on_log = on_log or (lambda _line: None)
+        self.emit()
+
+    def snapshot(self) -> list[dict]:
+        return [{"key": s.key, "label": s.label, "status": s.status} for s in self.steps]
+
+    def emit(self) -> None:
+        with suppress(Exception):
+            self._on_update(self.snapshot())
+
+    def log(self, line: str) -> None:
+        with suppress(Exception):
+            self._on_log(line)
+
+    @contextmanager
+    def step(self, key: str) -> Iterator[Log]:
+        s = self._by_key[key]
+        s.status = "active"
+        self.emit()
+        try:
+            yield self.log
+        except BaseException:
+            s.status = "error"
+            self.emit()
+            raise
+        else:
+            s.status = "done"
+            self.emit()
+
+    def skip(self, key: str) -> None:
+        """Mark a step done without running it (e.g. the UI is already built)."""
+        self._by_key[key].status = "done"
+        self.emit()
+
+
+def _as_reporter(x: "StepReporter | Log") -> StepReporter:
+    """Accept either a StepReporter (GUI) or a plain log callable (``--cli`` / tests)."""
+    if isinstance(x, StepReporter):
+        return x
+    return StepReporter(INSTALL_STEPS, on_log=x)
+
+
 # ── steps ────────────────────────────────────────────────────────────────────
+
+def _run(cmd, cwd=None, log: Optional[Log] = None, check: bool = True) -> int:
+    """Run a command, capturing its output and streaming a trimmed tail to the
+    installer log. On failure (when ``check``) raise with the real error tail — so
+    the GUI shows WHY it failed instead of an opaque exit code. Windowless on
+    Windows so no console flashes."""
+    shown = " ".join(str(c) for c in cmd[:4])
+    if log:
+        log(f"  $ {shown} …")
+    proc = subprocess.run([str(c) for c in cmd], cwd=cwd and str(cwd),
+                          capture_output=True, text=True, encoding="utf-8", errors="replace",
+                          creationflags=_NO_WINDOW, startupinfo=_startupinfo())
+    combined = ((proc.stdout or "") + (proc.stderr or "")).strip()
+    if log and combined:
+        for line in combined.splitlines()[-12:]:
+            log(f"    {line}")
+    if check and proc.returncode != 0:
+        tail = "\n".join((proc.stderr or proc.stdout or "").strip().splitlines()[-12:])
+        raise RuntimeError(f"`{shown}` failed (exit {proc.returncode}):\n{tail}")
+    return proc.returncode
+
 
 def ensure_dependencies(log: Log) -> None:
     status = dependency_status()
@@ -130,7 +280,7 @@ def ensure_dependencies(log: Log) -> None:
             log(f"  ! {tool} missing and no installer available — please install it manually.")
             continue
         log(f"  Installing {tool} ({' '.join(cmd[:3])} …)")
-        subprocess.run(cmd, check=False)
+        _run(cmd, log=log, check=False)
     if find_python() is None:
         raise RuntimeError("Python 3.10+ is required but could not be installed automatically.")
 
@@ -140,14 +290,16 @@ def fetch_source(install_dir: Path, log: Log) -> None:
     if src:
         log(f"  Copying app files to {install_dir} …")
         install_dir.mkdir(parents=True, exist_ok=True)
+        # Copy the *contents* of the bundle into install_dir (not a nested child) —
+        # guards against the Namma-Agent/Namma-Agent double-nesting.
         shutil.copytree(src, install_dir, dirs_exist_ok=True)
     elif (install_dir / ".git").is_dir():
         log("  Updating existing copy (git pull) …")
-        subprocess.run(["git", "pull", "--ff-only"], cwd=str(install_dir), check=False)
+        _run(["git", "pull", "--ff-only"], cwd=install_dir, log=log, check=False)
     else:
         log(f"  Cloning {REPO_URL} to {install_dir} …")
         install_dir.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "--depth", "1", REPO_URL, str(install_dir)], check=True)
+        _run(["git", "clone", "--depth", "1", REPO_URL, str(install_dir)], log=log)
 
 
 def create_venv(install_dir: Path, log: Log) -> None:
@@ -156,36 +308,45 @@ def create_venv(install_dir: Path, log: Log) -> None:
         raise RuntimeError("No suitable Python found for the virtual environment.")
     if not venv_python(install_dir).exists():
         log("  Creating the Python environment (.venv) …")
-        subprocess.run([py, "-m", "venv", str(install_dir / ".venv")], check=True)
+        _run([py, "-m", "venv", str(install_dir / ".venv")], log=log)
 
 
 def install_requirements(install_dir: Path, log: Log) -> None:
     vpy = str(venv_python(install_dir))
     log("  Installing dependencies (a few minutes) …")
-    subprocess.run([vpy, "-m", "pip", "install", "--upgrade", "pip"], check=False)
-    subprocess.run([vpy, "-m", "pip", "install", "-r",
-                    str(install_dir / "namma_agent" / "requirements.txt")], check=True)
+    # --no-cache-dir: a fresh install never benefits from the cache, and it sidesteps
+    # "Cache entry deserialization failed" errors from a corrupted pip cache.
+    _run([vpy, "-m", "pip", "install", "--upgrade", "pip", "--no-cache-dir"], log=log, check=False)
+    _run([vpy, "-m", "pip", "install", "--no-cache-dir", "-r",
+          str(install_dir / "namma_agent" / "requirements.txt")], log=log)
 
 
-def _npm(args: list[str], cwd: str) -> None:
+def _npm(args: list[str], cwd: str, log: Optional[Log] = None) -> None:
     # npm is npm.cmd on Windows — launch via cmd.exe so subprocess can find it.
     cmd = (["cmd", "/c", "npm", *args] if os.name == "nt" else ["npm", *args])
-    subprocess.run(cmd, cwd=cwd, check=False)
+    _run(cmd, cwd=cwd, log=log, check=False)
 
 
-def build_ui(install_dir: Path, log: Log) -> None:
+def build_ui(install_dir: Path, log: Log) -> bool:
+    """Build the app's web UI if it isn't already bundled. Returns True if a build
+    ran, False if it was already present / npm is missing (so the caller can mark
+    the step skipped)."""
     if (install_dir / "namma_agent" / "webui" / "dist" / "index.html").exists():
-        return
+        return False
     if _has("npm"):
         log("  Building the web UI …")
         webui = str(install_dir / "namma_agent" / "webui")
-        _npm(["install"], webui)
-        _npm(["run", "build"], webui)
+        _npm(["install"], webui, log)
+        _npm(["run", "build"], webui, log)
+        return True
+    log("  ! npm not found — the app will build its UI on first run.")
+    return False
 
 
 def _run_app_cli(install_dir: Path, args: list[str]) -> None:
     subprocess.run([str(venv_python(install_dir)), "-m", "namma_agent", *args],
-                   cwd=str(install_dir), check=False)
+                   cwd=str(install_dir), check=False,
+                   creationflags=_NO_WINDOW, startupinfo=_startupinfo())
 
 
 def write_provider(install_dir: Path, provider: dict) -> None:
@@ -210,28 +371,156 @@ def write_onboarding(install_dir: Path, answers: dict) -> None:
         os.unlink(path)
 
 
+# ── shortcuts (Desktop + app menu) ───────────────────────────────────────────
+
+def windows_shortcut_ps1(install_dir: Path) -> str:
+    """PowerShell that creates 'Namma Agent.lnk' on the Desktop and in the Start
+    Menu, launching the app with pythonw (no console). Pure → unit tested."""
+    pyw = venv_pythonw(install_dir)
+    icon = install_dir / "namma_agent" / "assets" / "sparkle.ico"
+    root = str(install_dir)
+    return (
+        "$ErrorActionPreference='SilentlyContinue';"
+        "$W=New-Object -ComObject WScript.Shell;"
+        "$dirs=@([Environment]::GetFolderPath('Desktop'),"
+        "(Join-Path $env:APPDATA 'Microsoft\\Windows\\Start Menu\\Programs'));"
+        "foreach($d in $dirs){"
+        "$l=$W.CreateShortcut((Join-Path $d 'Namma Agent.lnk'));"
+        f"$l.TargetPath='{pyw}';"
+        "$l.Arguments='-m namma_agent';"
+        f"$l.WorkingDirectory='{root}';"
+        f"if(Test-Path '{icon}'){{$l.IconLocation='{icon}'}};"
+        "$l.Description='Namma Agent - Intelligence for Everyone';"
+        "$l.Save()}"
+    )
+
+
+def macos_launcher_body(install_dir: Path) -> str:
+    """Contents of the 'Namma Agent.command' double-click launcher. Pure."""
+    vpy = venv_python(install_dir)
+    return f'#!/usr/bin/env bash\ncd "{install_dir}"\nexec "{vpy}" -m namma_agent\n'
+
+
+def linux_desktop_entry(install_dir: Path) -> str:
+    """A .desktop launcher body for the app menu. Pure."""
+    vpy = venv_python(install_dir)
+    icon = install_dir / "namma_agent" / "assets" / "sparkle.png"
+    return (
+        "[Desktop Entry]\nType=Application\nName=Namma Agent\n"
+        "Comment=Intelligence for Everyone\n"
+        f"Exec={vpy} -m namma_agent\nIcon={icon}\n"
+        "Terminal=false\nCategories=Utility;Development;\n"
+    )
+
+
+def create_shortcuts(install_dir: Path, log: Optional[Log] = None) -> None:
+    """Create Desktop + app-menu shortcuts for the installed app (best-effort)."""
+    log = log or (lambda _m: None)
+    install_dir = Path(install_dir)
+    system = platform.system()
+    try:
+        if system == "Windows":
+            _run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass",
+                  "-WindowStyle", "Hidden", "-Command", windows_shortcut_ps1(install_dir)],
+                 log=log, check=False)
+            log("  Shortcut 'Namma Agent' added to Desktop + Start Menu.")
+        elif system == "Darwin":
+            launcher = install_dir / "Namma Agent.command"
+            launcher.write_text(macos_launcher_body(install_dir), encoding="utf-8")
+            os.chmod(launcher, 0o755)
+            log(f"  Launcher created: {launcher}")
+        else:  # Linux
+            apps = Path.home() / ".local" / "share" / "applications"
+            apps.mkdir(parents=True, exist_ok=True)
+            entry = apps / "namma-agent.desktop"
+            entry.write_text(linux_desktop_entry(install_dir), encoding="utf-8")
+            with suppress(Exception):
+                os.chmod(entry, 0o755)
+            log("  Added 'Namma Agent' to your applications menu.")
+    except Exception as exc:  # noqa: BLE001 — shortcuts are best-effort
+        log(f"  (could not create shortcuts: {exc})")
+
+
+# ── launch / verify ──────────────────────────────────────────────────────────
+
 def launch(install_dir: Path) -> None:
-    """Open the installed app, detached, then return."""
-    vpy = str(venv_python(install_dir))
+    """Open the installed app, detached and windowless, then return."""
+    install_dir = Path(install_dir)
     if os.name == "nt":
-        pyw = install_dir / ".venv" / "Scripts" / "pythonw.exe"
-        exe = str(pyw) if pyw.exists() else vpy
-        subprocess.Popen([exe, "-m", "namma_agent"], cwd=str(install_dir), close_fds=True)
+        exe = str(venv_pythonw(install_dir))
+        subprocess.Popen([exe, "-m", "namma_agent"], cwd=str(install_dir), close_fds=True,
+                         creationflags=_NO_WINDOW, startupinfo=_startupinfo())
     else:
-        subprocess.Popen([vpy, "-m", "namma_agent"], cwd=str(install_dir),
-                         start_new_session=True, close_fds=True)
+        subprocess.Popen([str(venv_python(install_dir)), "-m", "namma_agent"],
+                         cwd=str(install_dir), start_new_session=True, close_fds=True)
 
 
-def bootstrap(install_dir: Path, log: Log) -> Path:
-    """The heavy half (deps -> source -> venv -> requirements -> UI). Provider +
-    onboarding are written afterwards from the GUI forms."""
-    log("Checking Python, Git and Node.js…")
-    ensure_dependencies(log)
-    log("Getting the app files…")
-    fetch_source(install_dir, log)
-    log("Setting up the environment…")
-    create_venv(install_dir, log)
-    install_requirements(install_dir, log)
-    build_ui(install_dir, log)
-    log("Base install complete.")
+def verify_launch(install_dir: Path, timeout: float = 60.0, port: int = 8000) -> bool:
+    """Boot the app headless (``--server``) and poll ``/api/health`` so the Done
+    screen can confirm the backend really starts (catching the '127.0.0.1 refused'
+    failure *before* the user hits Launch). Returns True if it became reachable."""
+    install_dir = Path(install_dir)
+    proc = subprocess.Popen(
+        [str(venv_python(install_dir)), "-m", "namma_agent", "--server"],
+        cwd=str(install_dir), creationflags=_NO_WINDOW, startupinfo=_startupinfo(),
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        env={**os.environ, "PORT": str(port)},
+    )
+    url = f"http://127.0.0.1:{port}/api/health"
+    deadline = time.time() + timeout
+    try:
+        while time.time() < deadline:
+            if proc.poll() is not None:  # server process exited → it crashed
+                return False
+            with suppress(Exception):
+                urllib.request.urlopen(url, timeout=1)
+                return True
+            time.sleep(0.4)
+        return False
+    finally:
+        with suppress(Exception):
+            proc.terminate()
+
+
+# ── orchestration ────────────────────────────────────────────────────────────
+
+def bootstrap(install_dir: Path, reporter: "StepReporter | Log") -> Path:
+    """The heavy half (deps -> source -> venv -> requirements -> UI -> shortcuts).
+    Provider + onboarding are written afterwards from the GUI forms.
+
+    ``reporter`` may be a :class:`StepReporter` (modern GUI) or a plain log
+    callable (``--cli`` / tests)."""
+    install_dir = Path(install_dir)
+    rep = _as_reporter(reporter)
+
+    with rep.step("python") as log:
+        log("Checking Python …")
+        if find_python() is None:
+            ensure_dependencies(log)
+        if find_python() is None:
+            raise RuntimeError("Python 3.10+ is required but could not be installed automatically.")
+
+    with rep.step("tools") as log:
+        log("Checking Git and Node.js …")
+        ensure_dependencies(log)
+
+    with rep.step("source") as log:
+        fetch_source(install_dir, log)
+
+    with rep.step("venv") as log:
+        create_venv(install_dir, log)
+
+    with rep.step("deps") as log:
+        install_requirements(install_dir, log)
+
+    built = False
+    with rep.step("ui") as log:
+        built = build_ui(install_dir, log)
+    if not built:
+        rep.skip("ui")
+
+    with rep.step("shortcuts") as log:
+        create_shortcuts(install_dir, log)
+
+    rep.log("Base install complete.")
     return install_dir

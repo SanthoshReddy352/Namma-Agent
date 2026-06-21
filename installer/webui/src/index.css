@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #f6f8fc;
+  color: #10131a;
+  font-family: Inter, system-ui, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+}
+
+/* Thin, unobtrusive scrollbar for the log drawer */
+.scroll-thin::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.scroll-thin::-webkit-scrollbar-thumb {
+  background: rgba(120, 130, 150, 0.35);
+  border-radius: 99px;
+}
+.scroll-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@layer components {
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-brand px-6 py-3
+           text-[15px] font-semibold text-white shadow-btn transition
+           hover:bg-brand-deep active:translate-y-px disabled:cursor-not-allowed
+           disabled:opacity-40 disabled:shadow-none;
+  }
+  .btn-ghost {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-[15px]
+           font-medium text-ink-soft transition hover:bg-canvas-sink;
+  }
+  .field {
+    @apply w-full rounded-xl border border-line bg-white px-4 py-3 text-[15px] text-ink
+           outline-none transition placeholder:text-ink-faint
+           focus:border-brand focus:ring-4 focus:ring-brand-soft;
+  }
+  .label {
+    @apply mb-1.5 block text-[13px] font-medium text-ink-soft;
+  }
+}

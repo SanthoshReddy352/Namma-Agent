@@ -30,12 +30,14 @@ jobs:
         with:
           node-version: "20"
 
-      - name: Install PyInstaller
-        run: python -m pip install --upgrade pip pyinstaller
+      - name: Install PyInstaller + pywebview
+        run: python -m pip install --upgrade pip pyinstaller pywebview
 
-      - name: Install Tk (Linux)
+      - name: Install WebKitGTK for pywebview (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y python3-tk
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-gi gir1.2-gtk-3.0 gir1.2-webkit2-4.1 libgirepository1.0-dev
 
       - name: Install appimagetool (Linux)
         if: runner.os == 'Linux'

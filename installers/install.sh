@@ -90,8 +90,8 @@ VPY="$ROOT/.venv/bin/python"
 
 # 4. dependencies ------------------------------------------------------------
 echo "[4/8] Installing dependencies (a few minutes on first run) …"
-"$VPY" -m pip install --upgrade pip >/dev/null
-"$VPY" -m pip install -r namma_agent/requirements.txt
+"$VPY" -m pip install --upgrade pip --no-cache-dir >/dev/null
+"$VPY" -m pip install --no-cache-dir -r namma_agent/requirements.txt
 
 # 5. web UI ------------------------------------------------------------------
 if [ -f namma_agent/webui/dist/index.html ]; then
