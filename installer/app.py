@@ -17,6 +17,7 @@ import json
 import os
 import platform
 import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -73,9 +74,20 @@ class Bridge:
 
     def __init__(self):
         self.window = None  # set by main() after the window is created
+        # Progress events are COALESCED through a single timed flusher. Each
+        # window.evaluate_js() is a synchronous round-trip marshalled onto the
+        # WebView2 UI thread; firing one per log line / step update floods that
+        # thread and Windows shows the window as "not responding" until it drains.
+        # Batching to ~5 Hz keeps the message pump responsive throughout the install.
+        self._lock = threading.Lock()
+        self._pending_steps = None   # latest snapshot wins (intermediates droppable)
+        self._pending_logs: list[str] = []
+        self._flusher_on = False
+        self._stop = False
 
     # ── outbound events → JS ────────────────────────────────────────────────
-    def _push(self, event: str, payload) -> None:
+    def _evaluate(self, event: str, payload) -> None:
+        """One marshalled call into the page. Best-effort (UI may be navigating)."""
         if self.window is None:
             return
         try:
@@ -83,8 +95,43 @@ class Bridge:
                 f"window.__installer && window.__installer.{event} "
                 f"&& window.__installer.{event}({json.dumps(payload)})"
             )
-        except Exception:  # noqa: BLE001 — UI may be navigating; events are best-effort
+        except Exception:  # noqa: BLE001
             pass
+
+    def _ensure_flusher(self) -> None:
+        if self._flusher_on:
+            return
+        self._flusher_on = True
+        threading.Thread(target=self._flush_loop, daemon=True).start()
+
+    def _flush_loop(self) -> None:
+        while not self._stop:
+            time.sleep(0.2)
+            self._flush()
+
+    def _flush(self) -> None:
+        with self._lock:
+            steps, logs = self._pending_steps, self._pending_logs
+            self._pending_steps, self._pending_logs = None, []
+        if steps is not None:
+            self._evaluate("onSteps", steps)
+        if logs:
+            self._evaluate("onLog", logs)  # batched array → React appends all
+
+    def _queue_steps(self, steps) -> None:
+        with self._lock:
+            self._pending_steps = steps
+        self._ensure_flusher()
+
+    def _queue_log(self, line: str) -> None:
+        with self._lock:
+            self._pending_logs.append(line)
+        self._ensure_flusher()
+
+    def _push_now(self, event: str, payload) -> None:
+        """Flush any backlog, then deliver a terminal event immediately."""
+        self._flush()
+        self._evaluate(event, payload)
 
     # ── inbound calls ← JS ──────────────────────────────────────────────────
     def get_defaults(self) -> dict:
@@ -119,18 +166,21 @@ class Bridge:
     def start_install(self, install_dir: Optional[str]) -> None:
         """Kick off bootstrap on a worker thread; progress arrives via events."""
         target = core.resolve_install_dir(install_dir)
+        self._stop = False
         reporter = core.StepReporter(
             core.INSTALL_STEPS,
-            on_update=lambda steps: self._push("onSteps", steps),
-            on_log=lambda line: self._push("onLog", line),
+            on_update=self._queue_steps,
+            on_log=self._queue_log,
         )
 
         def work():
             try:
                 core.bootstrap(target, reporter)
-                self._push("onInstallDone", {"install_dir": str(target)})
+                self._push_now("onInstallDone", {"install_dir": str(target)})
             except Exception as exc:  # noqa: BLE001
-                self._push("onInstallError", str(exc))
+                self._push_now("onInstallError", str(exc))
+            finally:
+                self._stop = True  # let the flusher thread exit
 
         threading.Thread(target=work, daemon=True).start()
 

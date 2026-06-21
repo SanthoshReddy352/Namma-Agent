@@ -41,7 +41,9 @@ export default function App() {
     ready().then(() => load());
     onEvents({
       onSteps: (s) => setSteps(s),
-      onLog: (line) => setLog((l) => [...l, line]),
+      // Python batches log lines into an array (to avoid flooding the UI thread);
+      // still accept a lone string from the browser dev-mock.
+      onLog: (lines) => setLog((l) => [...l, ...(Array.isArray(lines) ? lines : [lines])]),
       onInstallDone: () => setScreen("provider"),
       onInstallError: (msg) => setError(msg || "Install failed."),
     });
