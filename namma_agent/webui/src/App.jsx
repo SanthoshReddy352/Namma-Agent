@@ -8,6 +8,7 @@ import PasswordPrompt from "./components/PasswordPrompt.jsx";
 import ImageViewer from "./components/ImageViewer.jsx";
 import UpdateBanner from "./components/UpdateBanner.jsx";
 import { installClipboardShortcuts } from "./clipboard.js";
+import { setNotifyAppName } from "./notify.js";
 import ChatView from "./views/ChatView.jsx";
 import ProjectsView from "./views/ProjectsView.jsx";
 import ProjectDetailView from "./views/ProjectDetailView.jsx";
@@ -20,14 +21,19 @@ import LearningDetailView from "./views/LearningDetailView.jsx";
 function Shell() {
   const namma_agent = useNammaAgent();
   const {
-    approval, respondApproval, passwordReq, respondPassword, shuttingDown,
+    passwordReq, respondPassword, shuttingDown,
     sessions, newChat, openSession, removeSession,
   } = namma_agent;
 
   const [config, setConfig] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  const [theme, setTheme] = useState(localStorage.getItem("namma-theme") || "light");
+  // Theme = a named palette (default|slate|classic|mono) × light/dark mode. Migrate
+  // the old binary "namma-theme" (light|dark) → mode, defaulting the palette.
+  const [themeName, setThemeName] = useState(localStorage.getItem("namma-theme-name") || "default");
+  const [dark, setDark] = useState(
+    (localStorage.getItem("namma-theme-mode") || localStorage.getItem("namma-theme") || "light") === "dark");
+  const theme = dark ? "dark" : "light"; // kept for components reading a string mode
   const [projects, setProjects] = useState([]);
   const [confirmReq, setConfirmReq] = useState(null); // {message, confirmLabel, resolve}
   const navigate = useNavigate();
@@ -64,11 +70,18 @@ function Shell() {
       }
     });
   }, []);
-  useEffect(() => { document.title = assistantName; }, [assistantName]);
+  useEffect(() => { document.title = assistantName; setNotifyAppName(assistantName); }, [assistantName]);
   useEffect(() => {
-    document.documentElement.classList.toggle("dark", theme === "dark");
-    localStorage.setItem("namma-theme", theme);
-  }, [theme]);
+    const el = document.documentElement;
+    // One theme class + the dark flag (e.g. "theme-slate dark"); strip any prior theme-*.
+    el.classList.forEach((c) => c.startsWith("theme-") && el.classList.remove(c));
+    el.classList.add(`theme-${themeName}`);
+    el.classList.toggle("dark", dark);
+    localStorage.setItem("namma-theme-name", themeName);
+    localStorage.setItem("namma-theme-mode", dark ? "dark" : "light");
+  }, [themeName, dark]);
+
+  const toggleDark = () => setDark((d) => !d);
 
   if (shuttingDown) {
     return (
@@ -83,7 +96,7 @@ function Shell() {
   }
 
   const ctx = {
-    ...namma_agent, config, assistantName, theme, setTheme, projects, refreshProjects, confirmAction,
+    ...namma_agent, config, assistantName, theme, themeName, dark, setThemeName, toggleDark, projects, refreshProjects, confirmAction,
     openChat: (id) => { openSession(id); navigate("/"); },
     openSettings: () => setShowSettings(true),
   };
@@ -108,20 +121,8 @@ function Shell() {
         <Outlet context={ctx} />
       </div>
 
-      {approval && (
-        <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4">
-          <div className="w-[420px] max-w-full rounded-2xl bg-paper-panel dark:bg-night-panel border border-line dark:border-night-line shadow-pop p-5 animate-rise">
-            <h3 className="font-serif text-lg mb-1">Approve action?</h3>
-            <p className="text-ink-soft dark:text-night-faint text-sm mb-2">{assistantName} wants to run a sensitive tool:</p>
-            <div className="font-mono text-brand-deep text-sm mb-2">{approval.tool}</div>
-            <pre className="text-[12px] bg-paper-soft dark:bg-night rounded-lg p-3 overflow-auto max-h-40 text-ink-soft dark:text-night-faint">{JSON.stringify(approval.args, null, 2)}</pre>
-            <div className="flex justify-end gap-2 mt-4">
-              <button onClick={() => respondApproval(false)} className="px-4 py-2 rounded-lg text-ink-soft dark:text-night-ink hover:bg-paper-soft dark:hover:bg-night-soft">Deny</button>
-              <button onClick={() => respondApproval(true)} className="px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep">Approve</button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Tool approval is no longer a global modal — it renders inline in the chat's
+          activity timeline (Hermes-style), handled in Timeline/Activity. */}
 
       {confirmReq && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={() => resolveConfirm(false)}>
@@ -144,7 +145,8 @@ function Shell() {
 
       {showSettings && (
         <Settings onClose={() => setShowSettings(false)} theme={theme}
-                  onThemeToggle={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
+                  onThemeToggle={toggleDark}
+                  themeName={themeName} onThemeNameChange={setThemeName}
                   onModelsChanged={() => namma_agent.reloadConfiguredModels?.()}
                   onAssistantNameChanged={(n) => {
                     setAssistantName(n);

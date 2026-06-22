@@ -52,7 +52,10 @@ class NammaAgentService:
         db_path = (self.config.get("database") or {}).get("path", "data/namma_agent.db")
 
         self.db = db or Database(db_path)
-        self.registry = registry or ToolRegistry()
+        # Tools the user turned off in the Toolsets tab (config.local.yaml:
+        # tools.disabled) are excluded from every turn and refused if called.
+        disabled_tools = (self.config.get("tools") or {}).get("disabled") or []
+        self.registry = registry or ToolRegistry(disabled=disabled_tools)
         self.memory_notes = self._build_memory_notes(self.config)
         # Deterministic post-turn fact capture (the model rarely calls
         # remember_fact itself). On by default; memory.auto_capture: false disables.
@@ -61,11 +64,14 @@ class NammaAgentService:
             self.db,
             enabled=bool((self.config.get("memory") or {}).get("auto_capture", True)),
         )
-        register_memory_tools(self.registry, self.db, notes=self.memory_notes)
-        register_project_tools(self.registry, self.db)
-        register_learning_tools(self.registry, self.db,
-                                get_comms=lambda: getattr(self, "comms", None),
-                                config=self.config)
+        with self.registry.categorize("memory"):
+            register_memory_tools(self.registry, self.db, notes=self.memory_notes)
+        with self.registry.categorize("memory"):
+            register_project_tools(self.registry, self.db)
+        with self.registry.categorize("learning"):
+            register_learning_tools(self.registry, self.db,
+                                    get_comms=lambda: getattr(self, "comms", None),
+                                    config=self.config)
         # Auto-discover capability tools (file/shell/system/apps/...). Skipped
         # when a registry is injected (tests provide their own minimal set).
         self.mcp = None
@@ -74,7 +80,8 @@ class NammaAgentService:
 
             load_tools(self.registry)
             # Wave 5: connect configured MCP servers and register their tools.
-            self.mcp = self._build_mcp(self.config, self.registry)
+            with self.registry.categorize("mcp"):
+                self.mcp = self._build_mcp(self.config, self.registry)
         self.provider = provider or from_config(self.config)
         # Named provider connections (the "Providers" tab) + switchable model
         # profiles (the "Models" tab). A turn can run on any model profile, whose
@@ -90,7 +97,8 @@ class NammaAgentService:
         # Skills (procedural memory / learning loop, ported from hermes-agent).
         self.skills = self._build_skills(self.config)
         if registry is None and self.skills is not None:
-            register_skill_tools(self.registry, self.skills)
+            with self.registry.categorize("skills"):
+                register_skill_tools(self.registry, self.skills)
 
         # Exit tool: lets the agent close Namma Agent cleanly when the user says bye.
         if registry is None:
@@ -122,7 +130,8 @@ class NammaAgentService:
         # Wave 4: delegate_task + persona tools need the live agent/provider/db.
         # Skipped when a registry is injected (tests provide their own minimal set).
         if registry is None:
-            register_agent_tools(self.registry, self.agent, self.provider, self.db)
+            with self.registry.categorize("agent"):
+                register_agent_tools(self.registry, self.agent, self.provider, self.db)
 
         # Wave 5: messaging channels (Telegram/Discord). Outbound send is always
         # available; the Telegram *inbound* bridge spawns a background polling
@@ -132,15 +141,11 @@ class NammaAgentService:
         comms_cfg = self.config.get("comms") or {}
         # Inbound defaults ON when a bot token is configured (so Telegram actually
         # replies); set comms.inbound_enabled false to disable the polling thread.
+        # The gateway can also be started/stopped at runtime from Settings via
+        # start_comms() / stop_comms().
         if (self.comms is not None and comms_cfg.get("inbound_enabled", True)
-                and self.comms.telegram.available):
-            def _tg_turn(text, session_id, mode, askpass=None, model=None):
-                res = self.run_turn(text, session_id=session_id, mode=mode,
-                                    askpass=askpass, model_id=model)
-                return res.content, res.session_id
-
-            self.comms.start_inbound(_tg_turn, name=self.persona.name,
-                                     get_models=self.configured_models)
+                and self.comms.any_available):
+            self.start_comms()
 
         # Wave 5: the reminder runner is a background polling thread, so it is
         # OPT-IN too (config scheduler.run_in_background, default off). When off,
@@ -189,6 +194,7 @@ class NammaAgentService:
             return SkillStore(
                 user_dir=cfg.get("user_dir"),
                 allow_inline_shell=bool(cfg.get("allow_inline_shell", False)),
+                disabled=cfg.get("disabled") or [],
             )
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
@@ -237,6 +243,41 @@ class NammaAgentService:
             return CommsManager()
         except Exception:  # noqa: BLE001
             return None
+
+    def _channel_turn(self, text, session_id, mode, askpass=None, model=None):
+        """The inbound bridge's per-message callback: run one turn and hand back
+        the reply + (possibly new) session id."""
+        res = self.run_turn(text, session_id=session_id, mode=mode,
+                            askpass=askpass, model_id=model)
+        return res.content, res.session_id
+
+    def comms_status(self) -> dict:
+        """Gateway state for the Settings UI. ``configured`` is False when comms
+        couldn't be built at all (so the UI can hide the controls)."""
+        if self.comms is None:
+            return {"configured": False, "running": False, "available": [],
+                    "polling": [], "webhooks": []}
+        return {"configured": True, **self.comms.status()}
+
+    def start_comms(self) -> dict:
+        """Start (or restart) the inbound comms gateway. Rebuilds channels from the
+        current environment first so credentials saved in Settings take effect
+        without an app restart. Returns the resulting status."""
+        if self.comms is None:
+            return self.comms_status()
+        self.comms.reload()
+        if not self.comms.any_available:
+            return {**self.comms_status(),
+                    "error": "No channels are configured. Add a token in Settings → Messaging first."}
+        self.comms.start_inbound(self._channel_turn, name=self.persona.name,
+                                 get_models=self.configured_models)
+        return self.comms_status()
+
+    def stop_comms(self) -> dict:
+        """Stop the inbound comms gateway (outbound notifications still work)."""
+        if self.comms is not None:
+            self.comms.stop()
+        return self.comms_status()
 
     # -- voice -------------------------------------------------------------
 
@@ -294,6 +335,7 @@ class NammaAgentService:
                 "properties": {"farewell": {"type": "string", "description": "a short goodbye line"}},
             },
             handler=exit_namma,
+            category="system",
         )
 
     # -- shutdown ----------------------------------------------------------
@@ -700,6 +742,74 @@ class NammaAgentService:
         self._model_providers = {}
         return self.configured_models()
 
+    # -- skills (Settings → Skills tab) ------------------------------------
+
+    def skills_detail(self) -> list[dict]:
+        """Every skill, for the Skills tab: enabled flag, source, category, and
+        prerequisite/support info so the UI can badge what's ready vs. needs setup."""
+        if self.skills is None:
+            return []
+        out = []
+        for s in self.skills.all():
+            out.append({
+                "name": s.name,
+                "description": s.one_line(220),
+                "category": s.category or "general",
+                "source": s.source,
+                "tags": s.tags,
+                "enabled": s.enabled,
+                "supported": s.supported,
+                "requires": s.requires_text(),
+                "missing": s.missing(),
+            })
+        return out
+
+    def set_skill_enabled(self, name: str, enabled: bool) -> dict:
+        """Toggle a skill and persist the disabled-set to config.local.yaml so the
+        choice survives restarts. Takes effect on the next turn (catalog rebuilt)."""
+        if self.skills is None:
+            return {"ok": False, "error": "skills unavailable"}
+        skill = self.skills.set_enabled(name, enabled)
+        if skill is None:
+            return {"ok": False, "error": f"no skill named {name!r}"}
+        from namma_agent.config import update_config
+
+        disabled = self.skills.disabled_names()
+        self.config = update_config({"skills": {"disabled": disabled}})
+        return {"ok": True, "name": skill.name, "enabled": skill.enabled,
+                "disabled": disabled}
+
+    # -- toolsets (Settings → Toolsets tab) --------------------------------
+
+    def tools_detail(self) -> list[dict]:
+        """Every tool, grouped by toolset, with enabled/destructive flags for the
+        Toolsets tab."""
+        return self.registry.detail()
+
+    def set_tool_enabled(self, name: str, enabled: bool) -> dict:
+        """Toggle a single tool and persist the disabled-set to config.local.yaml so
+        the choice survives restarts. Takes effect on the next turn."""
+        tool = self.registry.set_enabled(name, enabled)
+        if tool is None:
+            return {"ok": False, "error": f"no tool named {name!r}"}
+        return {"ok": True, "name": tool.name, "enabled": tool.enabled,
+                **self._persist_disabled_tools()}
+
+    def set_toolset_enabled(self, category: str, enabled: bool) -> dict:
+        """Toggle every tool in a toolset at once and persist."""
+        changed = self.registry.set_category_enabled(category, enabled)
+        if not changed:
+            return {"ok": False, "error": f"no toolset named {category!r}"}
+        return {"ok": True, "category": category, "enabled": enabled,
+                "count": len(changed), **self._persist_disabled_tools()}
+
+    def _persist_disabled_tools(self) -> dict:
+        from namma_agent.config import update_config
+
+        disabled = self.registry.disabled_names()
+        self.config = update_config({"tools": {"disabled": disabled}})
+        return {"disabled": disabled}
+
     def apply_config(self, config: Optional[dict] = None) -> dict:
         """Make provider / model / API-key edits take effect WITHOUT a restart.
 
@@ -731,6 +841,9 @@ class NammaAgentService:
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
             logger.warning("[settings] persona rebuild failed; keeping previous: %s", exc)
+        # Auto mode is read once at boot (see __init__); re-read it here so toggling
+        # it in Settings → Behavior takes effect on the very next turn, no restart.
+        self.auto_approve = bool((self.config.get("conversation") or {}).get("auto_approve", False))
         self._providers = {p["id"]: p for p in configured_providers(self.config)}
         self._model_profiles = {m["id"]: m for m in configured_models(self.config)}
         self._model_providers = {}

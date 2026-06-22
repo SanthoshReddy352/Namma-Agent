@@ -16,7 +16,7 @@ class FakeProvider:
         self._payload = payload
         self.calls = 0
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         self.calls += 1
         return LLMResponse(content=json.dumps(self._payload))
 

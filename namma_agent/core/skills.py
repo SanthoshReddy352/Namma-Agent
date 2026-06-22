@@ -32,7 +32,9 @@ opt-in), matching hermes.
 """
 from __future__ import annotations
 
+import os
 import re
+import shutil
 import subprocess
 import sys
 from dataclasses import dataclass, field
@@ -69,10 +71,37 @@ class Skill:
     category: str = ""
     tags: list[str] = field(default_factory=list)
     source: str = "bundled"  # bundled | user
+    # Prerequisites declared in frontmatter (hermes format): external CLIs the
+    # skill drives and env vars it needs. Used to compute `supported`/`missing`.
+    requires_commands: list[str] = field(default_factory=list)
+    requires_env: list[str] = field(default_factory=list)
+    enabled: bool = True  # set by the store from the persisted disabled-set
 
     def one_line(self, width: int = 200) -> str:
         desc = " ".join(self.description.split())
         return desc if len(desc) <= width else desc[: width - 1] + "…"
+
+    # -- support / requirements ------------------------------------------------
+
+    def missing(self) -> list[str]:
+        """Unmet prerequisites: CLIs not on PATH + env vars not set. Empty ⇒ ready."""
+        gaps: list[str] = []
+        for cmd in self.requires_commands:
+            if not shutil.which(cmd):
+                gaps.append(f"`{cmd}` (command not found)")
+        for var in self.requires_env:
+            if not os.environ.get(var):
+                gaps.append(f"${var} (env var not set)")
+        return gaps
+
+    @property
+    def supported(self) -> bool:
+        """True when every declared prerequisite is satisfied on this machine."""
+        return not self.missing()
+
+    def requires_text(self) -> list[str]:
+        """Human-readable requirement labels for the UI (always shown, met or not)."""
+        return [f"`{c}`" for c in self.requires_commands] + [f"${v}" for v in self.requires_env]
 
 
 # ── Frontmatter parsing (ported from hermes skill_utils.parse_frontmatter) ──
@@ -145,9 +174,14 @@ class SkillStore:
         *,
         allow_inline_shell: bool = False,
         extra_dirs: Optional[list[Path]] = None,
+        disabled: Optional[list[str]] = None,
     ):
         self.user_dir = Path(user_dir or "~/.namma_agent/skills").expanduser()
         self.allow_inline_shell = allow_inline_shell
+        # Names the user turned off in the Skills tab — excluded from the agent's
+        # catalog and refused by use_skill, but still listed in the UI so they can
+        # be re-enabled. Persisted by the caller (config.local.yaml: skills.disabled).
+        self._disabled: set[str] = {str(n).strip().lower() for n in (disabled or [])}
         # Later roots win on name collisions, so user/learned skills override bundled.
         self._roots: list[Path] = [_BUNDLED_DIR, *(extra_dirs or []), self.user_dir]
         self._skills: dict[str, Skill] = {}
@@ -166,6 +200,7 @@ class SkillStore:
                     continue
                 skill = self._load_one(md, source)
                 if skill and self._for_this_platform(skill):
+                    skill.enabled = skill.name.strip().lower() not in self._disabled
                     found[skill.name] = skill
         self._skills = found
         logger.debug("[skills] discovered %d skill(s)", len(found))
@@ -188,6 +223,9 @@ class SkillStore:
         hermes = (meta.get("hermes") or {}) if isinstance(meta, dict) else {}
         tags = hermes.get("tags") or fm.get("tags") or []
         platforms = fm.get("platforms") or []
+        prereq = fm.get("prerequisites") or {}
+        cmds = prereq.get("commands") if isinstance(prereq, dict) else []
+        envs = prereq.get("env_vars") if isinstance(prereq, dict) else []
         return Skill(
             name=name,
             description=str(fm.get("description") or "").strip(),
@@ -197,6 +235,8 @@ class SkillStore:
             category=str(fm.get("category") or "").strip(),
             tags=[str(t) for t in tags] if isinstance(tags, list) else [],
             source=source,
+            requires_commands=[str(c) for c in cmds] if isinstance(cmds, list) else [],
+            requires_env=[str(v) for v in envs] if isinstance(envs, list) else [],
         )
 
     # -- access ------------------------------------------------------------
@@ -207,16 +247,37 @@ class SkillStore:
     def get(self, name: str) -> Optional[Skill]:
         return self._skills.get(name) or self._skills.get(name.strip().lower())
 
-    def catalog_text(self, limit: int = 60) -> str:
-        skills = self.all()[:limit]
+    def catalog_text(self, limit: int = 250) -> str:
+        """Skill catalog for the agent's system prompt. Only skills the user has
+        left **enabled** and whose prerequisites are **satisfied** here are shown —
+        no point advertising a Notion skill when ``$NOTION_API_KEY`` isn't set."""
+        skills = [s for s in self.all() if s.enabled and s.supported][:limit]
         if not skills:
             return ""
         lines = [f"- {s.name}: {s.one_line(160)}" for s in skills]
         return "\n".join(lines)
 
-    def render(self, name: str, session_id: Optional[str] = None) -> Optional[str]:
+    def set_enabled(self, name: str, enabled: bool) -> Optional[Skill]:
+        """Turn a skill on/off in memory and return it. Persistence (the
+        ``skills.disabled`` list in config) is the caller's job."""
         skill = self.get(name)
         if not skill:
+            return None
+        key = skill.name.strip().lower()
+        if enabled:
+            self._disabled.discard(key)
+        else:
+            self._disabled.add(key)
+        skill.enabled = enabled
+        return skill
+
+    def disabled_names(self) -> list[str]:
+        """The current disabled-set, sorted — what the caller persists to config."""
+        return sorted(self._disabled)
+
+    def render(self, name: str, session_id: Optional[str] = None) -> Optional[str]:
+        skill = self.get(name)
+        if not skill or not skill.enabled:
             return None
         text = _substitute_vars(skill.body, skill.directory, session_id)
         if self.allow_inline_shell:

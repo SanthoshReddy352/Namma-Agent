@@ -74,6 +74,9 @@ Write-Host "      Using $(& $PyHead @PyTail --version)"
 Write-Host "[2/8] Ensuring Git + Node.js ..."
 Ensure-Tool "git" "Git.Git" "git" "Git" | Out-Null
 Ensure-Tool "npm" "OpenJS.NodeJS.LTS" "nodejs-lts" "Node.js" | Out-Null
+# Optional tools (richer search/media; the app degrades gracefully without them).
+Ensure-Tool "rg" "BurntSushi.ripgrep.MSVC" "ripgrep" "ripgrep" | Out-Null
+Ensure-Tool "ffmpeg" "Gyan.FFmpeg" "ffmpeg" "ffmpeg" | Out-Null
 
 # 3. virtual environment -----------------------------------------------------
 $VenvPy = Join-Path $Root ".venv\Scripts\python.exe"
@@ -129,6 +132,27 @@ if ($NoShortcut) {
         } catch { Write-Host "      (could not create shortcut in $dir)" }
     }
     Write-Host "      Shortcut 'Namma Agent' added to Desktop + Start Menu."
+}
+
+# 7b. `namma` command on PATH (so you can run `namma`, `namma --chat`, `namma --server`).
+$BinDir = Join-Path $Root "bin"
+New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
+$PyW = Join-Path $Root ".venv\Scripts\pythonw.exe"
+$Py  = $VenvPy
+$cmd = "@echo off`r`n" +
+       "if `"%~1`"==`"`" (`r`n" +
+       "  start `"`" `"$PyW`" -m namma_agent`r`n" +
+       ") else (`r`n" +
+       "  `"$Py`" -m namma_agent %*`r`n" +
+       ")`r`n"
+Set-Content -Path (Join-Path $BinDir "namma.cmd") -Value $cmd -Encoding ASCII
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (-not $userPath) { $userPath = "" }
+if (($userPath -split ';') -notcontains $BinDir) {
+    [Environment]::SetEnvironmentVariable("Path", ($userPath.TrimEnd(';') + ';' + $BinDir).TrimStart(';'), "User")
+    Write-Host "      Added the 'namma' command to your PATH (open a new terminal to use it)."
+} else {
+    Write-Host "      The 'namma' command is on your PATH."
 }
 
 # 8. launch ------------------------------------------------------------------

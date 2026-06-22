@@ -1,4 +1,5 @@
 import { useState } from "react";
+import Activity from "./Activity.jsx";
 import Logo from "./Logo.jsx";
 import Markdown from "./Markdown.jsx";
 import ReadAloud from "./ReadAloud.jsx";
@@ -38,10 +39,13 @@ function TurnStats({ meta }) {
   if (typeof meta.ttft === "number") bits.push(`${meta.ttft.toFixed(1)}s to first token`);
   if (meta.tokens) bits.push(`${meta.tokens.toLocaleString()} tokens`);
   if (!bits.length) return null;
-  return <span title="Time to first token · total tokens for this request">· {bits.join(" · ")}</span>;
+  const tip = meta.cached
+    ? `Time to first token · new tokens billed this request (fresh input + output); ${meta.cached.toLocaleString()} more re-read from cache`
+    : "Time to first token · total tokens for this request";
+  return <span title={tip}>· {bits.join(" · ")}</span>;
 }
 
-export default function Message({ role, content, tools, attachments, at, meta }) {
+export default function Message({ role, content, attachments, at, meta, steps }) {
   const isUser = role === "user";
   const isError = role === "error";
   const time = fmtTime(at);
@@ -73,6 +77,7 @@ export default function Message({ role, content, tools, attachments, at, meta })
     <div className="group flex gap-3 animate-rise">
       <div className="mt-0.5 h-7 w-7 shrink-0 grid place-items-center"><Logo size={26} /></div>
       <div className="flex-1 min-w-0">
+        {!isError && steps?.length > 0 && <Activity items={steps} />}
         {isError ? (
           <div className="text-[15px] text-brand-deep bg-brand-wash border border-brand-soft/50 rounded-xl px-3 py-2">
             {content}
@@ -86,7 +91,6 @@ export default function Message({ role, content, tools, attachments, at, meta })
           {content && !isError && <ReadAloud text={content} />}
           {content && !isError && <CopyButton text={content} />}
           {time && <span>{time}</span>}
-          {tools?.length > 0 && <span>· used: {tools.join(", ")}</span>}
           <TurnStats meta={meta} />
         </div>
       </div>

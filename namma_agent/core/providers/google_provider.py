@@ -12,7 +12,7 @@ from typing import Optional
 
 from namma_agent.core.logger import logger
 
-from .base import LLMResponse, Provider, ProviderError, TokenCallback, ToolCall
+from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback, ToolCall
 
 
 class GoogleProvider(Provider):
@@ -104,6 +104,7 @@ class GoogleProvider(Provider):
         tools: Optional[list[dict]] = None,
         stream: bool = False,
         on_token: Optional[TokenCallback] = None,
+        on_thinking: Optional[ThinkingCallback] = None,
     ) -> LLMResponse:
         from google import genai
 
@@ -116,7 +117,7 @@ class GoogleProvider(Provider):
         for attempt in range(self.max_retries):
             try:
                 if stream:
-                    return self._generate_stream(client, contents, config, on_token)
+                    return self._generate_stream(client, contents, config, on_token, on_thinking)
                 resp = client.models.generate_content(
                     model=self.model, contents=contents, config=config
                 )
@@ -143,25 +144,51 @@ class GoogleProvider(Provider):
                     args = dict(fc.args) if fc.args else {}
                     tool_calls.append(ToolCall(id=f"{fc.name}_{i}", name=fc.name, args=args))
         usage = getattr(resp, "usage_metadata", None)
+        prompt = (getattr(usage, "prompt_token_count", 0) or 0) if usage else 0
+        cached = (getattr(usage, "cached_content_token_count", 0) or 0) if usage else 0
         return LLMResponse(
             content="".join(content_parts),
             tool_calls=tool_calls,
             usage={
-                "input_tokens": getattr(usage, "prompt_token_count", 0) if usage else 0,
-                "output_tokens": getattr(usage, "candidates_token_count", 0) if usage else 0,
+                # prompt_token_count includes the cached prefix — split it out so it
+                # isn't billed twice as fresh input.
+                "input_tokens": max(prompt - cached, 0),
+                "output_tokens": (getattr(usage, "candidates_token_count", 0) or 0) if usage else 0,
+                "cache_read_tokens": cached,
             },
             provider=self.name,
             model=self.model,
             raw=resp,
         )
 
-    def _generate_stream(self, client, contents, config, on_token: Optional[TokenCallback]) -> LLMResponse:
+    def _generate_stream(self, client, contents, config, on_token: Optional[TokenCallback],
+                         on_thinking: Optional[ThinkingCallback] = None) -> LLMResponse:
         last = None
         for chunk in client.models.generate_content_stream(
             model=self.model, contents=contents, config=config
         ):
             last = chunk
-            if on_token and getattr(chunk, "text", None):
+            # When thinking is enabled, Gemini marks reasoning parts with
+            # ``part.thought``; route those to the thinking channel and the rest to
+            # the answer. Best-effort + guarded so a parts-shape change can't break
+            # the stream (falls back to the plain ``chunk.text`` path).
+            routed = False
+            if on_thinking:
+                try:
+                    cand = (getattr(chunk, "candidates", None) or [None])[0]
+                    parts = getattr(getattr(cand, "content", None), "parts", None) or []
+                    for part in parts:
+                        text = getattr(part, "text", None)
+                        if not text:
+                            continue
+                        routed = True
+                        if getattr(part, "thought", False):
+                            on_thinking(text)
+                        elif on_token:
+                            on_token(text)
+                except Exception:  # noqa: BLE001
+                    routed = False
+            if not routed and on_token and getattr(chunk, "text", None):
                 on_token(chunk.text)
         # The streamed chunks accumulate; parse the final aggregate where the
         # SDK exposes it, else fall back to the last chunk.

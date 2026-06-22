@@ -737,10 +737,14 @@ def register_skill_tools(registry: ToolRegistry, store) -> None:
     later with ``update_skill``). All of it is visible in the tool timeline."""
 
     def list_skills(_args: dict) -> ToolResult:
-        skills = store.all()
+        # Only the skills the user left enabled are usable; don't advertise the rest.
+        skills = [s for s in store.all() if s.enabled]
         if not skills:
-            return ToolResult(ok=True, content="No skills installed yet.")
-        lines = [f"- {s.name} [{s.source}]: {s.one_line(180)}" for s in skills]
+            return ToolResult(ok=True, content="No skills enabled.")
+        lines = []
+        for s in skills:
+            miss = "" if s.supported else f" — needs {', '.join(s.missing())}"
+            lines.append(f"- {s.name} [{s.source}]: {s.one_line(180)}{miss}")
         return ToolResult(ok=True, content="Available skills:\n" + "\n".join(lines),
                           data={"skills": [s.name for s in skills]})
 
@@ -748,9 +752,13 @@ def register_skill_tools(registry: ToolRegistry, store) -> None:
         name = (args.get("name") or "").strip()
         if not name:
             return ToolResult(ok=False, content="", error="'name' is required")
+        existing = store.get(name)
+        if existing is not None and not existing.enabled:
+            return ToolResult(ok=False, content="",
+                              error=f"skill {name!r} is disabled (turn it on in Settings → Skills)")
         body = store.render(name)
         if body is None:
-            avail = ", ".join(s.name for s in store.all()) or "(none)"
+            avail = ", ".join(s.name for s in store.all() if s.enabled) or "(none)"
             return ToolResult(ok=False, content="",
                               error=f"no skill named {name!r}. Available: {avail}")
         return ToolResult(ok=True, content=body)

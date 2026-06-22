@@ -20,7 +20,7 @@ class ScriptedProvider(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         resp = self._responses.pop(0)
         if stream and on_token and resp.content:
             on_token(resp.content)
@@ -63,7 +63,59 @@ def test_rest_tools_and_persona():
     client = TestClient(app)
     tools = client.get("/api/tools").json()["tools"]
     assert any(t["name"] == "recall_facts" for t in tools)
+    # Detail shape feeds the Toolsets tab.
+    one = next(t for t in tools if t["name"] == "recall_facts")
+    assert {"category", "enabled", "destructive"} <= set(one)
     assert client.post("/api/persona", json={"id": "core"}).json()["persona"] == "core"
+
+
+def test_rest_tool_toggle(monkeypatch):
+    """Toggling a tool flips its enabled flag, drops it from the agent's defs, and
+    persists the disabled-set (persistence stubbed so the repo isn't touched)."""
+    import namma_agent.config as cfgmod
+
+    reg = ToolRegistry()
+    reg.register("echo", "echo", {"type": "object", "properties": {}}, lambda a: "ok",
+                 category="demo")
+    svc = _service([LLMResponse(content="hi")], registry=reg)
+    saved = {}
+    monkeypatch.setattr(cfgmod, "update_config",
+                        lambda updates, path=None: saved.update(updates) or svc.config)
+    client = TestClient(create_app(svc))
+
+    r = client.post("/api/tools/toggle", json={"name": "echo", "enabled": False}).json()
+    assert r["ok"] and r["enabled"] is False and r["disabled"] == ["echo"]
+    assert saved == {"tools": {"disabled": ["echo"]}}
+    # Gone from the agent's tool defs, refused if called.
+    assert "echo" not in {d["name"] for d in reg.definitions()}
+    assert not reg.execute("echo", {}).ok
+    # Still listed (disabled) for the UI.
+    tools = client.get("/api/tools").json()["tools"]
+    assert any(t["name"] == "echo" and t["enabled"] is False for t in tools)
+    # And back on.
+    r = client.post("/api/tools/toggle", json={"name": "echo", "enabled": True}).json()
+    assert r["ok"] and r["enabled"] is True and r["disabled"] == []
+
+
+def test_rest_toolset_toggle(monkeypatch):
+    import namma_agent.config as cfgmod
+
+    reg = ToolRegistry()
+    with reg.categorize("demo"):
+        reg.register("a", "d", {}, lambda x: "")
+        reg.register("b", "d", {}, lambda x: "")
+    reg.register("c", "d", {}, lambda x: "", category="other")
+    svc = _service([LLMResponse(content="hi")], registry=reg)
+    monkeypatch.setattr(cfgmod, "update_config", lambda updates, path=None: svc.config)
+    client = TestClient(create_app(svc))
+
+    r = client.post("/api/toolset/toggle", json={"category": "demo", "enabled": False}).json()
+    assert r["ok"] and r["count"] == 2 and r["disabled"] == ["a", "b"]
+    defs = {d["name"] for d in reg.definitions()}
+    assert "a" not in defs and "b" not in defs and "c" in defs
+
+    bad = client.post("/api/toolset/toggle", json={"category": "ghost", "enabled": False}).json()
+    assert not bad["ok"]
 
 
 # -- WebSocket -------------------------------------------------------------
@@ -159,7 +211,7 @@ class EchoProvider(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         if stream and on_token:
             on_token(user)

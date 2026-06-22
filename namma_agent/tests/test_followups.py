@@ -20,7 +20,7 @@ class _ToolThenDone(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         self.calls += 1
         if self.calls <= self.rounds:
             return LLMResponse(content="", tool_calls=[ToolCall(id=str(self.calls), name="ping", args={})])
@@ -111,3 +111,35 @@ def test_auto_approve_bypasses_prompt():
     # approval returns False — but auto_approve must override and still run the tool.
     svc.run_turn("do danger", approval=lambda *_: False)
     assert hits["ran"] is True
+
+
+def test_auto_approve_toggle_applies_live_via_apply_config():
+    """Turning auto mode OFF in Settings must take effect on the NEXT turn without a
+    restart: apply_config re-reads conversation.auto_approve (the bug was that it
+    only rebuilt the provider/persona and left the cached flag stale)."""
+    from namma_agent.service import NammaAgentService
+    from namma_agent.tests.test_server import ScriptedProvider
+    reg = ToolRegistry()
+    asked = {"count": 0}
+    reg.register("danger", "d", {"type": "object", "properties": {}},
+                 lambda a: ToolResult(ok=True, content="boom"), destructive=True)
+
+    def script():
+        return ScriptedProvider([
+            LLMResponse(content="", tool_calls=[ToolCall(id="1", name="danger", args={})]),
+            LLMResponse(content="done"),
+        ])
+
+    svc = NammaAgentService(config={"persona": "core", "conversation": {"auto_approve": True}},
+                            provider=script(), registry=reg, db=Database(":memory:"))
+    assert svc.auto_approve is True
+
+    # User unticks "Auto mode" in Settings → the server merges + calls apply_config.
+    svc.apply_config({"persona": "core", "conversation": {"auto_approve": False}})
+    assert svc.auto_approve is False
+
+    # The very next turn must now go through the approval callback.
+    svc.provider = script()
+    svc.agent.provider = svc.provider
+    svc.run_turn("do danger", approval=lambda *_: (asked.update(count=asked["count"] + 1), False)[1])
+    assert asked["count"] == 1  # we were asked (and declined), not silently auto-run

@@ -20,7 +20,7 @@ from typing import Optional
 
 from namma_agent.core.logger import logger
 
-from .base import LLMResponse, Provider, ProviderError, TokenCallback, ToolCall
+from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback, ToolCall
 
 
 class OpenAICompatProvider(Provider):
@@ -115,6 +115,7 @@ class OpenAICompatProvider(Provider):
         tools: Optional[list[dict]] = None,
         stream: bool = False,
         on_token: Optional[TokenCallback] = None,
+        on_thinking: Optional[ThinkingCallback] = None,
     ) -> LLMResponse:
         client = self._client()
         wire_messages = self._to_wire_messages(messages)
@@ -133,7 +134,7 @@ class OpenAICompatProvider(Provider):
         for attempt in range(self.max_retries):
             try:
                 if stream:
-                    return self._generate_stream(client, body, on_token)
+                    return self._generate_stream(client, body, on_token, on_thinking)
                 return self._generate_once(client, body)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -142,6 +143,22 @@ class OpenAICompatProvider(Provider):
                     time.sleep(2 ** attempt)
 
         raise ProviderError(f"{self.name} failed after {self.max_retries} attempts: {last_exc}")
+
+    @staticmethod
+    def _usage(usage) -> dict:
+        """Normalize OpenAI usage. `prompt_tokens` already *includes* cached input,
+        so split the cached portion out into its own bucket (it's billed cheaply and
+        must not be counted as fresh input)."""
+        if usage is None:
+            return {}
+        prompt = getattr(usage, "prompt_tokens", 0) or 0
+        details = getattr(usage, "prompt_tokens_details", None)
+        cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+        return {
+            "input_tokens": max(prompt - cached, 0),
+            "output_tokens": getattr(usage, "completion_tokens", 0) or 0,
+            "cache_read_tokens": cached,
+        }
 
     def _generate_once(self, client, body: dict) -> LLMResponse:
         resp = client.chat.completions.create(**body)
@@ -158,17 +175,15 @@ class OpenAICompatProvider(Provider):
         return LLMResponse(
             content=msg.content or "",
             tool_calls=tool_calls,
-            usage={
-                "input_tokens": getattr(usage, "prompt_tokens", 0),
-                "output_tokens": getattr(usage, "completion_tokens", 0),
-            },
+            usage=self._usage(usage),
             finish_reason=choice.finish_reason or "",
             provider=self.name,
             model=self.model,
             raw=resp,
         )
 
-    def _generate_stream(self, client, body: dict, on_token: Optional[TokenCallback]) -> LLMResponse:
+    def _generate_stream(self, client, body: dict, on_token: Optional[TokenCallback],
+                         on_thinking: Optional[ThinkingCallback] = None) -> LLMResponse:
         body = {**body, "stream": True}
         # Request usage in the final stream chunk when the endpoint supports it.
         body.setdefault("stream_options", {"include_usage": True})
@@ -187,14 +202,18 @@ class OpenAICompatProvider(Provider):
 
         for chunk in stream:
             if getattr(chunk, "usage", None):
-                usage = {
-                    "input_tokens": getattr(chunk.usage, "prompt_tokens", 0),
-                    "output_tokens": getattr(chunk.usage, "completion_tokens", 0),
-                }
+                usage = self._usage(chunk.usage)
             if not chunk.choices:
                 continue
             choice = chunk.choices[0]
             delta = choice.delta
+            # Reasoning models (DeepSeek-R1, some OpenAI-compatible endpoints) stream
+            # their chain-of-thought separately as `reasoning_content` / `reasoning`.
+            # Surface it on the thinking channel; never mix it into the answer.
+            if on_thinking:
+                think = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if think:
+                    on_thinking(think)
             if getattr(delta, "content", None):
                 content_parts.append(delta.content)
                 if on_token:

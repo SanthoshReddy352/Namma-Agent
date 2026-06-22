@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
-import { clearMemory, deletePersona, exportPack, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchModels, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, generatePersona, inspectPack, installPack, packDownloadUrl, savePersona, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona } from "../api.js";
+import { applyUpdate, checkUpdate, clearMemory, deletePersona, exportPack, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchModels, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listSkills, listTools, packDownloadUrl, savePersona, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona, startComms, stopComms, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
+import { COMPLETION_PRESETS, SOUND_EVENTS, completionPreset, previewPreset, setCompletionPreset, setSoundEventEnabled, setSoundVolume, setSoundsEnabled, soundEventEnabled, soundVolume, soundsEnabled } from "../sounds.js";
+import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
 
 // Suggest an .env variable name for a provider's key. ONLY the native providers
 // (OpenAI/Anthropic/Google) use their conventional shared var; every OpenAI-
@@ -29,10 +31,185 @@ function deepMerge(a, b) {
   return a;
 }
 
-const TABS = ["Providers", "Models", "Behavior", "Persona", "Browser", "Voice", "Telegram", "Packs", "Appearance", "Memory"];
+// Hermes-style grouped settings nav: labelled sections, each an icon + label row.
+// (The Voice tab was folded into Behavior; the Phase-5 Sounds tab merged into the
+// new Notifications panel alongside desktop notifications.)
+const TAB_GROUPS = [
+  { label: "General", tabs: ["Behavior", "Persona", "Appearance", "Notifications"] },
+  { label: "Intelligence", tabs: ["Providers", "Models"] },
+  { label: "Capabilities", tabs: ["Skills", "Toolsets", "Packs", "Browser"] },
+  { label: "Channels", tabs: ["Messaging"] },
+  { label: "System", tabs: ["Memory", "About"] },
+];
+const TABS = TAB_GROUPS.flatMap((g) => g.tabs);
 
-export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleared, onModelsChanged, onAssistantNameChanged }) {
-  const [tab, setTab] = useState("Providers");
+// Compact 24×24 stroke icons (one per tab), drawn in currentColor.
+const TAB_ICONS = {
+  Behavior: "M4 6h16M4 12h10M4 18h7",
+  Persona: "M12 12a4 4 0 100-8 4 4 0 000 8zM5 20a7 7 0 0114 0",
+  Appearance: "M12 3a9 9 0 100 18h2a3 3 0 003-3 2 2 0 00-2-2h-1a2 2 0 010-4h2a3 3 0 003-3 9 9 0 00-9-6zM7.5 11a.5.5 0 100-1 .5.5 0 000 1zM10.5 7.5a.5.5 0 100-1 .5.5 0 000 1z",
+  Notifications: "M6 8a6 6 0 1112 0c0 5 2 6 2 6H4s2-1 2-6M10 20a2 2 0 004 0",
+  Providers: "M4 7a8 4 0 0016 0 8 4 0 00-16 0v10a8 4 0 0016 0V7",
+  Models: "M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3M7 7h10v10H7z",
+  Skills: "M12 3l2.5 5 5.5.8-4 3.9.9 5.5L12 21l-4.9-2.8.9-5.5-4-3.9 5.5-.8z",
+  Toolsets: "M14.5 5.5a3.5 3.5 0 01-4.6 4.6L5 15l4 4 4.9-4.9a3.5 3.5 0 014.6-4.6l-1.8 1.8-2.1-.3-.3-2.1z",
+  Packs: "M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8M12 13v8",
+  Browser: "M12 3a9 9 0 100 18 9 9 0 000-18zM3 12h18M12 3c2.5 2.5 4 5.7 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.7-4-9s1.5-6.5 4-9z",
+  Messaging: "M4 5h16v11H8l-4 4z",
+  Memory: "M4 7a8 4 0 0016 0 8 4 0 00-16 0v10a8 4 0 0016 0M4 12a8 4 0 0016 0",
+  About: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v5M12 7.5h.01",
+};
+function TabIcon({ name }) {
+  const d = TAB_ICONS[name];
+  if (!d) return null;
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0"
+         stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d={d} />
+    </svg>
+  );
+}
+
+// The four named palettes (must mirror the theme blocks in src/index.css). The
+// swatch colors are just for the picker preview.
+const THEMES = [
+  { id: "default", label: "Default", swatch: ["#2f6bff", "#f6f8fc", "#10131a"] },
+  { id: "slate", label: "Slate", swatch: ["#3d6094", "#f4f6f9", "#1b2230"] },
+  { id: "classic", label: "Classic", swatch: ["#cc785c", "#faf9f5", "#2d2a26"] },
+  { id: "mono", label: "Mono", swatch: ["#3f3f46", "#fafafa", "#171717"] },
+];
+
+function ThemePicker({ themeName, onThemeNameChange }) {
+  return (
+    <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-4">
+      {THEMES.map((t) => {
+        const active = themeName === t.id;
+        return (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onThemeNameChange(t.id)}
+            className={
+              "rounded-xl border p-2.5 text-left transition " +
+              (active
+                ? "border-brand ring-2 ring-brand/30"
+                : "border-line dark:border-night-line hover:border-brand/50")
+            }
+          >
+            <div className="flex gap-1">
+              {t.swatch.map((c, i) => (
+                <span key={i} className="h-6 flex-1 rounded" style={{ background: c }} />
+              ))}
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-[13px] font-medium text-ink dark:text-night-ink">{t.label}</span>
+              {active && (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-brand">
+                  <path d="M5 13l4 4L19 7" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              )}
+            </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// About / Updates / Danger-zone (uninstall) — mirrors Hermes' Settings → About.
+function AboutTab() {
+  const [version, setVersion] = useState("");
+  const [upd, setUpd] = useState(null);
+  const [updating, setUpdating] = useState(false);
+  const [confirm, setConfirm] = useState(null); // {scope, label}
+  const [typed, setTyped] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  useEffect(() => {
+    fetchVersion().then((r) => setVersion(r?.version || "")).catch(() => {});
+    checkUpdate().then(setUpd).catch(() => {});
+  }, []);
+
+  const doUpdate = async () => {
+    setUpdating(true);
+    await applyUpdate().catch(() => {});
+    setMsg("Updating… the app will relaunch shortly.");
+  };
+
+  const doUninstall = async () => {
+    setBusy(true);
+    const r = await uninstallApp(confirm.scope).catch((e) => ({ started: false, error: String(e) }));
+    if (r?.started) {
+      setMsg("Uninstalling… this window will close in a moment.");
+    } else {
+      setMsg("Could not start the uninstaller: " + (r?.error || "unknown error"));
+      setBusy(false);
+      setConfirm(null);
+    }
+  };
+
+  const RED = "#dc2626";
+  return (
+    <>
+      <Section title="About">
+        <div className="text-[14px] font-medium text-ink dark:text-night-ink">Namma Agent</div>
+        <div className="text-[13px] text-ink-soft dark:text-night-faint">Version {version || "…"}</div>
+      </Section>
+
+      <Section title="Updates" hint="Pull the latest version and relaunch automatically.">
+        {upd?.update_available ? (
+          <button onClick={doUpdate} disabled={updating}
+                  className="px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep disabled:opacity-50">
+            {updating ? "Updating…" : `Update to ${upd.latest}`}
+          </button>
+        ) : (
+          <div className="text-[13px] text-ink-soft dark:text-night-faint">
+            {upd ? "You’re on the latest version." : "Checking for updates…"}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Danger zone" hint="Remove Namma Agent from this computer.">
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => { setConfirm({ scope: "keep-data", label: "Uninstall, keep my data" }); setTyped(""); setMsg(""); }}
+                  className="px-3 py-1.5 rounded-lg border hover:bg-[#dc2626]/10"
+                  style={{ borderColor: RED + "66", color: RED }}>Uninstall, keep my data</button>
+          <button onClick={() => { setConfirm({ scope: "all", label: "Uninstall everything" }); setTyped(""); setMsg(""); }}
+                  className="px-3 py-1.5 rounded-lg text-white hover:opacity-90"
+                  style={{ background: RED }}>Uninstall everything</button>
+        </div>
+        {msg && <div className="mt-2 text-[13px] text-ink-soft dark:text-night-faint">{msg}</div>}
+      </Section>
+
+      {confirm && (
+        <div className="fixed inset-0 z-[60] grid place-items-center bg-black/40 p-4">
+          <div className="w-[440px] max-w-full rounded-2xl bg-paper-panel dark:bg-night-panel p-6 shadow-pop animate-rise">
+            <h3 className="text-[17px] font-semibold text-ink dark:text-night-ink">{confirm.label}</h3>
+            <p className="mt-2 text-[13.5px] leading-relaxed text-ink-soft dark:text-night-faint">
+              {confirm.scope === "all"
+                ? "This permanently deletes the app AND all your chats, settings, and data. This cannot be undone."
+                : "This removes the app, but first backs up your chats & settings to your user folder so you can restore them later."}
+            </p>
+            <p className="mt-3 text-[13px] text-ink-soft dark:text-night-faint">Type <b>UNINSTALL</b> to confirm:</p>
+            <input autoFocus value={typed} onChange={(e) => setTyped(e.target.value)}
+                   className="mt-1 w-full rounded-lg border border-line dark:border-night-line bg-transparent px-3 py-2 outline-none focus:border-brand text-ink dark:text-night-ink" />
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setConfirm(null)} disabled={busy}
+                      className="px-4 py-2 rounded-lg text-ink-soft dark:text-night-ink hover:bg-paper-soft dark:hover:bg-night-soft">Cancel</button>
+              <button onClick={doUninstall} disabled={busy || typed.trim().toUpperCase() !== "UNINSTALL"}
+                      className="px-4 py-2 rounded-lg text-white hover:opacity-90 disabled:opacity-40"
+                      style={{ background: RED }}>{busy ? "Uninstalling…" : "Uninstall"}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+export default function Settings({ onClose, theme, onThemeToggle, themeName, onThemeNameChange, onMemoryCleared, onModelsChanged, onAssistantNameChanged }) {
+  const [tab, setTab] = useState("Behavior");
   const [data, setData] = useState(null);
   const [providers, setProviders] = useState([]);  // catalog of provider TYPES
   const [cfg, setCfg] = useState({});
@@ -65,13 +242,21 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
         </div>
 
         <div className="flex-1 flex min-h-0">
-          {/* Left tab nav */}
-          <nav className="w-40 shrink-0 border-r border-line dark:border-night-line p-2 space-y-0.5 overflow-y-auto">
-            {TABS.map((t) => (
-              <button key={t} onClick={() => setTab(t)}
-                      className={`w-full text-left px-3 py-2 rounded-lg text-[13.5px] transition ${tab === t ? "bg-brand-wash dark:bg-night-soft text-brand-deep dark:text-night-ink font-medium" : "text-ink-soft dark:text-night-faint hover:bg-paper-soft dark:hover:bg-night-soft"}`}>
-                {t}
-              </button>
+          {/* Left tab nav — grouped, icon + label (Hermes-style) */}
+          <nav className="w-44 shrink-0 border-r border-line dark:border-night-line p-2 overflow-y-auto">
+            {TAB_GROUPS.map((g) => (
+              <div key={g.label} className="mb-2 last:mb-0">
+                <div className="px-3 pt-1.5 pb-1 text-[10.5px] font-semibold uppercase tracking-wider text-ink-faint dark:text-night-faint">{g.label}</div>
+                <div className="space-y-0.5">
+                  {g.tabs.map((t) => (
+                    <button key={t} onClick={() => setTab(t)}
+                            className={`w-full flex items-center gap-2.5 text-left px-3 py-2 rounded-lg text-[13.5px] transition ${tab === t ? "bg-brand-wash dark:bg-night-soft text-brand-deep dark:text-night-ink font-medium" : "text-ink-soft dark:text-night-faint hover:bg-paper-soft dark:hover:bg-night-soft"}`}>
+                      <TabIcon name={t} />
+                      <span>{t}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
             ))}
           </nav>
 
@@ -98,6 +283,9 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
                              onChange={(e) => setC("provider.temperature", parseFloat(e.target.value))} className="w-full" />
                     </Field>
                     <Field label="Timeout (s)"><Input type="number" value={cur("provider.timeout_s", 60)} onChange={(v) => setC("provider.timeout_s", parseInt(v || "0", 10))} /></Field>
+                    <div className="pt-2 mt-1 border-t border-line dark:border-night-line" />
+                    <div className="text-[12px] text-ink-faint dark:text-night-faint">Voice — server-side Piper TTS / local STT. (The per-message read-aloud button uses your browser's own TTS and is always available.)</div>
+                    <Toggle label="Enable Piper voice" checked={!!cur("voice.enabled", true)} onChange={(v) => setC("voice.enabled", v)} />
                   </Section>
                 )}
 
@@ -112,27 +300,55 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
                   </Section>
                 )}
 
-                {tab === "Voice" && (
-                  <Section title="Voice" hint="Server-side Piper TTS / local STT. (The per-message read-aloud button uses your browser's own TTS and is always available.)">
-                    <Toggle label="Enable Piper voice" checked={!!cur("voice.enabled", true)} onChange={(v) => setC("voice.enabled", v)} />
-                  </Section>
+                {tab === "Notifications" && <NotificationsTab />}
+
+                {tab === "Messaging" && (
+                  <>
+                    <GatewayControl />
+                    <Section title="Telegram" hint="Chat with Namma Agent from your phone (outbound + inbound). Stored in .env.">
+                      <Field label="Bot token"><Input type="password" placeholder={data.env_set?.NAMMA_TELEGRAM_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_TELEGRAM_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_TELEGRAM_TOKEN: v }))} /></Field>
+                      <Field label="Chat id"><Input placeholder={data.env_set?.NAMMA_TELEGRAM_CHAT_ID ? "(set)" : "not set"} value={env.NAMMA_TELEGRAM_CHAT_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_TELEGRAM_CHAT_ID: v }))} /></Field>
+                      <Toggle label="Reply to inbound Telegram messages" checked={!!cur("comms.inbound_enabled", true)} onChange={(v) => setC("comms.inbound_enabled", v)} />
+                    </Section>
+                    <Section title="Discord" hint="Webhook = send-only. To receive & reply, add a bot token (the bot dials out to Discord — works locally, no public URL). Enable the Message Content Intent in the Developer Portal.">
+                      <Field label="Webhook URL (outbound)"><Input type="password" placeholder={data.env_set?.NAMMA_DISCORD_WEBHOOK_URL ? "•••••• (set)" : "not set"} value={env.NAMMA_DISCORD_WEBHOOK_URL ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_DISCORD_WEBHOOK_URL: v }))} /></Field>
+                      <Field label="Bot token (two-way)"><Input type="password" placeholder={data.env_set?.NAMMA_DISCORD_BOT_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_DISCORD_BOT_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_DISCORD_BOT_TOKEN: v }))} /></Field>
+                      <Field label="Channel id (optional)"><Input placeholder={data.env_set?.NAMMA_DISCORD_CHANNEL_ID ? "(set)" : "restrict to one channel"} value={env.NAMMA_DISCORD_CHANNEL_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_DISCORD_CHANNEL_ID: v }))} /></Field>
+                    </Section>
+                    <Section title="Slack" hint="Webhook needs a public URL to receive. For local two-way use Socket Mode: add an app-level (xapp-) token + a bot (xoxb-) token and subscribe to message events — no public URL needed.">
+                      <Field label="Webhook URL (outbound)"><Input type="password" placeholder={data.env_set?.NAMMA_SLACK_WEBHOOK_URL ? "•••••• (set)" : "not set"} value={env.NAMMA_SLACK_WEBHOOK_URL ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SLACK_WEBHOOK_URL: v }))} /></Field>
+                      <Field label="App token (xapp-, Socket Mode)"><Input type="password" placeholder={data.env_set?.NAMMA_SLACK_APP_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_SLACK_APP_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SLACK_APP_TOKEN: v }))} /></Field>
+                      <Field label="Bot token (xoxb-, replies)"><Input type="password" placeholder={data.env_set?.NAMMA_SLACK_BOT_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_SLACK_BOT_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SLACK_BOT_TOKEN: v }))} /></Field>
+                    </Section>
+                    <Section title="WhatsApp" hint="Outbound via the WhatsApp Cloud API (Meta).">
+                      <Field label="Access token"><Input type="password" placeholder={data.env_set?.NAMMA_WHATSAPP_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_WHATSAPP_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TOKEN: v }))} /></Field>
+                      <Field label="Phone number id"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_PHONE_ID ? "(set)" : "not set"} value={env.NAMMA_WHATSAPP_PHONE_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_PHONE_ID: v }))} /></Field>
+                      <Field label="Recipient (E.164)"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_TO ? "(set)" : "e.g. 919876543210"} value={env.NAMMA_WHATSAPP_TO ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TO: v }))} /></Field>
+                    </Section>
+                    <Section title="Signal" hint="Outbound via a signal-cli REST API service.">
+                      <Field label="API URL"><Input placeholder={data.env_set?.NAMMA_SIGNAL_API_URL ? "(set)" : "http://localhost:8080"} value={env.NAMMA_SIGNAL_API_URL ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SIGNAL_API_URL: v }))} /></Field>
+                      <Field label="Sender number (E.164)"><Input placeholder={data.env_set?.NAMMA_SIGNAL_NUMBER ? "(set)" : "+919876543210"} value={env.NAMMA_SIGNAL_NUMBER ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SIGNAL_NUMBER: v }))} /></Field>
+                      <Field label="Recipient / group id"><Input placeholder={data.env_set?.NAMMA_SIGNAL_RECIPIENT ? "(set)" : "not set"} value={env.NAMMA_SIGNAL_RECIPIENT ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SIGNAL_RECIPIENT: v }))} /></Field>
+                    </Section>
+                  </>
                 )}
 
-                {tab === "Telegram" && (
-                  <Section title="Telegram" hint="Chat with Namma Agent from your phone. Stored in .env.">
-                    <Field label="Bot token"><Input type="password" placeholder={data.env_set?.NAMMA_TELEGRAM_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_TELEGRAM_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_TELEGRAM_TOKEN: v }))} /></Field>
-                    <Field label="Chat id"><Input placeholder={data.env_set?.NAMMA_TELEGRAM_CHAT_ID ? "(set)" : "not set"} value={env.NAMMA_TELEGRAM_CHAT_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_TELEGRAM_CHAT_ID: v }))} /></Field>
-                    <Toggle label="Reply to inbound Telegram messages" checked={!!cur("comms.inbound_enabled", true)} onChange={(v) => setC("comms.inbound_enabled", v)} />
-                  </Section>
-                )}
+                {tab === "Skills" && <SkillsTab />}
+
+                {tab === "Toolsets" && <ToolsetsTab />}
 
                 {tab === "Packs" && <PacksTab />}
 
                 {tab === "Appearance" && (
-                  <Section title="Appearance & system">
-                    <Toggle label="Dark theme" checked={theme === "dark"} onChange={onThemeToggle} />
-                    <Field label="Log level"><Select value={cur("logging.level", "info")} onChange={(v) => setC("logging.level", v)} options={["debug", "info", "warning", "error"]} /></Field>
-                  </Section>
+                  <>
+                    <Section title="Theme" hint="Pick a palette — applies instantly across the whole app.">
+                      <ThemePicker themeName={themeName} onThemeNameChange={onThemeNameChange} />
+                    </Section>
+                    <Section title="Appearance & system">
+                      <Toggle label="Dark theme" checked={theme === "dark"} onChange={onThemeToggle} />
+                      <Field label="Log level"><Select value={cur("logging.level", "info")} onChange={(v) => setC("logging.level", v)} options={["debug", "info", "warning", "error"]} /></Field>
+                    </Section>
+                  </>
                 )}
 
                 {tab === "Memory" && (
@@ -146,6 +362,8 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
                     {cleared && <div className="mt-2 text-brand-deep text-[13px]">Cleared {cleared}.</div>}
                   </Section>
                 )}
+
+                {tab === "About" && <AboutTab />}
               </>
             )}
           </div>
@@ -157,6 +375,186 @@ export default function Settings({ onClose, theme, onThemeToggle, onMemoryCleare
           <button onClick={save} className="px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep">Save</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// The gateway control shown at the top of the Messaging tab: one standalone
+// inbound service that handles every configured channel. Start it to begin
+// receiving/replying to messages (Telegram + Signal poll locally; Slack +
+// WhatsApp need the server publicly reachable); stop it to go silent. Outbound
+// notifications work regardless.
+function GatewayControl() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+
+  const refresh = () => fetchCommsStatus().then((s) => s && setStatus(s));
+  useEffect(() => { refresh(); }, []);
+
+  async function act(fn) {
+    setBusy(true); setNote("");
+    const s = await fn();
+    if (s) { setStatus(s); if (s.error) setNote(s.error); }
+    setBusy(false);
+  }
+
+  if (status && status.configured === false) {
+    return (
+      <Section title="Gateway" hint="The standalone service that handles all inbound messaging.">
+        <div className="text-[13px] text-ink-faint dark:text-night-faint">Messaging is unavailable in this build.</div>
+      </Section>
+    );
+  }
+
+  const running = !!status?.running;
+  const available = status?.available || [];
+  const polling = status?.polling || [];
+  const webhooks = status?.webhooks || [];
+
+  return (
+    <Section title="Gateway"
+             hint="One service handles all inbound messaging across every configured channel. Start it to chat with your assistant from your messengers; stop it to go silent. (Outbound notifications always work.)">
+      <div className="rounded-xl border border-line dark:border-night-line p-3 space-y-2.5">
+        <div className="flex items-center gap-2.5">
+          <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${running ? "bg-emerald-500" : "bg-line dark:bg-night-line"}`} />
+          <span className="text-[13.5px] font-medium text-ink dark:text-night-ink">
+            {status === null ? "Checking…" : running ? "Running" : "Stopped"}
+          </span>
+          <div className="ml-auto flex gap-2">
+            <button onClick={() => act(startComms)} disabled={busy || running}
+                    className="px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-deep disabled:opacity-40 text-[13px]">
+              {busy && !running ? "Starting…" : "Start"}
+            </button>
+            <button onClick={() => act(stopComms)} disabled={busy || !running}
+                    className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-paper-soft dark:hover:bg-night-soft disabled:opacity-40 text-[13px]">
+              {busy && running ? "Stopping…" : "Stop"}
+            </button>
+          </div>
+        </div>
+        <div className="text-[12px] text-ink-faint dark:text-night-faint">
+          {available.length
+            ? <>Configured channels: <span className="text-ink-soft dark:text-night-ink">{available.join(", ")}</span></>
+            : "No channels configured yet — add a token below, save, then Start."}
+          {running && polling.length > 0 && <div>Polling: {polling.join(", ")}</div>}
+          {running && webhooks.length > 0 && <div>Webhooks: {webhooks.join(", ")}</div>}
+        </div>
+        {note && <div className="text-[12px] text-brand-deep dark:text-amber-400">{note}</div>}
+      </div>
+      <div className="text-[11.5px] text-ink-faint dark:text-night-faint">
+        Tip: after adding or changing a token, click <b>Save</b> below, then <b>Start</b> (or Stop &amp; Start) so the gateway picks it up.
+      </div>
+    </Section>
+  );
+}
+
+// A titled settings block with generous vertical rhythm.
+const Block = ({ title, hint, children }) => (
+  <section className="space-y-3">
+    <div>
+      <h3 className="text-[15px] font-medium text-ink dark:text-night-ink">{title}</h3>
+      {hint && <p className="mt-0.5 text-[12px] leading-relaxed text-ink-faint dark:text-night-faint">{hint}</p>}
+    </div>
+    {children}
+  </section>
+);
+// A card holding a list of toggle rows, each row comfortably padded and divided.
+const ToggleCard = ({ rows, disabled }) => (
+  <div className={"rounded-xl border border-line dark:border-night-line divide-y divide-line dark:divide-night-line overflow-hidden " +
+    (disabled ? "opacity-50 pointer-events-none" : "")}>
+    {rows.map((r) => (
+      <div key={r.id} className="px-3.5 py-3"><Toggle label={r.label} checked={r.checked} onChange={r.onChange} /></div>
+    ))}
+  </div>
+);
+
+// The "Notifications" tab — Phases 5 + 6. Two halves, both client-only
+// (localStorage, like the theme — no Save round-trip):
+//   • Desktop notifications — native OS toasts delivered by the backend (reliable
+//     inside the pywebview window): master switch, per-event toggles, a test button.
+//   • Sounds — synthesised interaction cues: master switch, volume, the completion
+//     -sound preset picker (click to set & hear, ▶ to preview), per-event toggles.
+function NotificationsTab() {
+  // ── Desktop notifications ──
+  const [notif, setNotif] = useState(notifyEnabled());
+  const [notifEvents, setNotifEvents] = useState(
+    () => Object.fromEntries(NOTIFY_EVENTS.map((e) => [e.id, notifyEventEnabled(e.id)])));
+  const [testMsg, setTestMsg] = useState("");
+
+  const flipNotif = (v) => { setNotif(v); setNotifyEnabled(v); };
+  const flipNotifEvent = (id, v) => { setNotifEvents((e) => ({ ...e, [id]: v })); setNotifyEventEnabled(id, v); };
+  const test = async () => {
+    const ok = await sendTestNotification();
+    setTestMsg(ok ? "Sent — check your desktop." : "Couldn't show a notification on this device.");
+    setTimeout(() => setTestMsg(""), 5000);
+  };
+
+  // ── Sounds ──
+  const [on, setOn] = useState(soundsEnabled());
+  const [vol, setVol] = useState(soundVolume());
+  const [preset, setPreset] = useState(completionPreset());
+  const [sndEvents, setSndEvents] = useState(
+    () => Object.fromEntries(SOUND_EVENTS.map((e) => [e.id, soundEventEnabled(e.id)])));
+
+  const flipOn = (v) => { setOn(v); setSoundsEnabled(v); };
+  const changeVol = (v) => { setVol(v); setSoundVolume(v); };
+  const choosePreset = (id) => { setPreset(id); setCompletionPreset(id); previewPreset(id); };
+  const flipSndEvent = (id, v) => { setSndEvents((e) => ({ ...e, [id]: v })); setSoundEventEnabled(id, v); };
+
+  return (
+    <div className="space-y-8">
+      {/* ── Desktop notifications ── */}
+      <Block title="Desktop notifications"
+             hint="Native pop-ups from your OS when a reply is ready or your assistant needs you — they reach you even when the window is in the background.">
+        <ToggleCard rows={[{ id: "master", label: "Enable notifications", checked: notif, onChange: flipNotif }]} />
+        <div className="space-y-2">
+          <div className="text-[12px] font-medium text-ink-soft dark:text-night-faint">Notify me about</div>
+          <ToggleCard disabled={!notif}
+                      rows={NOTIFY_EVENTS.map((e) => ({ id: e.id, label: e.label, checked: notifEvents[e.id], onChange: (v) => flipNotifEvent(e.id, v) }))} />
+        </div>
+        <div className="flex items-center gap-3 pt-0.5">
+          <button onClick={test} className={_btnGhost}>Send test notification</button>
+          {testMsg && <span className="text-[12px] text-ink-faint dark:text-night-faint">{testMsg}</span>}
+        </div>
+      </Block>
+
+      <div className="border-t border-line dark:border-night-line" />
+
+      {/* ── Sounds ── */}
+      <Block title="Interaction sounds"
+             hint="Short, synthesised cues on the moments of a turn — sent, each action step, and the reply landing. They play in your browser; nothing is sent anywhere.">
+        <ToggleCard rows={[{ id: "snd", label: "Enable sounds", checked: on, onChange: flipOn }]} />
+        <div className={"flex items-center gap-3 " + (on ? "" : "opacity-50 pointer-events-none")}>
+          <span className="text-[13px] text-ink-soft dark:text-night-faint w-20 shrink-0">Volume</span>
+          <input type="range" min="0" max="1" step="0.05" value={vol}
+                 onChange={(e) => changeVol(parseFloat(e.target.value))} disabled={!on} className="flex-1" />
+          <span className="text-[12px] tabular-nums text-ink-faint dark:text-night-faint w-9 text-right">{Math.round(vol * 100)}%</span>
+        </div>
+      </Block>
+
+      <Block title="Completion sound" hint="The sound when a reply is ready. Click a preset to set it and hear it; ▶ previews without changing your pick.">
+        <div className={`grid grid-cols-2 gap-2.5 ${on ? "" : "opacity-50 pointer-events-none"}`}>
+          {COMPLETION_PRESETS.map((p) => {
+            const active = preset === p.id;
+            return (
+              <button key={p.id} type="button" onClick={() => choosePreset(p.id)}
+                      className={"flex items-center justify-between gap-2 rounded-xl border px-3.5 py-2.5 text-left text-[13px] transition " +
+                        (active ? "border-brand ring-2 ring-brand/30 bg-brand-wash dark:bg-night-soft" : "border-line dark:border-night-line hover:border-brand/50")}>
+                <span className="truncate text-ink dark:text-night-ink">{p.label}</span>
+                <span role="button" tabIndex={-1} className="shrink-0 grid place-items-center h-6 w-6 rounded-full text-ink-faint dark:text-night-faint hover:bg-paper-soft dark:hover:bg-night-line" title="Preview"
+                      onClick={(e) => { e.stopPropagation(); previewPreset(p.id); }}>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </Block>
+
+      <Block title="Play a sound for" hint="Turn individual cues off without muting everything.">
+        <ToggleCard disabled={!on}
+                    rows={SOUND_EVENTS.map((e) => ({ id: e.id, label: e.label, checked: sndEvents[e.id], onChange: (v) => flipSndEvent(e.id, v) }))} />
+      </Block>
     </div>
   );
 }
@@ -599,6 +997,190 @@ const Toggle = ({ label, checked, onChange }) => (
     </button>
   </label>
 );
+
+// The "Skills" tab: every skill (procedural playbook) with an on/off switch.
+// Disabled skills drop out of the agent's catalog and use_skill refuses them.
+// Skills that declare prerequisites (a CLI / env var) show what they need and are
+// badged "needs setup" until those are present — they stay listed but the agent
+// won't be told about them while the prerequisite is missing.
+function SkillBadge({ children, tone = "muted" }) {
+  const tones = {
+    muted: "bg-paper-soft dark:bg-night-soft text-ink-faint dark:text-night-faint",
+    warn: "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400",
+  };
+  return <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${tones[tone]}`}>{children}</span>;
+}
+
+function SkillsTab() {
+  const [skills, setSkills] = useState(null);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState({});   // name -> true while its toggle is in flight
+
+  useEffect(() => { listSkills().then((r) => setSkills(r?.skills || [])); }, []);
+
+  async function flip(s) {
+    setBusy((b) => ({ ...b, [s.name]: true }));
+    const next = !s.enabled;
+    setSkills((list) => list.map((x) => x.name === s.name ? { ...x, enabled: next } : x));
+    const r = await toggleSkill(s.name, next);
+    if (!r?.ok) // revert on failure
+      setSkills((list) => list.map((x) => x.name === s.name ? { ...x, enabled: s.enabled } : x));
+    setBusy((b) => ({ ...b, [s.name]: false }));
+  }
+
+  if (!skills) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
+
+  const needle = q.trim().toLowerCase();
+  const shown = skills.filter((s) =>
+    !needle || s.name.toLowerCase().includes(needle) ||
+    (s.description || "").toLowerCase().includes(needle) ||
+    (s.category || "").toLowerCase().includes(needle));
+  const byCat = {};
+  for (const s of shown) (byCat[s.category || "general"] ||= []).push(s);
+  const cats = Object.keys(byCat).sort();
+  const enabledCount = skills.filter((s) => s.enabled).length;
+
+  return (
+    <div className="space-y-4">
+      <Section title="Skills"
+               hint={`Procedural playbooks the assistant can load mid-task. ${enabledCount} of ${skills.length} enabled. Turn one off to keep it out of the assistant's catalog.`}>
+        <Input value={q} onChange={setQ} placeholder="Search skills…" />
+      </Section>
+
+      {cats.length === 0 && <div className="text-ink-faint dark:text-night-faint text-[13px]">No skills match “{q}”.</div>}
+
+      {cats.map((cat) => (
+        <div key={cat}>
+          <div className="text-[12px] uppercase tracking-wide text-ink-faint dark:text-night-faint mb-2">
+            {cat} <span className="opacity-60">({byCat[cat].length})</span>
+          </div>
+          <div className="space-y-1.5">
+            {byCat[cat].map((s) => (
+              <div key={s.name} className={`${_box} flex items-start justify-between gap-3`}>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{s.name}</span>
+                    {s.source === "user" && <SkillBadge>yours</SkillBadge>}
+                    {!s.supported && <SkillBadge tone="warn">needs setup</SkillBadge>}
+                  </div>
+                  {s.description && (
+                    <div className="text-[12.5px] text-ink-faint dark:text-night-faint mt-0.5">{s.description}</div>
+                  )}
+                  {s.requires?.length > 0 && (
+                    <div className="text-[11.5px] text-ink-faint dark:text-night-faint mt-1">
+                      Requires: {s.requires.join(", ")}
+                    </div>
+                  )}
+                </div>
+                <button type="button" disabled={!!busy[s.name]} onClick={() => flip(s)}
+                        className={`h-6 w-11 rounded-full transition relative shrink-0 mt-0.5 disabled:opacity-50 ${s.enabled ? "bg-brand" : "bg-line dark:bg-night-line"}`}>
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${s.enabled ? "left-[22px]" : "left-0.5"}`} />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// The "Toolsets" tab: every tool the assistant can call, grouped by toolset, with
+// an on/off switch. Disabled tools drop out of what the model sees each turn and
+// are refused if somehow called. A whole toolset can be flipped from its header.
+// Destructive tools (approval-gated) are badged so it's clear what they can do.
+function ToolsetsTab() {
+  const [tools, setTools] = useState(null);
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState({});   // name|cat -> true while a toggle is in flight
+
+  useEffect(() => { listTools().then((r) => setTools(r?.tools || [])); }, []);
+
+  async function flip(t) {
+    setBusy((b) => ({ ...b, [t.name]: true }));
+    const next = !t.enabled;
+    setTools((list) => list.map((x) => x.name === t.name ? { ...x, enabled: next } : x));
+    const r = await toggleTool(t.name, next);
+    if (!r?.ok) // revert on failure
+      setTools((list) => list.map((x) => x.name === t.name ? { ...x, enabled: t.enabled } : x));
+    setBusy((b) => ({ ...b, [t.name]: false }));
+  }
+
+  async function flipCat(cat, items) {
+    const key = `cat:${cat}`;
+    const next = !items.every((t) => t.enabled);   // all on → turn off; else turn on
+    setBusy((b) => ({ ...b, [key]: true }));
+    const before = items.map((t) => ({ name: t.name, enabled: t.enabled }));
+    setTools((list) => list.map((x) => x.category === cat ? { ...x, enabled: next } : x));
+    const r = await toggleToolset(cat, next);
+    if (!r?.ok) // revert on failure
+      setTools((list) => list.map((x) => {
+        const prev = before.find((b) => b.name === x.name);
+        return prev ? { ...x, enabled: prev.enabled } : x;
+      }));
+    setBusy((b) => ({ ...b, [key]: false }));
+  }
+
+  if (!tools) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
+
+  const needle = q.trim().toLowerCase();
+  const shown = tools.filter((t) =>
+    !needle || t.name.toLowerCase().includes(needle) ||
+    (t.description || "").toLowerCase().includes(needle) ||
+    (t.category || "").toLowerCase().includes(needle));
+  const byCat = {};
+  for (const t of shown) (byCat[t.category || "general"] ||= []).push(t);
+  const cats = Object.keys(byCat).sort();
+  const enabledCount = tools.filter((t) => t.enabled).length;
+
+  return (
+    <div className="space-y-4">
+      <Section title="Toolsets"
+               hint={`Capabilities the assistant can call. ${enabledCount} of ${tools.length} enabled. Turn a tool — or a whole toolset — off to keep it out of every turn.`}>
+        <Input value={q} onChange={setQ} placeholder="Search tools…" />
+      </Section>
+
+      {cats.length === 0 && <div className="text-ink-faint dark:text-night-faint text-[13px]">No tools match “{q}”.</div>}
+
+      {cats.map((cat) => {
+        const items = byCat[cat];
+        const allOn = items.every((t) => t.enabled);
+        return (
+          <div key={cat}>
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[12px] uppercase tracking-wide text-ink-faint dark:text-night-faint">
+                {cat} <span className="opacity-60">({items.length})</span>
+              </div>
+              <button type="button" disabled={!!busy[`cat:${cat}`]} onClick={() => flipCat(cat, items)}
+                      className="text-[11.5px] text-ink-faint dark:text-night-faint hover:text-brand disabled:opacity-50">
+                {allOn ? "Disable all" : "Enable all"}
+              </button>
+            </div>
+            <div className="space-y-1.5">
+              {items.map((t) => (
+                <div key={t.name} className={`${_box} flex items-start justify-between gap-3`}>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-medium font-mono text-[13px]">{t.name}</span>
+                      {t.destructive && <SkillBadge tone="warn">needs approval</SkillBadge>}
+                    </div>
+                    {t.description && (
+                      <div className="text-[12.5px] text-ink-faint dark:text-night-faint mt-0.5">{t.description}</div>
+                    )}
+                  </div>
+                  <button type="button" disabled={!!busy[t.name]} onClick={() => flip(t)}
+                          className={`h-6 w-11 rounded-full transition relative shrink-0 mt-0.5 disabled:opacity-50 ${t.enabled ? "bg-brand" : "bg-line dark:bg-night-line"}`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${t.enabled ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 // The "Packs" tab: export your own skills/tools as a shareable .zip, and import
 // someone else's. Skills are markdown (safe, auto-install); tools are Python that

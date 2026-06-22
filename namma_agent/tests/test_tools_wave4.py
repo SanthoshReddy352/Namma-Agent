@@ -26,7 +26,7 @@ class ScriptedProvider(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         return self._responses.pop(0)
 
 
@@ -99,7 +99,7 @@ def test_delegate_task_excludes_itself(wired):
         name = "cap"
         def __init__(self): super().__init__(model="cap")
         def is_available(self): return True
-        def generate(self, messages, tools=None, stream=False, on_token=None):
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
             captured["tools"] = [t["name"] for t in (tools or [])]
             return LLMResponse(content="done")
 
@@ -128,7 +128,7 @@ def test_delegate_inherits_main_tool_loop_limit(wired):
             self.calls = 0
         def is_available(self):
             return True
-        def generate(self, messages, tools=None, stream=False, on_token=None):
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
             self.calls += 1  # never finalize → loop runs to the cap
             return LLMResponse(content="", tool_calls=[
                 ToolCall(id=str(self.calls), name="system_info", args={})])

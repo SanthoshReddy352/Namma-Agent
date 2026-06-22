@@ -8,6 +8,7 @@
 # ── CORE (required) ────────────────────────────────────────────────
 fastapi
 uvicorn[standard]        # ASGI server + websockets + http-tools
+websockets               # comms: Discord Gateway bot + Slack Socket Mode (inbound, local)
 pydantic
 PyYAML
 

@@ -20,7 +20,7 @@ class Echo(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         return LLMResponse(content="ok")
 
 

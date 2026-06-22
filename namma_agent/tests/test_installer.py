@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -36,6 +37,59 @@ def test_install_dep_command_windows():
 def test_install_dep_command_macos():
     assert core.install_dep_command("node", "Darwin") == ["brew", "install", "node"]
     assert core.install_dep_command("python", "Darwin") == ["brew", "install", "python"]
+
+
+# ── optional tools (ripgrep + ffmpeg, Hermes parity) ─────────────────────────
+
+def test_optional_tools_have_install_commands():
+    assert set(core.OPTIONAL_TOOLS) == {"ripgrep", "ffmpeg"}
+    # ripgrep's binary is `rg`, not `ripgrep`.
+    assert core._tool_command("ripgrep") == "rg"
+    assert core._tool_command("ffmpeg") == "ffmpeg"
+    # Each optional tool resolves to a real install command on every OS.
+    assert "BurntSushi.ripgrep.MSVC" in core.install_dep_command("ripgrep", "Windows")
+    assert "Gyan.FFmpeg" in core.install_dep_command("ffmpeg", "Windows")
+    assert core.install_dep_command("ripgrep", "Darwin") == ["brew", "install", "ripgrep"]
+    assert core.install_dep_command("ffmpeg", "Darwin") == ["brew", "install", "ffmpeg"]
+
+
+def test_ensure_optional_tools_never_raises(monkeypatch):
+    # Pretend both are missing and no installer exists → it must log, not raise.
+    monkeypatch.setattr(core, "_has", lambda _c: False)
+    monkeypatch.setattr(core, "install_dep_command", lambda *_a, **_k: None)
+    logs: list[str] = []
+    core.ensure_optional_tools(logs.append)
+    assert any("ripgrep" in l for l in logs) and any("ffmpeg" in l for l in logs)
+
+
+# ── add the `namma` command to PATH ──────────────────────────────────────────
+
+def test_windows_namma_cmd(tmp_path):
+    body = core.windows_namma_cmd(tmp_path)
+    assert "@echo off" in body
+    assert "-m namma_agent" in body
+    assert "%*" in body                  # forwards args (namma --chat / --server)
+    assert "pythonw.exe" in body or "python.exe" in body
+
+
+def test_windows_path_append_ps1(tmp_path):
+    bin_dir = tmp_path / "bin"
+    ps = core.windows_path_append_ps1(bin_dir)
+    assert "'Path','User'" in ps          # persists to the user PATH
+    assert str(bin_dir) in ps
+    assert "-notcontains" in ps           # idempotent (won't duplicate)
+
+
+def test_posix_namma_script(tmp_path):
+    body = core.posix_namma_script(tmp_path)
+    assert body.startswith("#!/usr/bin/env bash")
+    assert "-m namma_agent" in body
+    assert '"$@"' in body                 # forwards args
+
+
+def test_install_steps_include_path():
+    keys = [k for k, _ in core.INSTALL_STEPS]
+    assert "path" in keys
 
 
 def test_venv_python_path_shape(tmp_path):
@@ -132,3 +186,38 @@ def test_linux_desktop_entry(tmp_path):
     assert "Name=Namma Agent" in entry
     assert "namma_agent" in entry
     assert "Terminal=false" in entry
+
+
+# ── Windows Add/Remove-Programs registration (pure) ──────────────────────────
+
+def test_windows_uninstall_registry_ps1(tmp_path):
+    ps = core.windows_uninstall_registry_ps1(tmp_path, "9.9.9")
+    assert "CurrentVersion\\Uninstall\\NammaAgent" in ps
+    assert "DisplayName -Value 'Namma Agent'" in ps
+    assert "9.9.9" in ps                              # DisplayVersion
+    assert "sparkle.ico" in ps                        # DisplayIcon → blue icon
+    assert "uninstall.ps1" in ps and "-Scope all" in ps  # UninstallString
+    assert "NoModify" in ps and "NoRepair" in ps
+
+
+def test_installed_version_reads_version_py(tmp_path):
+    pkg = tmp_path / "namma_agent"
+    pkg.mkdir()
+    (pkg / "version.py").write_text('__version__ = "1.2.3"\n', encoding="utf-8")
+    assert core._installed_version(tmp_path) == "1.2.3"
+    assert core._installed_version(tmp_path / "nope") == ""
+
+
+# ── uninstaller scripts ship + carry the safety logic ───────────────────────
+
+def test_uninstall_scripts_exist_and_kill_by_cmdline():
+    root = Path(core.__file__).resolve().parents[1]
+    ps1 = (root / "installers" / "uninstall.ps1").read_text(encoding="utf-8")
+    sh = (root / "installers" / "uninstall.sh").read_text(encoding="utf-8")
+    # Kill by matching the command line (works despite the bare python.exe name).
+    assert "namma_agent" in ps1 and "InstallDir" in ps1
+    assert "keep-data" in ps1 and "Uninstall\\NammaAgent" in ps1   # backs up + removes regkey
+    assert "namma_agent" in sh and "keep-data" in sh
+    # Also tears down the on-PATH `namma` launcher it added.
+    assert "'Path', $kept, \"User\"" in ps1 or "SetEnvironmentVariable(\"Path\"" in ps1
+    assert ".local/bin/namma" in sh

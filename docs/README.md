@@ -6,6 +6,8 @@
   tags, GitHub releases) so installed apps can auto-update. Beginner-friendly.
 - **[ARCHITECTURE.md](ARCHITECTURE.md)** — how the whole system works, with UML
   diagrams and the rationale behind every major technical decision. Start here.
+- **[COMMS.md](COMMS.md)** — connect messaging channels (Telegram, Signal, Slack,
+  WhatsApp, Discord): where to get each credential and how to start the gateway.
 - **[SKILLS.md](SKILLS.md)** — how skills (procedural memory) work and how they're created.
 - **[EXTENDING.md](EXTENDING.md)** — create your own tools and skills (developer guide).
 - **[SELF_MODIFICATION.md](SELF_MODIFICATION.md)** — how the assistant writes its own

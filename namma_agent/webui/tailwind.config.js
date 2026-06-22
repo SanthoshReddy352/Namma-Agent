@@ -5,15 +5,39 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Clean blue/white/black palette (adapted from the installer): white panels
-        // on a soft blue-grey canvas, near-black ink, a confident blue accent.
-        paper: { DEFAULT: "#f6f8fc", soft: "#eef1f7", panel: "#ffffff", sink: "#e9edf5" },
-        ink: { DEFAULT: "#10131a", soft: "#5a606e", faint: "#9aa0ad" },
-        line: { DEFAULT: "#e6e9f0", soft: "#eff1f6" },
-        brand: { DEFAULT: "#2f6bff", soft: "#e7eeff", deep: "#1f4fd6", wash: "#f1f5ff" },
-        // Dark surfaces — a cool slate/navy that pairs with the same blue accent, so
-        // dark mode is a faithful counterpart of the light theme (not a separate look).
-        night: { DEFAULT: "#0d1017", soft: "#141925", panel: "#1a2030", line: "#28303f", ink: "#e7ecf5", faint: "#98a1b3" },
+        // Color tokens resolve to CSS variables (RGB triplets) so multiple named
+        // themes (Default / Slate / Classic / Mono) can re-skin the whole UI without
+        // touching any component class. The values live in src/index.css; the
+        // `<alpha-value>` placeholder keeps Tailwind's opacity utilities working.
+        paper: {
+          DEFAULT: "rgb(var(--paper) / <alpha-value>)",
+          soft: "rgb(var(--paper-soft) / <alpha-value>)",
+          panel: "rgb(var(--paper-panel) / <alpha-value>)",
+          sink: "rgb(var(--paper-sink) / <alpha-value>)",
+        },
+        ink: {
+          DEFAULT: "rgb(var(--ink) / <alpha-value>)",
+          soft: "rgb(var(--ink-soft) / <alpha-value>)",
+          faint: "rgb(var(--ink-faint) / <alpha-value>)",
+        },
+        line: {
+          DEFAULT: "rgb(var(--line) / <alpha-value>)",
+          soft: "rgb(var(--line-soft) / <alpha-value>)",
+        },
+        brand: {
+          DEFAULT: "rgb(var(--brand) / <alpha-value>)",
+          soft: "rgb(var(--brand-soft) / <alpha-value>)",
+          deep: "rgb(var(--brand-deep) / <alpha-value>)",
+          wash: "rgb(var(--brand-wash) / <alpha-value>)",
+        },
+        night: {
+          DEFAULT: "rgb(var(--night) / <alpha-value>)",
+          soft: "rgb(var(--night-soft) / <alpha-value>)",
+          panel: "rgb(var(--night-panel) / <alpha-value>)",
+          line: "rgb(var(--night-line) / <alpha-value>)",
+          ink: "rgb(var(--night-ink) / <alpha-value>)",
+          faint: "rgb(var(--night-faint) / <alpha-value>)",
+        },
       },
       fontFamily: {
         sans: ["Inter", "system-ui", "Segoe UI", "sans-serif"],

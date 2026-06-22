@@ -47,6 +47,9 @@ ensure_deps_macos() {
     have python3 || brew install python || true
     have npm     || brew install node   || true
     have git     || brew install git    || true
+    # Optional tools (richer search/media; app degrades gracefully without them).
+    have rg      || brew install ripgrep || true
+    have ffmpeg  || brew install ffmpeg  || true
   fi
 }
 ensure_deps_linux() {
@@ -54,13 +57,16 @@ ensure_deps_linux() {
   have python3 || need="$need python"
   have npm     || need="$need node"
   have git     || need="$need git"
+  # ripgrep + ffmpeg are optional (richer search/media); pull them in too if missing.
+  have rg      || need="$need ripgrep"
+  have ffmpeg  || need="$need ffmpeg"
   [ -z "$need" ] && return 0
   echo "      Missing:$need — installing with your package manager (may ask for sudo)…"
   if   have apt-get; then sudo apt-get update -y || true
-       sudo apt-get install -y python3 python3-venv python3-pip nodejs npm git || true
-  elif have dnf;     then sudo dnf install -y python3 python3-pip nodejs npm git || true
-  elif have pacman;  then sudo pacman -Sy --noconfirm python nodejs npm git || true
-  elif have zypper;  then sudo zypper install -y python3 python3-venv nodejs npm git || true
+       sudo apt-get install -y python3 python3-venv python3-pip nodejs npm git ripgrep ffmpeg || true
+  elif have dnf;     then sudo dnf install -y python3 python3-pip nodejs npm git ripgrep ffmpeg || true
+  elif have pacman;  then sudo pacman -Sy --noconfirm python nodejs npm git ripgrep ffmpeg || true
+  elif have zypper;  then sudo zypper install -y python3 python3-venv nodejs npm git ripgrep ffmpeg || true
   else echo "      No known package manager — please install python3, node and git manually."
   fi
 }
@@ -136,6 +142,15 @@ EOF
   chmod +x "$APPS/namma-agent.desktop" 2>/dev/null || true
   echo "      Added to your applications menu: Namma Agent"
 fi
+
+# 7b. `namma` command on PATH (so you can run `namma`, `namma --chat`, `namma --server`).
+BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
+printf '#!/usr/bin/env bash\nexec "%s" -m namma_agent "$@"\n' "$VPY" > "$BINDIR/namma"
+chmod +x "$BINDIR/namma"
+case ":$PATH:" in
+  *":$BINDIR:"*) echo "      Installed the 'namma' command ($BINDIR/namma)." ;;
+  *) echo "      Installed the 'namma' command at $BINDIR/namma — add $BINDIR to your PATH to use it." ;;
+esac
 
 # 8. launch ------------------------------------------------------------------
 echo "=============================================="

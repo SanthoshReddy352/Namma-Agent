@@ -27,7 +27,7 @@ from typing import Callable, Optional
 from namma_agent.core.logger import logger
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import Persona, load_persona
-from namma_agent.core.providers.base import Provider
+from namma_agent.core.providers.base import USAGE_KEYS, Provider, usage_tokens
 from namma_agent.core.tools import ToolRegistry
 
 # References to our media mount. The ONLY legitimate source of these is a
@@ -222,13 +222,41 @@ TokenFn = Callable[[str], None]
 ApprovalFn = Callable[[str, dict], bool]
 
 
+def _record_step(steps: list[dict], event_type: str, payload: dict) -> None:
+    """Fold a live turn event into the structured activity timeline — the SAME shape
+    the web UI builds from the websocket stream, so the persisted steps and the live
+    ones render identically. Thinking deltas coalesce into one running section."""
+    if event_type == "thinking":
+        text = payload.get("text") or ""
+        if not text:
+            return
+        if steps and steps[-1].get("kind") == "thinking":
+            steps[-1]["text"] += text
+        else:
+            steps.append({"kind": "thinking", "text": text})
+    elif event_type == "preamble":
+        steps.append({"kind": "preamble", "text": payload.get("text") or ""})
+    elif event_type == "tool_started":
+        steps.append({"kind": "tool", "tool": payload.get("tool"),
+                      "args": payload.get("args") or {}, "state": "running"})
+    elif event_type == "tool_finished":
+        for st in reversed(steps):
+            if st.get("kind") == "tool" and st.get("tool") == payload.get("tool") \
+                    and st.get("state") == "running":
+                st["state"] = "ok" if payload.get("ok") else "fail"
+                st["summary"] = payload.get("summary") or ""
+                break
+
+
 def _accumulate_usage(usage: dict, delta: Optional[dict]) -> None:
     """Sum token counts across every model call in a turn (the tool loop + any forced
     visual-repair), so the reported total reflects the WHOLE request, not just the last
-    generation."""
+    generation. Cache reads/writes are tracked separately from fresh input — see
+    :data:`USAGE_KEYS` — so the headline total isn't inflated by the prompt prefix that
+    every tool-loop step re-reads from cache."""
     if not delta:
         return
-    for k in ("input_tokens", "output_tokens"):
+    for k in USAGE_KEYS:
         if delta.get(k):
             usage[k] = usage.get(k, 0) + delta[k]
 
@@ -251,6 +279,10 @@ class AgentResult:
     # Seconds from turn start to the FIRST token shown to the user (time-to-first-
     # token). None when the turn wasn't streamed (e.g. Telegram / tests).
     ttft: Optional[float] = None
+    # Structured activity timeline for the transparency UI: an ordered list of
+    # {kind: thinking|preamble|tool, ...} mirroring the live events, persisted so a
+    # reload restores the tool steps + thinking shown under the reply.
+    steps: list[dict] = field(default_factory=list)
 
 
 class Agent:
@@ -309,6 +341,16 @@ class Agent:
         # structured events never cross-talk between sessions; fall back to the
         # instance-level emitter for callers that don't (Telegram, tests).
         emit = emit or self._emit
+        # Collect the activity timeline (thinking / preambles / tool steps) as events
+        # fly by, so it can be persisted with the turn and replayed on reload. The
+        # wrapper records first, then forwards to the real sink unchanged.
+        steps: list[dict] = []
+        _outer_emit = emit
+
+        def emit(event_type: str, payload: dict, _sink=_outer_emit) -> None:  # noqa: A001
+            _record_step(steps, event_type, payload)
+            _sink(event_type, payload)
+
         # The brain for THIS turn: a per-chat model override (model switching)
         # falls back to the agent's default provider.
         provider = provider or self.provider
@@ -320,12 +362,16 @@ class Agent:
         # wrapper. Works for live streaming AND the deferred teaching replay.
         t_start = time.monotonic()
         ttft: dict = {"t": None}
+
+        def _stamp_ttft(text: str) -> None:
+            if ttft["t"] is None and text:
+                ttft["t"] = time.monotonic() - t_start
+
         if on_token is not None:
             _raw_on_token = on_token
 
             def on_token(text: str, _raw=_raw_on_token) -> None:  # noqa: A001
-                if ttft["t"] is None and text:
-                    ttft["t"] = time.monotonic() - t_start
+                _stamp_ttft(text)
                 _raw(text)
 
         # Expose the session to scope-aware tools (project / learning memory).
@@ -374,6 +420,24 @@ class Agent:
         # tool result) bypasses the filter via the raw `on_token` and streams intact.
         # (Deferred/teaching turns don't stream live, so they need no filter.)
         stream_filter = _StreamMediaFilter(live_on_token) if live_on_token is not None else None
+        # Provider-facing token sink: stamp time-to-first-token on the FIRST model
+        # delta — before the media filter's buffering and before any deferred
+        # (teaching) replay — so TTFT reflects real model latency, not the moment a
+        # pre-assembled answer starts typing out. Teaching turns still defer the
+        # *visible* stream (stream_filter is None for them) but measure latency here.
+        want_stream = on_token is not None
+
+        def _provider_sink(text: str) -> None:
+            _stamp_ttft(text)
+            if stream_filter is not None:
+                stream_filter(text)
+
+        # Reasoning ("thinking") deltas — surfaced as their own events so the UI shows
+        # a collapsible Thinking section, never mixed into the visible answer.
+        def _provider_thinking(text: str) -> None:
+            if text:
+                emit("thinking", {"session_id": session_id, "text": text})
+
         step = 0
         while True:
             if not unlimited and step >= self.tool_loop_limit:
@@ -388,9 +452,9 @@ class Agent:
                 emit("turn_cancelled", {"session_id": session_id})
                 break
             step += 1
-            stream = live_on_token is not None
-            resp = provider.generate(messages, tools=tool_defs, stream=stream,
-                                     on_token=stream_filter)
+            resp = provider.generate(messages, tools=tool_defs, stream=want_stream,
+                                     on_token=_provider_sink if want_stream else None,
+                                     on_thinking=_provider_thinking if want_stream else None)
             # Emit any link fragment the filter held back before we inject anything,
             # so streamed text stays in order.
             if stream_filter is not None:
@@ -518,9 +582,14 @@ class Agent:
             self._replay_stream(final_content, on_token, should_cancel)
         # Persist per-turn stats alongside the answer so the footer (time-to-first-
         # token + tokens) survives a reload — same shape the live `turn_result` sends.
-        total_tokens = (usage.get("input_tokens", 0) or 0) + (usage.get("output_tokens", 0) or 0)
-        turn_meta = ({"ttft": ttft["t"], "tokens": total_tokens}
+        total_tokens = usage_tokens(usage)
+        cached_tokens = usage.get("cache_read_tokens", 0) or 0
+        turn_meta = ({"ttft": ttft["t"], "tokens": total_tokens, "cached": cached_tokens}
                      if (ttft["t"] is not None or total_tokens) else None)
+        # Persist the activity timeline with the turn so a reload restores the tool
+        # steps + thinking shown under the reply (kept out of meta when there's none).
+        if steps:
+            turn_meta = {**(turn_meta or {}), "steps": steps}
         self.db.add_turn(session_id, "assistant", final_content, tools_used, meta=turn_meta)
         # Deterministic memory capture: if the user revealed a durable fact about
         # themselves, save it now (background, best-effort) so future sessions
@@ -531,7 +600,8 @@ class Agent:
             "session_id": session_id, "content": final_content, "tools_used": tools_used,
         })
         return AgentResult(content=final_content, session_id=session_id,
-                           tools_used=tools_used, usage=usage, ttft=ttft["t"])
+                           tools_used=tools_used, usage=usage, ttft=ttft["t"],
+                           steps=steps)
 
     # -- helpers -----------------------------------------------------------
 

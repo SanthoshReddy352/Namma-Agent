@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { playSound } from "./sounds.js";
+import { notify } from "./notify.js";
 
 function wsURL() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -40,10 +42,17 @@ export const loadSession = (id) => j(`/api/sessions/${id}`);
 export const deleteSession = (id) => j(`/api/sessions/${id}`, { method: "DELETE" });
 export const shutdownApi = () => j("/api/shutdown", { method: "POST" });
 
+// ── Comms gateway (inbound messaging service) ────────────────────────────────
+export const fetchCommsStatus = () => j("/api/comms/status");
+export const startComms = () => j("/api/comms/start", { method: "POST" });
+export const stopComms = () => j("/api/comms/stop", { method: "POST" });
+
 // ── Version + self-update ─────────────────────────────────────────────────────
 export const fetchVersion = () => j("/api/version");
 export const checkUpdate = () => j("/api/update/check");
 export const applyUpdate = () => j("/api/update/apply", { method: "POST" });
+export const uninstallApp = (scope) =>
+  j("/api/uninstall", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }) });
 
 // ── Personas ─────────────────────────────────────────────────────────────────
 const _post = (url, body) =>
@@ -134,6 +143,15 @@ export async function installPack(file, { approvedTools = [], skills = null, ove
   return j("/api/pack/install", { method: "POST", body: form });
 }
 
+// ── Skills (Settings → Skills tab) ───────────────────────────────────────────
+export const listSkills = () => j("/api/skills");
+export const toggleSkill = (name, enabled) => jpost("/api/skills/toggle", { name, enabled });
+
+// ── Tools / toolsets (Settings → Toolsets tab) ───────────────────────────────
+export const listTools = () => j("/api/tools");
+export const toggleTool = (name, enabled) => jpost("/api/tools/toggle", { name, enabled });
+export const toggleToolset = (category, enabled) => jpost("/api/toolset/toggle", { category, enabled });
+
 let _id = 0;
 const nextId = () => `m${++_id}`;
 
@@ -183,7 +201,6 @@ export function useNammaAgent() {
   const [connected, setConnected] = useState(false);
   const [data, setData] = useState({});           // { [sid]: {messages,timeline,status,streamId} }
   const [currentSid, setCurrentSid] = useState(null); // viewed key (sid | ref… | null=empty)
-  const [approval, setApproval] = useState(null);
   const [passwordReq, setPasswordReq] = useState(null);
   const [mode, setMode] = useState("agent");
   const [sessions, setSessions] = useState([]);
@@ -245,7 +262,7 @@ export function useNammaAgent() {
 
   // Append a streamed assistant chunk, opening a fresh assistant bubble if needed.
   // `meta` (on finalize) carries per-turn stats — { ttft, tokens } — for the footer.
-  const appendToken = (cur, text, finalize, meta) => {
+  const appendToken = (cur, text, finalize, meta, steps) => {
     let { messages, streamId } = cur;
     if (!streamId) {
       streamId = nextId();
@@ -253,9 +270,22 @@ export function useNammaAgent() {
     }
     messages = messages.map((x) => (x.id === streamId
       ? { ...x, content: finalize ? (text ?? x.content) : x.content + text,
-          ...(finalize ? { tools: finalize } : {}), ...(meta ? { meta } : {}) }
+          ...(finalize ? { tools: finalize } : {}), ...(meta ? { meta } : {}),
+          ...(steps ? { steps } : {}) }
       : x));
     return { messages, streamId };
+  };
+
+  // Fold a thinking/preamble/tool event into a session's live activity timeline —
+  // the SAME reducer the backend uses (_record_step), so live and persisted match.
+  const foldStep = (timeline, step) => {
+    const tl = [...timeline];
+    if (step.kind === "thinking" && tl.length && tl[tl.length - 1].kind === "thinking") {
+      tl[tl.length - 1] = { ...tl[tl.length - 1], text: tl[tl.length - 1].text + step.text };
+    } else {
+      tl.push(step);
+    }
+    return tl;
   };
 
   function handle(msg) {
@@ -281,10 +311,15 @@ export function useNammaAgent() {
         patch(key, (cur) => ({ ...appendToken(cur, msg.text, null), status: "thinking" }));
         break;
       case "preamble":
-        patch(key, (cur) => ({ timeline: [...cur.timeline, { kind: "preamble", text: msg.text }] }));
+        patch(key, (cur) => ({ timeline: foldStep(cur.timeline, { kind: "preamble", text: msg.text }) }));
+        break;
+      case "thinking":
+        // Reasoning deltas — accumulate into a single running "Thinking" entry.
+        patch(key, (cur) => ({ timeline: foldStep(cur.timeline, { kind: "thinking", text: msg.text }), status: "thinking" }));
         break;
       case "tool_started":
         patch(key, (cur) => ({ timeline: [...cur.timeline, { kind: "tool", tool: msg.tool, args: msg.args, state: "running" }] }));
+        playSound("tool");
         break;
       case "tool_finished":
         patch(key, (cur) => {
@@ -314,18 +349,42 @@ export function useNammaAgent() {
         browserHush();
         break;
       case "approval_request":
-        setApproval({ id: msg.id, tool: msg.tool, args: msg.args, session_id: key });
+        // Inline approval: drop a card into THIS chat's live activity timeline (it
+        // renders in place inside the working block, not as a global modal). It's
+        // removed when the user answers (respondApproval).
+        patch(key, (cur) => ({
+          timeline: [...cur.timeline, { kind: "approval", id: msg.id, tool: msg.tool, args: msg.args }],
+          status: "thinking",
+        }));
+        playSound("approval");
+        notify("approval", { title: "Approval needed", body: `Allow ${msg.tool}?` });
         break;
       case "password_request":
         setPasswordReq({ id: msg.id, prompt: msg.prompt });
+        playSound("input");
+        notify("input", { title: "Input needed", body: msg.prompt || "Your assistant needs input." });
         break;
       case "turn_result": {
-        patch(key, (cur) => ({
-          ...appendToken(cur, msg.content, msg.tools_used || [],
-                         { ttft: msg.ttft, tokens: msg.tokens }),
-          streamId: null, status: "idle",
-        }));
+        patch(key, (cur) => {
+          // Pin the activity timeline (thinking + tool steps) under the reply. Prefer
+          // the server's structured steps; fall back to what we accumulated live.
+          const steps = (msg.steps && msg.steps.length) ? msg.steps : cur.timeline;
+          return {
+            ...appendToken(cur, msg.content, msg.tools_used || [],
+                           { ttft: msg.ttft, tokens: msg.tokens, cached: msg.cached },
+                           steps),
+            timeline: [], streamId: null, status: "idle",
+          };
+        });
         if (voiceRef.current && msg.content && key === currentRef.current) browserSpeak(msg.content);
+        playSound("complete");
+        // Desktop notification: the viewed chat finishing = "Response ready"; any
+        // *other* chat finishing = a backgrounded task.
+        {
+          const snippet = toPlainText(msg.content || "").slice(0, 140);
+          if (key === currentRef.current) notify("response", { title: "Response ready", body: snippet });
+          else notify("background", { title: "Background task finished", body: snippet });
+        }
         refreshSessions();
         if ((msg.tools_used || []).includes("exit_namma")) {
           stopReconnectRef.current = true;
@@ -370,6 +429,8 @@ export function useNammaAgent() {
           messages: [...cur.messages, { id: nextId(), role: "error", content: msg.message }],
           streamId: null, status: "idle",
         }));
+        playSound("error");
+        notify("error", { title: "Turn failed", body: msg.message || "Something went wrong." });
         break;
       default:
         break;
@@ -424,6 +485,7 @@ export function useNammaAgent() {
       || configuredModelsRef.current[0]?.id || null;
     const userMsg = { id: nextId(), role: "user", content: clean || "(sent attachment)", attachments, at: now() };
     patch(key, (cur) => ({ messages: [...cur.messages, userMsg], timeline: [], streamId: null, status: "thinking", suggestion: null }));
+    playSound("sent");
     wsRef.current.send(JSON.stringify({
       type: "user_input", text: payloadText, session_id: sessionId, client_ref: clientRef, mode: modeRef.current, model,
     }));
@@ -447,10 +509,26 @@ export function useNammaAgent() {
     if (key) patch(key, () => ({ status: "idle", streamId: null }));
   }, [patch]);
 
-  const respondApproval = useCallback((approved) => {
-    if (approval && wsRef.current) wsRef.current.send(JSON.stringify({ type: "approval_response", id: approval.id, approved }));
-    setApproval(null);
-  }, [approval]);
+  // Answer an inline approval card. `scope` is "once" (allow this time) or "session"
+  // (allow this tool for the rest of the chat — the server then stops prompting for
+  // it). Sends the decision, then drops the card from whichever session's timeline
+  // holds it (so it stops rendering).
+  const respondApproval = useCallback((id, approved, scope = "once") => {
+    if (id != null && wsRef.current?.readyState === 1) {
+      wsRef.current.send(JSON.stringify({ type: "approval_response", id, approved, scope }));
+    }
+    setData((all) => {
+      let changed = false;
+      const out = {};
+      for (const [k, v] of Object.entries(all)) {
+        const tl = (v.timeline || []).filter((it) => !(it.kind === "approval" && it.id === id));
+        if (tl.length !== (v.timeline || []).length) { out[k] = { ...v, timeline: tl }; changed = true; }
+        else out[k] = v;
+      }
+      if (changed) dataRef.current = out;
+      return changed ? out : all;
+    });
+  }, []);
 
   // Send the sudo password straight over the socket (never kept in app state/history).
   const respondPassword = useCallback((password) => {
@@ -478,9 +556,11 @@ export function useNammaAgent() {
             at: t.created_at ? Date.parse(t.created_at) : undefined }
         : { id: nextId(), role: t.role === "user" ? "user" : "assistant", content: t.content,
             at: t.created_at ? Date.parse(t.created_at) : undefined,
-            // Restore the assistant footer (tools used + stats) so it persists on reload.
+            // Restore the assistant footer (tools used + stats) and the activity
+            // timeline (thinking + tool steps, from turn meta) so both persist on reload.
             ...(t.role === "assistant"
-              ? { tools: t.tools_used || [], meta: t.meta || null } : {}) }));
+              ? { tools: t.tools_used || [], meta: t.meta || null,
+                  steps: (t.meta && t.meta.steps) || [] } : {}) }));
     // Re-derive the "module complete → continue" card from persisted state. The
     // live `learning_progress` event only appends it once and isn't saved with the
     // turns, so without this the button vanishes on reload (or never shows if the
@@ -568,7 +648,7 @@ export function useNammaAgent() {
   return {
     connected, messages: cur.messages, timeline: cur.timeline, status: cur.status,
     chatContext: cur.context || null, suggestion: cur.suggestion || null, learningSignal,
-    approval, passwordReq, mode, setMode, sessions, shuttingDown,
+    passwordReq, mode, setMode, sessions, shuttingDown,
     voiceOn, setVoiceOn,
     configuredModels, currentModel: cur.model || activeModel || configuredModels[0]?.id || "",
     activeModel, setActiveModel: setActive, selectModel, switchModelNewSession, reloadConfiguredModels,

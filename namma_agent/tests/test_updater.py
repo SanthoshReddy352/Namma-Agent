@@ -52,10 +52,15 @@ def test_configure_cloud_provider_writes_overlay_and_env(tmp_path):
     cfg_path, env_path = _cfg(tmp_path)
     prov = configure_provider("openai", model="gpt-4o", api_key="sk-test",
                               config_path=cfg_path, env_path=env_path)
-    assert prov == {"type": "openai", "model": "gpt-4o", "api_key_env": "OPENAI_API_KEY"}
+    assert prov["type"] == "openai"
+    assert prov["model"] == "gpt-4o"
+    assert prov["api_key_env"] == "OPENAI_API_KEY"
 
     overlay = yaml.safe_load((tmp_path / "config.local.yaml").read_text())
     assert overlay["provider"]["type"] == "openai"
+    # Also registered in the switchable UI lists so it shows in the model picker.
+    assert any(p["id"] == "openai" for p in overlay["providers"])
+    assert any(m["model"] == "gpt-4o" for m in overlay["models"])
     assert "OPENAI_API_KEY=sk-test" in (tmp_path / ".env").read_text()
 
 

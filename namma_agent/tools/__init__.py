@@ -20,14 +20,19 @@ def load_tools(registry: ToolRegistry) -> ToolRegistry:
         try:
             module = importlib.import_module(f"{__name__}.{info.name}")
             if hasattr(module, "register"):
-                module.register(registry)
+                # Each tool module is a toolset; its name groups the tools it
+                # registers (file_ops, shell, web, browser, vision, …) in the
+                # Toolsets tab. A module may still set its own category per tool.
+                with registry.categorize(info.name):
+                    module.register(registry)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[tools] failed to load %s: %s", info.name, exc)
     # Load any tools the agent authored itself (~/.namma_agent/tools).
     try:
         from namma_agent.tools.authoring import load_user_tools
 
-        load_user_tools(registry)
+        with registry.categorize("custom"):
+            load_user_tools(registry)
     except Exception as exc:  # noqa: BLE001
         logger.warning("[tools] user-tool load failed: %s", exc)
     return registry

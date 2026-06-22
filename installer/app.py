@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import subprocess
 import threading
 import time
 from pathlib import Path
@@ -66,6 +67,32 @@ def _version() -> str:
             if m:
                 return m.group(1)
     return "dev"
+
+
+def _windows_folder_dialog(start: str) -> Optional[str]:
+    """Show a Windows folder picker in a separate (console-less) PowerShell process
+    and return the chosen path, or None if cancelled. Runs out-of-process so it can
+    never block the installer's WebView2 UI thread."""
+    start_q = (start or "").replace("'", "''")
+    ps = (
+        "Add-Type -AssemblyName System.Windows.Forms;"
+        "$f=New-Object System.Windows.Forms.FolderBrowserDialog;"
+        "$f.Description='Choose where to install Namma Agent';"
+        "$f.ShowNewFolderButton=$true;"
+        f"$f.SelectedPath='{start_q}';"
+        "if($f.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK)"
+        "{[Console]::Out.Write($f.SelectedPath)}"
+    )
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-STA", "-Command", ps],
+            capture_output=True, text=True, timeout=600,
+            creationflags=core._NO_WINDOW, startupinfo=core._startupinfo(),
+        )
+        path = (out.stdout or "").strip()
+        return path or None
+    except Exception:  # noqa: BLE001
+        return None
 
 
 class Bridge:
@@ -148,7 +175,16 @@ class Bridge:
         }
 
     def choose_dir(self) -> Optional[str]:
-        """Native folder picker; returns the chosen parent folder (or None)."""
+        """Native folder picker. Returns the chosen folder (or None).
+
+        On Windows the dialog runs in a SEPARATE PowerShell process, NOT via
+        pywebview's create_file_dialog — that one runs the modal dialog on the
+        WebView2 UI thread, which freezes the window ("not responding") the whole
+        time it's open. A separate process can never block our UI thread.
+        """
+        if os.name == "nt":
+            return _windows_folder_dialog(str(core.default_install_dir().parent))
+        # macOS/Linux: pywebview's native dialog (no UI-thread freeze observed there).
         if self.window is None:
             return None
         try:

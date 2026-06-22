@@ -39,7 +39,7 @@ class FakeProvider(Provider):
     def is_available(self) -> bool:
         return self._available
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         self.calls += 1
         if self._fail:
             raise ProviderError("boom")

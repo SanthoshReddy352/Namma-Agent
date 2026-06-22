@@ -5,7 +5,10 @@ Stdlib-only (urllib). Tokens live in the environment, never in config:
 
 Outbound: :meth:`TelegramChannel.send` (async, markdown→Telegram HTML, chunked).
 Inbound:  :class:`TelegramInbound` long-polls getUpdates and routes each text
-message through an ``on_message(text) -> reply`` callback, replying in-chat.
+message through the shared :class:`~namma_agent.comms.inbound.InboundBridge`
+(commands, model picker, askpass, turns), replying in-chat. This subclass adds
+only the Telegram transport: the poller, reply quoting, the typing indicator,
+password scrubbing, and voice/document handling.
 """
 from __future__ import annotations
 
@@ -18,6 +21,7 @@ import urllib.request
 from html import escape as _html_escape
 from typing import Callable, Optional
 
+from namma_agent.comms.inbound import InboundBridge
 from namma_agent.core.logger import logger
 
 _MAX_CHARS = 3800  # safe margin under Telegram's 4096 limit
@@ -151,34 +155,47 @@ class _TypingStatus:
         self._stop.set()
 
 
-class TelegramInbound:
+class TelegramInbound(InboundBridge):
     """Long-poll the bot and route messages (text, voice, /commands, !shell, documents).
 
-    ``on_message(text, session_id, mode, askpass=None) -> (reply, session_id)`` runs one
-    turn and returns the reply plus the (possibly new) session id so the chat keeps
-    context. The answer is delivered once as a reply to the user's message."""
+    The shared session/command/picker/askpass/turn logic lives in
+    :class:`InboundBridge`; this subclass supplies the Telegram transport.
+    """
 
     _POLL_TIMEOUT = 20
 
     def __init__(self, channel: TelegramChannel,
                  on_message: Callable[..., tuple],  # (text, session_id, mode, askpass, model) -> (reply, sid)
                  get_models: Optional[Callable[[], list]] = None):
+        super().__init__(on_message, get_models)
         self._channel = channel
-        self._on_message = on_message
-        # Returns the configured model profiles (for the /model picker). Optional
-        # so older callers / tests still work (no picker → /model says none set).
-        self._get_models = get_models or (lambda: [])
         self._offset = 0
-        self._stop = threading.Event()
-        self._thread: Optional[threading.Thread] = None
-        self._session_id: Optional[str] = None
-        self._mode = "agent"
-        self._model_id: Optional[str] = None       # chosen brain (None = default)
-        self._pending_models: Optional[list] = None  # set while awaiting a number
-        # Pending sudo-password request (set while a turn waits for a reply).
-        self._pw_lock = threading.Lock()
-        self._pw_event: Optional[threading.Event] = None
-        self._pw_value: Optional[str] = None
+
+    @property
+    def available(self) -> bool:
+        return self._channel.available
+
+    @property
+    def channel_name(self) -> str:
+        return "telegram"
+
+    def _help_text(self) -> str:
+        from namma_agent.config import assistant_name
+        return _HELP.replace("{name}", assistant_name())
+
+    # -- transport ---------------------------------------------------------
+
+    def _say(self, text: str) -> None:
+        self._channel.send(text)
+
+    def _reply(self, text: str, ref=None) -> None:
+        if ref:
+            self._send_reply(text, ref)
+        else:
+            self._channel.send(text)
+
+    def _scrub(self, ref) -> None:
+        self._delete_message(ref)
 
     def start(self) -> None:
         if not self._channel.available or self._thread is not None:
@@ -209,8 +226,7 @@ class TelegramInbound:
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[telegram] reply send failed: %s", exc)
 
-    def stop(self) -> None:
-        self._stop.set()
+    # -- poll loop ---------------------------------------------------------
 
     def _loop(self) -> None:
         backoff = 1
@@ -270,30 +286,6 @@ class TelegramInbound:
             return
         threading.Thread(target=self._process, args=(text, msg_id), daemon=True).start()
 
-    # -- sudo askpass (in-chat, password deleted after use) ----------------
-
-    def askpass(self, prompt: str) -> Optional[str]:
-        """Ask for the sudo password in chat and wait for the reply (one at a time).
-        The reply is captured, deleted from the chat, and returned — never logged."""
-        ev = threading.Event()
-        with self._pw_lock:
-            if self._pw_event is not None:
-                return None  # already prompting
-            self._pw_event, self._pw_value = ev, None
-        self._channel.send(f"🔒 {prompt}\nReply with your sudo password — I'll delete it right after.")
-        got = ev.wait(timeout=120)
-        with self._pw_lock:
-            value, self._pw_event, self._pw_value = self._pw_value, None, None
-        return value if got else None
-
-    def _capture_password(self, text: str, message_id) -> None:
-        with self._pw_lock:
-            self._pw_value = text
-            ev = self._pw_event
-        self._delete_message(message_id)  # scrub the password from chat history
-        if ev:
-            ev.set()
-
     def _delete_message(self, message_id) -> None:
         if not message_id:
             return
@@ -303,124 +295,24 @@ class TelegramInbound:
         except Exception:  # noqa: BLE001
             pass
 
-    # -- commands ----------------------------------------------------------
+    # -- turn (with Telegram typing indicator + reply quoting) -------------
 
-    def _handle_command(self, text: str) -> bool:
-        """Handle /commands locally. Returns True if consumed."""
-        low = text.lower()
-        if low in ("/start", "/help"):
-            from namma_agent.config import assistant_name
-            self._channel.send(_HELP.replace("{name}", assistant_name()))
-            return True
-        if low == "/new":
-            self._session_id = None
-            self._channel.send("Started a fresh conversation.")
-            return True
-        if low == "/mode" or low.startswith("/mode "):
-            arg = text[5:].strip().lower()
-            if arg in ("chat", "agent"):
-                self._mode = arg
-                self._channel.send(f"Mode set to {arg}.")
-            else:
-                self._channel.send(f"Current mode: {self._mode}. Use /mode chat or /mode agent.")
-            return True
-        if low == "/model":
-            self._show_model_menu()
-            return True
-        if low == "/clear":
-            self._run_turn("Clear all of my memory.")
-            return True
-        # Unknown /command → let the agent interpret it.
-        return False
-
-    # -- model switching (numbered picker) ---------------------------------
-
-    def _show_model_menu(self) -> None:
-        """List the configured models numbered, and wait for a number reply."""
-        models = list(self._get_models() or [])
-        if not models:
-            self._channel.send(
-                "No models are configured yet. Add some in Settings → Models, "
-                "then use /model to switch.")
-            return
-        lines = ["Pick a model — reply with its number:", ""]
-        for i, m in enumerate(models, start=1):
-            current = " ✅ (current)" if m.get("id") == self._model_id else ""
-            label = m.get("label") or m.get("model") or m.get("id")
-            lines.append(f"{i}. {label}{current}")
-        # 0 is always Cancel; mark the default brain too when nothing is overridden.
-        default_mark = " ✅ (current)" if self._model_id is None else ""
-        lines.append(f"\n0. Cancel{default_mark}")
-        self._pending_models = models
-        self._channel.send("\n".join(lines))
-
-    def _handle_model_selection(self, text: str) -> None:
-        """Validate the number the user replied with. Re-prompt on bad input;
-        0 cancels; a valid number switches the model and starts a fresh chat."""
-        models = self._pending_models or []
-        choice = text.strip()
-        if choice.lower() in ("cancel", "stop", "abort"):
-            choice = "0"
-        if not choice.lstrip("-").isdigit():
-            self._channel.send(
-                f"That isn't a number. Reply with 1–{len(models)} to choose, or 0 to cancel.")
-            return  # keep the picker open — prompt again
-        n = int(choice)
-        if n == 0:
-            self._pending_models = None
-            self._channel.send("Okay — keeping the current model.")
-            return
-        if not 1 <= n <= len(models):
-            self._channel.send(
-                f"{n} isn't on the list. Reply with a number from 1 to {len(models)}, or 0 to cancel.")
-            return  # invalid → prompt again
-        chosen = models[n - 1]
-        self._pending_models = None
-        self._model_id = chosen.get("id")
-        self._session_id = None  # switching the brain starts a fresh conversation
-        label = chosen.get("label") or chosen.get("model") or chosen.get("id")
-        self._channel.send(f"✅ Switched to {label}. Started a fresh conversation.")
-
-    # -- turns -------------------------------------------------------------
-
-    def _run_turn(self, text: str) -> None:
-        """Plain turn → plain reply (used by /commands; no typing/quote effect)."""
-        try:
-            reply, self._session_id = self._on_message(
-                text, self._session_id, self._mode, self.askpass, self._model_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[telegram] turn failed: %s", exc)
-            reply = "Sorry — something went wrong handling that."
-        self._channel.send(reply or "(no response)")
-
-    def _reply_turn(self, text: str, reply_to: Optional[int]) -> None:
+    def _reply_turn(self, text: str, reply_to: Optional[int] = None) -> None:
         """Run one turn and deliver the answer ONCE as a reply to the user's message,
-        showing only the standard top '<name> is typing…' status while it works. No
-        in-chat placeholder, no streaming. When reply_to is absent (e.g. unit tests),
-        sends plainly so behaviour is unchanged off the live Telegram path."""
+        showing only the standard top '<name> is typing…' status while it works. When
+        reply_to is absent (e.g. unit tests), sends plainly."""
         status = _TypingStatus(self._channel).start() if reply_to else None
         try:
-            reply, self._session_id = self._on_message(
-                text, self._session_id, self._mode, self.askpass, self._model_id)
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("[telegram] turn failed: %s", exc)
-            reply = "Sorry — something went wrong handling that."
+            reply = self._execute(text)
         finally:
             if status is not None:
                 status.stop()
-        reply = reply or "(no response)"
         if reply_to:
             self._send_reply(reply, reply_to)
         else:
             self._channel.send(reply)
 
-    def _process(self, text: str, reply_to: Optional[int] = None) -> None:
-        # `!cmd` → run a shell command via the agent's run_shell tool.
-        if text.startswith("!"):
-            cmd = text[1:].strip()
-            self._reply_turn(f"Run this shell command with run_shell and show me the output:\n{cmd}", reply_to)
-            return
-        self._reply_turn(text, reply_to)
+    # -- voice / documents -------------------------------------------------
 
     def _process_voice(self, voice: dict, caption: str, reply_to: Optional[int] = None) -> None:
         from namma_agent.comms.transcribe import transcribe_audio

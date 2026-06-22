@@ -62,7 +62,7 @@ def test_dangling_visual_is_repaired_with_render(db, topic, monkeypatch):
         def is_available(self):
             return True
 
-        def generate(self, messages, tools=None, stream=False, on_token=None):
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
             resp = self._r.pop(0)
             if stream and on_token and resp.content:
                 on_token(resp.content)
@@ -107,7 +107,7 @@ def _agent_with_media(db, responses):
         def is_available(self):
             return True
 
-        def generate(self, messages, tools=None, stream=False, on_token=None):
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
             resp = self._r.pop(0)
             if stream and on_token and resp.content:
                 on_token(resp.content)
@@ -495,7 +495,7 @@ def test_learning_session_scopes_tools(db, topic):
         def is_available(self):
             return True
 
-        def generate(self, messages, tools=None, stream=False, on_token=None):
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
             captured["tools"] = tools
             return LLMResponse(content="ok")
 

@@ -109,6 +109,20 @@ def bundled_source() -> Optional[Path]:
 
 # ── dependency detection ─────────────────────────────────────────────────────
 
+# Optional runtime tools Hermes also installs — they make some skills/tools richer
+# (ripgrep = fast code search, ffmpeg = audio/video) but the app degrades gracefully
+# without them, so a failed/absent install is never fatal.
+OPTIONAL_TOOLS = ("ripgrep", "ffmpeg")
+
+# A tool's name on disk differs from the package name for ripgrep (binary is ``rg``).
+_TOOL_COMMAND = {"ripgrep": "rg"}
+
+
+def _tool_command(tool: str) -> str:
+    """The executable name to probe on PATH for ``tool`` (e.g. ripgrep → rg)."""
+    return _TOOL_COMMAND.get(tool, tool)
+
+
 def _has(cmd: str) -> bool:
     return shutil.which(cmd) is not None
 
@@ -143,24 +157,30 @@ def install_dep_command(tool: str, system: Optional[str] = None) -> Optional[lis
     Pure (no execution) so it's testable. ``tool`` in {python, git, node}."""
     system = system or platform.system()
     if system == "Windows":
-        ids = {"python": "Python.Python.3.12", "git": "Git.Git", "node": "OpenJS.NodeJS.LTS"}
+        ids = {"python": "Python.Python.3.12", "git": "Git.Git", "node": "OpenJS.NodeJS.LTS",
+               "ripgrep": "BurntSushi.ripgrep.MSVC", "ffmpeg": "Gyan.FFmpeg"}
         if tool not in ids:
             return None
         return ["winget", "install", "-e", "--id", ids[tool], "--silent",
                 "--accept-source-agreements", "--accept-package-agreements"]
     if system == "Darwin":
-        pkg = {"python": "python", "git": "git", "node": "node"}.get(tool)
+        pkg = {"python": "python", "git": "git", "node": "node",
+               "ripgrep": "ripgrep", "ffmpeg": "ffmpeg"}.get(tool)
         return ["brew", "install", pkg] if pkg else None
     # Linux: choose by available package manager.
     matrix = {
         "apt-get": (["sudo", "apt-get", "install", "-y"],
-                    {"python": ["python3", "python3-venv", "python3-pip"], "git": ["git"], "node": ["nodejs", "npm"]}),
+                    {"python": ["python3", "python3-venv", "python3-pip"], "git": ["git"], "node": ["nodejs", "npm"],
+                     "ripgrep": ["ripgrep"], "ffmpeg": ["ffmpeg"]}),
         "dnf": (["sudo", "dnf", "install", "-y"],
-                {"python": ["python3", "python3-pip"], "git": ["git"], "node": ["nodejs", "npm"]}),
+                {"python": ["python3", "python3-pip"], "git": ["git"], "node": ["nodejs", "npm"],
+                 "ripgrep": ["ripgrep"], "ffmpeg": ["ffmpeg"]}),
         "pacman": (["sudo", "pacman", "-Sy", "--noconfirm"],
-                   {"python": ["python"], "git": ["git"], "node": ["nodejs", "npm"]}),
+                   {"python": ["python"], "git": ["git"], "node": ["nodejs", "npm"],
+                    "ripgrep": ["ripgrep"], "ffmpeg": ["ffmpeg"]}),
         "zypper": (["sudo", "zypper", "install", "-y"],
-                   {"python": ["python3", "python3-venv"], "git": ["git"], "node": ["nodejs", "npm"]}),
+                   {"python": ["python3", "python3-venv"], "git": ["git"], "node": ["nodejs", "npm"],
+                    "ripgrep": ["ripgrep"], "ffmpeg": ["ffmpeg"]}),
     }
     for pm, (prefix, names) in matrix.items():
         if _has(pm) and tool in names:
@@ -175,12 +195,13 @@ def install_dep_command(tool: str, system: Optional[str] = None) -> Optional[lis
 # the stepper look the design calls for.
 INSTALL_STEPS: list[tuple[str, str]] = [
     ("python", "Verifying Python 3.10+"),
-    ("tools", "Checking Git & Node.js"),
+    ("tools", "Checking Git, Node.js & tools"),
     ("source", "Getting the app files"),
     ("venv", "Creating the Python environment"),
     ("deps", "Installing Python dependencies"),
     ("ui", "Building the interface"),
     ("shortcuts", "Creating shortcuts"),
+    ("path", "Adding the namma command to PATH"),
 ]
 
 
@@ -285,6 +306,22 @@ def ensure_dependencies(log: Log) -> None:
         raise RuntimeError("Python 3.10+ is required but could not be installed automatically.")
 
 
+def ensure_optional_tools(log: Log) -> None:
+    """Best-effort install of ripgrep + ffmpeg (Hermes parity). These enrich some
+    skills/tools but the app degrades gracefully without them, so nothing here is
+    fatal — a missing package manager or a failed install is just logged."""
+    for tool in OPTIONAL_TOOLS:
+        if _has(_tool_command(tool)):
+            continue
+        cmd = install_dep_command(tool)
+        if not cmd:
+            log(f"  ! {tool} not found and no installer available — skipping (optional).")
+            continue
+        log(f"  Installing {tool} ({' '.join(cmd[:3])} …)")
+        with suppress(Exception):
+            _run(cmd, log=log, check=False)
+
+
 def fetch_source(install_dir: Path, log: Log) -> None:
     src = bundled_source()
     if src:
@@ -343,10 +380,47 @@ def build_ui(install_dir: Path, log: Log) -> bool:
     return False
 
 
+def _clean_env() -> dict:
+    """Environment for spawning the app's venv Python from the (PyInstaller-frozen)
+    installer. PyInstaller prepends its onefile temp dir (``sys._MEIPASS``) to PATH
+    and may export PYTHON*/_PYI* vars — a spawned interpreter could then load the
+    WRONG DLLs/modules and misbehave. Strip those so the venv Python is pristine."""
+    env = dict(os.environ)
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        norm = os.path.normcase(os.path.abspath(meipass))
+        parts = env.get("PATH", "").split(os.pathsep)
+        env["PATH"] = os.pathsep.join(
+            p for p in parts if p and os.path.normcase(os.path.abspath(p)) != norm)
+    for k in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+              "_PYI_ARCHIVE_FILE", "_PYI_APPLICATION_HOME_DIR", "_MEIPASS2"):
+        env.pop(k, None)
+    return env
+
+
 def _run_app_cli(install_dir: Path, args: list[str]) -> None:
-    subprocess.run([str(venv_python(install_dir)), "-m", "namma_agent", *args],
-                   cwd=str(install_dir), check=False,
-                   creationflags=_NO_WINDOW, startupinfo=_startupinfo())
+    """Run the installed app's CLI (``--configure`` / ``--onboard``) and FAIL LOUDLY
+    if it errors — the result is logged to <install>/logs/installer-actions.log and a
+    non-zero exit raises, so a bad provider/onboarding write can't pass silently."""
+    install_dir = Path(install_dir)
+    proc = subprocess.run(
+        [str(venv_python(install_dir)), "-m", "namma_agent", *args],
+        cwd=str(install_dir), capture_output=True, text=True,
+        encoding="utf-8", errors="replace", env=_clean_env(),
+        creationflags=_NO_WINDOW, startupinfo=_startupinfo(),
+    )
+    with suppress(Exception):
+        logs = install_dir / "logs"
+        logs.mkdir(parents=True, exist_ok=True)
+        with (logs / "installer-actions.log").open("a", encoding="utf-8") as f:
+            f.write(f"$ namma_agent {' '.join(args[:1])} (exit {proc.returncode})\n")
+            if proc.stdout:
+                f.write(proc.stdout.strip() + "\n")
+            if proc.stderr:
+                f.write(proc.stderr.strip() + "\n")
+    if proc.returncode != 0:
+        tail = "\n".join((proc.stderr or proc.stdout or "").strip().splitlines()[-8:])
+        raise RuntimeError(f"`namma_agent {args[0]}` failed (exit {proc.returncode}):\n{tail}")
 
 
 def write_provider(install_dir: Path, provider: dict) -> None:
@@ -413,8 +487,55 @@ def linux_desktop_entry(install_dir: Path) -> str:
     )
 
 
+def _installed_version(install_dir: Path) -> str:
+    """Read __version__ from the installed app, or '' if unavailable."""
+    import re
+    vf = Path(install_dir) / "namma_agent" / "version.py"
+    if vf.exists():
+        m = re.search(r'__version__\s*=\s*"([^"]+)"', vf.read_text(encoding="utf-8"))
+        if m:
+            return m.group(1)
+    return ""
+
+
+def windows_uninstall_registry_ps1(install_dir: Path, version: str = "") -> str:
+    """PowerShell that registers Namma Agent in Add/Remove Programs (HKCU Uninstall),
+    so it shows up in Settings → Apps with a working Uninstall button. Pure → tested."""
+    root = str(install_dir).replace("'", "''")
+    icon = str(Path(install_dir) / "namma_agent" / "assets" / "sparkle.ico").replace("'", "''")
+    script = str(Path(install_dir) / "installers" / "uninstall.ps1").replace("'", "''")
+    uninstall_cmd = (f'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden '
+                     f'-File "{script}" -InstallDir "{root}" -Scope all')
+    return (
+        "$k='HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\NammaAgent';"
+        "New-Item -Path $k -Force | Out-Null;"
+        "Set-ItemProperty -Path $k -Name DisplayName -Value 'Namma Agent';"
+        f"Set-ItemProperty -Path $k -Name DisplayIcon -Value '{icon}';"
+        f"Set-ItemProperty -Path $k -Name DisplayVersion -Value '{version}';"
+        "Set-ItemProperty -Path $k -Name Publisher -Value 'Namma Agent';"
+        f"Set-ItemProperty -Path $k -Name InstallLocation -Value '{root}';"
+        f"Set-ItemProperty -Path $k -Name UninstallString -Value '{uninstall_cmd}';"
+        f"Set-ItemProperty -Path $k -Name QuietUninstallString -Value '{uninstall_cmd}';"
+        "Set-ItemProperty -Path $k -Name NoModify -Type DWord -Value 1;"
+        "Set-ItemProperty -Path $k -Name NoRepair -Type DWord -Value 1;"
+    )
+
+
+def register_windows_app(install_dir: Path, log: Optional[Log] = None) -> None:
+    """Register the app in Windows Add/Remove Programs (best-effort, Windows only)."""
+    if os.name != "nt":
+        return
+    log = log or (lambda _m: None)
+    with suppress(Exception):
+        _run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+              "-Command", windows_uninstall_registry_ps1(install_dir, _installed_version(install_dir))],
+             log=log, check=False)
+        log("  Registered 'Namma Agent' in Add/Remove Programs.")
+
+
 def create_shortcuts(install_dir: Path, log: Optional[Log] = None) -> None:
-    """Create Desktop + app-menu shortcuts for the installed app (best-effort)."""
+    """Create Desktop + app-menu shortcuts for the installed app (best-effort), and on
+    Windows register an Add/Remove-Programs entry with a working uninstaller."""
     log = log or (lambda _m: None)
     install_dir = Path(install_dir)
     system = platform.system()
@@ -424,6 +545,7 @@ def create_shortcuts(install_dir: Path, log: Optional[Log] = None) -> None:
                   "-WindowStyle", "Hidden", "-Command", windows_shortcut_ps1(install_dir)],
                  log=log, check=False)
             log("  Shortcut 'Namma Agent' added to Desktop + Start Menu.")
+            register_windows_app(install_dir, log)
         elif system == "Darwin":
             launcher = install_dir / "Namma Agent.command"
             launcher.write_text(macos_launcher_body(install_dir), encoding="utf-8")
@@ -441,6 +563,71 @@ def create_shortcuts(install_dir: Path, log: Optional[Log] = None) -> None:
         log(f"  (could not create shortcuts: {exc})")
 
 
+# ── add the `namma` command to PATH ──────────────────────────────────────────
+
+def windows_namma_cmd(install_dir: Path) -> str:
+    """Body of ``<install>/bin/namma.cmd`` — the on-PATH launcher. Bare ``namma``
+    opens the GUI detached (pythonw, no lingering console); ``namma --chat`` /
+    ``--server`` / any args run in the console so their output is visible. Pure → tested."""
+    pyw = venv_pythonw(install_dir)
+    py = venv_python(install_dir)
+    root = str(install_dir)
+    return (
+        "@echo off\r\n"
+        'if "%~1"=="" (\r\n'
+        f'  start "" "{pyw}" -m namma_agent\r\n'
+        ") else (\r\n"
+        f'  "{py}" -m namma_agent %*\r\n'
+        ")\r\n"
+    )
+
+
+def windows_path_append_ps1(bin_dir: Path) -> str:
+    """PowerShell that idempotently appends ``bin_dir`` to the *user* PATH (persists
+    across sessions, no admin needed) and to this process's PATH. Pure → tested."""
+    b = str(bin_dir).replace("'", "''")
+    return (
+        f"$b='{b}';"
+        "$p=[Environment]::GetEnvironmentVariable('Path','User');"
+        "if(-not $p){$p=''};"
+        "if(($p -split ';') -notcontains $b){"
+        "[Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $b).TrimStart(';'), 'User')};"
+    )
+
+
+def posix_namma_script(install_dir: Path) -> str:
+    """Body of the ``namma`` launcher dropped into ``~/.local/bin``. Pure → tested."""
+    vpy = venv_python(install_dir)
+    return f'#!/usr/bin/env bash\nexec "{vpy}" -m namma_agent "$@"\n'
+
+
+def add_to_path(install_dir: Path, log: Optional[Log] = None) -> None:
+    """Install a ``namma`` command on PATH so the app can be launched/scripted from a
+    terminal (``namma``, ``namma --chat``, ``namma --server``). Best-effort: a failure
+    here never breaks the install — shortcuts already cover the GUI launch."""
+    log = log or (lambda _m: None)
+    install_dir = Path(install_dir)
+    try:
+        if os.name == "nt":
+            bin_dir = install_dir / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            (bin_dir / "namma.cmd").write_text(windows_namma_cmd(install_dir), encoding="utf-8")
+            _run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden",
+                  "-Command", windows_path_append_ps1(bin_dir)], log=log, check=False)
+            log("  Added the `namma` command to your PATH (open a new terminal to use it).")
+        else:
+            bin_dir = Path.home() / ".local" / "bin"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            launcher = bin_dir / "namma"
+            launcher.write_text(posix_namma_script(install_dir), encoding="utf-8")
+            os.chmod(launcher, 0o755)
+            on_path = bin_dir.is_dir() and str(bin_dir) in os.environ.get("PATH", "").split(os.pathsep)
+            log(f"  Installed the `namma` command at {launcher}."
+                + ("" if on_path else f"  (add {bin_dir} to your PATH to use it.)"))
+    except Exception as exc:  # noqa: BLE001 — PATH wiring is best-effort
+        log(f"  (could not add the `namma` command to PATH: {exc})")
+
+
 # ── launch / verify ──────────────────────────────────────────────────────────
 
 def launch(install_dir: Path) -> None:
@@ -449,10 +636,11 @@ def launch(install_dir: Path) -> None:
     if os.name == "nt":
         exe = str(venv_pythonw(install_dir))
         subprocess.Popen([exe, "-m", "namma_agent"], cwd=str(install_dir), close_fds=True,
-                         creationflags=_NO_WINDOW, startupinfo=_startupinfo())
+                         env=_clean_env(), creationflags=_NO_WINDOW, startupinfo=_startupinfo())
     else:
         subprocess.Popen([str(venv_python(install_dir)), "-m", "namma_agent"],
-                         cwd=str(install_dir), start_new_session=True, close_fds=True)
+                         cwd=str(install_dir), start_new_session=True, close_fds=True,
+                         env=_clean_env())
 
 
 def verify_launch(install_dir: Path, timeout: float = 60.0, port: int = 8000) -> bool:
@@ -464,7 +652,7 @@ def verify_launch(install_dir: Path, timeout: float = 60.0, port: int = 8000) ->
         [str(venv_python(install_dir)), "-m", "namma_agent", "--server"],
         cwd=str(install_dir), creationflags=_NO_WINDOW, startupinfo=_startupinfo(),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-        env={**os.environ, "PORT": str(port)},
+        env={**_clean_env(), "PORT": str(port)},
     )
     url = f"http://127.0.0.1:{port}/api/health"
     deadline = time.time() + timeout
@@ -503,6 +691,8 @@ def bootstrap(install_dir: Path, reporter: "StepReporter | Log") -> Path:
     with rep.step("tools") as log:
         log("Checking Git and Node.js …")
         ensure_dependencies(log)
+        log("Checking optional tools (ripgrep, ffmpeg) …")
+        ensure_optional_tools(log)
 
     with rep.step("source") as log:
         fetch_source(install_dir, log)
@@ -521,6 +711,9 @@ def bootstrap(install_dir: Path, reporter: "StepReporter | Log") -> Path:
 
     with rep.step("shortcuts") as log:
         create_shortcuts(install_dir, log)
+
+    with rep.step("path") as log:
+        add_to_path(install_dir, log)
 
     rep.log("Base install complete.")
     return install_dir

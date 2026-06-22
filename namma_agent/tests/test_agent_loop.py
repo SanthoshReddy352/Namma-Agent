@@ -22,7 +22,7 @@ class ScriptedProvider(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         self.seen_messages.append(list(messages))
         resp = self._responses.pop(0)
         if stream and on_token and resp.content:
@@ -209,6 +209,36 @@ def test_turn_reports_ttft_and_summed_tokens():
     assert result.usage == {"input_tokens": 230, "output_tokens": 28}
 
 
+def test_cache_reads_excluded_from_headline_tokens():
+    """The headline token total must count only genuinely-new work (fresh input +
+    cache writes + output) — NOT the prompt prefix re-read from cache on every
+    tool-loop step. Counting cache reads is exactly the bug that ballooned a ~108K
+    turn into a reported 3.1M."""
+    reg = ToolRegistry()
+    reg.register("noop", "noop", {"type": "object", "properties": {}},
+                 lambda a: ToolResult(ok=True, content="done"))
+    # Step 1 writes the prefix to cache; step 2 re-reads it cheaply and adds a small
+    # delta. Naive summing of all input would report 1000+50000 = 51,000 input tokens;
+    # the honest headline is 1000(write) + 200(fresh) + 30(out) = 1,230.
+    responses = [
+        LLMResponse(tool_calls=[ToolCall(id="t1", name="noop", args={})],
+                    usage={"input_tokens": 100, "output_tokens": 20,
+                           "cache_write_tokens": 1000}),
+        LLMResponse(content="All set.",
+                    usage={"input_tokens": 100, "output_tokens": 10,
+                           "cache_read_tokens": 50000}),
+    ]
+    agent, db, _ = _agent(responses, registry=reg)
+    result = agent.process_turn("go", on_token=lambda _t: None)
+    # Full breakdown is summed and preserved…
+    assert result.usage == {"input_tokens": 200, "output_tokens": 30,
+                            "cache_write_tokens": 1000, "cache_read_tokens": 50000}
+    # …but the persisted headline excludes the 50K of cache re-reads.
+    asst = [t for t in db.session_turns(result.session_id) if t["role"] == "assistant"][-1]
+    assert asst["meta"]["tokens"] == 1230
+    assert asst["meta"]["cached"] == 50000
+
+
 def test_turn_stats_persist_in_db():
     """Per-turn stats are saved with the assistant turn (so they survive a reload):
     session_turns returns the meta {ttft, tokens} for that turn."""
@@ -241,7 +271,7 @@ class CharStreamProvider(Provider):
     def is_available(self):
         return True
 
-    def generate(self, messages, tools=None, stream=False, on_token=None):
+    def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         resp = self._r.pop(0)
         if stream and on_token and resp.content:
             for ch in resp.content:

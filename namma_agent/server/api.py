@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import queue
 import re
 import threading
@@ -26,12 +27,13 @@ from datetime import datetime as _dt
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, Form, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from namma_agent.core.logger import logger
+from namma_agent.core.providers.base import usage_tokens
 from namma_agent.service import NammaAgentService
 
 _UPLOAD_DIR = Path("data/uploads")
@@ -71,6 +73,15 @@ class MemoryClearBody(BaseModel):
     scope: str = "all"  # facts | conversations | notes | all
 
 
+class UninstallBody(BaseModel):
+    scope: str = "all"  # all | keep-data
+
+
+class NotifyBody(BaseModel):
+    title: str = "Namma Agent"
+    body: str = ""
+
+
 class ConfiguredProvidersBody(BaseModel):
     providers: list = []   # [{id?, label, type, base_url, api_key_env}, …]
 
@@ -82,6 +93,21 @@ class ConfiguredModelsBody(BaseModel):
 class PackExportBody(BaseModel):
     skills: list = []   # skill names to include
     tools: list = []    # tool file names to include
+
+
+class SkillToggleBody(BaseModel):
+    name: str = ""
+    enabled: bool = True
+
+
+class ToolToggleBody(BaseModel):
+    name: str = ""
+    enabled: bool = True
+
+
+class ToolsetToggleBody(BaseModel):
+    category: str = ""
+    enabled: bool = True
 
 
 class ProjectBody(BaseModel):
@@ -260,13 +286,69 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def health():
         return {"ok": True}
 
+    # -- inbound webhooks (Slack / WhatsApp) -------------------------------
+    # These platforms can't be polled, so they push events here. We ACK fast and
+    # run the agent turn on a background thread (Slack requires a <3s response).
+
+    def _dispatch_inbound(channel: str, text: str) -> None:
+        bridge = service.comms.webhook_bridge(channel) if service.comms else None
+        if bridge is not None and text:
+            threading.Thread(target=bridge.handle_text, args=(text,), daemon=True).start()
+
+    @app.get("/webhooks/whatsapp")
+    def whatsapp_verify(request: Request):
+        """Meta's webhook verification handshake (echo hub.challenge when the token matches)."""
+        bridge = service.comms.webhook_bridge("whatsapp") if service.comms else None
+        q = request.query_params
+        challenge = bridge.verify(q.get("hub.mode", ""), q.get("hub.verify_token", ""),
+                                  q.get("hub.challenge", "")) if bridge else None
+        if challenge is None:
+            return Response(status_code=403)
+        return Response(content=challenge, media_type="text/plain")
+
+    @app.post("/webhooks/whatsapp")
+    async def whatsapp_webhook(request: Request):
+        from namma_agent.comms.whatsapp import extract_texts
+        try:
+            payload = json.loads(await request.body() or b"{}")
+        except Exception:  # noqa: BLE001
+            payload = {}
+        for text in extract_texts(payload):
+            _dispatch_inbound("whatsapp", text)
+        return {"ok": True}
+
+    @app.post("/webhooks/slack")
+    async def slack_webhook(request: Request):
+        from namma_agent.comms.slack import extract_texts, verify_signature
+        raw = await request.body()
+        try:
+            payload = json.loads(raw or b"{}")
+        except Exception:  # noqa: BLE001
+            payload = {}
+        # Slack's one-time URL verification handshake.
+        if payload.get("type") == "url_verification":
+            return {"challenge": payload.get("challenge", "")}
+        bridge = service.comms.webhook_bridge("slack") if service.comms else None
+        if bridge is None:
+            return {"ok": False}
+        secret = getattr(bridge, "signing_secret", "")
+        if secret:  # verify the request actually came from Slack
+            ts = request.headers.get("X-Slack-Request-Timestamp", "")
+            sig = request.headers.get("X-Slack-Signature", "")
+            if not verify_signature(secret, ts, sig, raw):
+                return Response(status_code=401)
+        for text in extract_texts(payload):
+            _dispatch_inbound("slack", text)
+        return {"ok": True}
+
     @app.get("/api/config")
     def config():
         return service.info()
 
     @app.get("/api/tools")
     def tools():
-        return {"tools": service.registry.definitions()}
+        """All tools grouped by toolset, with enabled/destructive flags (Toolsets tab)."""
+        return {"tools": service.tools_detail()}
 
     # -- Skill & Tool packs (export / import) ------------------------------
     @app.get("/api/pack/items")
@@ -719,6 +801,15 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         service.shutdown()
         return {"ok": True, "message": "Namma Agent is shutting down."}
 
+    @app.post("/api/notify")
+    def notify(body: NotifyBody):
+        """Show a native OS desktop notification (reliable inside the pywebview
+        desktop window, where the browser Notification API doesn't surface toasts).
+        The frontend gates on the user's master + per-event toggles before calling."""
+        from namma_agent.core.notifications import send_native_notification
+        ok = send_native_notification(body.title, body.body)
+        return {"ok": ok}
+
     @app.get("/api/version")
     def version():
         from namma_agent.version import __version__
@@ -736,6 +827,20 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         from namma_agent.core.updater import apply_update
         return apply_update()
 
+    @app.post("/api/uninstall")
+    def uninstall(body: UninstallBody):
+        """Start the detached uninstaller, then shut down so it can remove the files.
+        scope='all' wipes everything; 'keep-data' backs up chats/config first."""
+        import threading
+
+        from namma_agent.core.uninstaller import apply_uninstall
+        result = apply_uninstall(body.scope)
+        if result.get("started"):
+            # Let the HTTP response flush, then shut the backend down so the
+            # uninstaller can delete the (now-unlocked) install directory.
+            threading.Timer(1.0, service.shutdown).start()
+        return result
+
     @app.get("/api/onboarding")
     def onboarding_status():
         return service.onboarding_status()
@@ -752,7 +857,13 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         from namma_agent.config import load_config
 
         env_keys = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_API_KEY",
-                    "NAMMA_TELEGRAM_TOKEN", "NAMMA_TELEGRAM_CHAT_ID", "NAMMA_API_KEY"]
+                    "NAMMA_TELEGRAM_TOKEN", "NAMMA_TELEGRAM_CHAT_ID", "NAMMA_API_KEY",
+                    "NAMMA_DISCORD_WEBHOOK_URL", "NAMMA_DISCORD_BOT_TOKEN",
+                    "NAMMA_DISCORD_CHANNEL_ID", "NAMMA_SLACK_WEBHOOK_URL",
+                    "NAMMA_SLACK_APP_TOKEN", "NAMMA_SLACK_BOT_TOKEN",
+                    "NAMMA_WHATSAPP_TOKEN", "NAMMA_WHATSAPP_PHONE_ID", "NAMMA_WHATSAPP_TO",
+                    "NAMMA_WHATSAPP_VERIFY_TOKEN", "NAMMA_SIGNAL_API_URL",
+                    "NAMMA_SIGNAL_NUMBER", "NAMMA_SIGNAL_RECIPIENT", "NAMMA_SLACK_SIGNING_SECRET"]
         return {
             "config": load_config(),
             "env_set": {k: bool(_os.environ.get(k)) for k in env_keys},
@@ -777,6 +888,44 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/memory/clear")
     def clear_memory(body: MemoryClearBody):
         return service.clear_memory(body.scope)
+
+    # -- comms gateway (start/stop the inbound messaging service) -----------
+
+    # -- skills (Settings → Skills tab) -------------------------------------
+
+    @app.get("/api/skills")
+    def list_skills():
+        """All skills with enabled/supported/requirement info for the Skills tab."""
+        return {"skills": service.skills_detail()}
+
+    @app.post("/api/skills/toggle")
+    def toggle_skill(body: SkillToggleBody):
+        """Enable/disable a skill; persists to config.local.yaml (skills.disabled)."""
+        return service.set_skill_enabled(body.name, body.enabled)
+
+    # -- toolsets (Settings → Toolsets tab) ---------------------------------
+
+    @app.post("/api/tools/toggle")
+    def toggle_tool(body: ToolToggleBody):
+        """Enable/disable a single tool; persists to config.local.yaml (tools.disabled)."""
+        return service.set_tool_enabled(body.name, body.enabled)
+
+    @app.post("/api/toolset/toggle")
+    def toggle_toolset(body: ToolsetToggleBody):
+        """Enable/disable every tool in a toolset at once; persists the disabled-set."""
+        return service.set_toolset_enabled(body.category, body.enabled)
+
+    @app.get("/api/comms/status")
+    def comms_status():
+        return service.comms_status()
+
+    @app.post("/api/comms/start")
+    def comms_start():
+        return service.start_comms()
+
+    @app.post("/api/comms/stop")
+    def comms_stop():
+        return service.stop_comms()
 
     @app.get("/api/providers")
     def providers():
@@ -886,6 +1035,10 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         outgoing: asyncio.Queue = asyncio.Queue()
         approvals: dict[str, queue.Queue] = {}
         passwords: dict[str, queue.Queue] = {}
+        # Tools the user chose to "allow for the rest of this session" — keyed by
+        # session id, so a session-wide approval is remembered for that chat only and
+        # later calls to the same tool skip the prompt. Cleared when the socket closes.
+        session_allow: dict[str, set[str]] = {}
         counter = itertools.count()
         # Per-session cancel flags so the Stop button only halts the chat it was
         # pressed in — several turns (one per chat) can run concurrently here.
@@ -911,15 +1064,27 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
         def make_approval(session_id: str):
             def approval(tool: str, args: dict) -> bool:
+                # Already approved for the whole session? Run it without prompting.
+                if tool in session_allow.get(session_id, set()):
+                    return True
                 aid = str(next(counter))
                 resp_q: queue.Queue = queue.Queue()
                 approvals[aid] = resp_q
                 push({"type": "approval_request", "id": aid, "tool": tool,
                       "args": args, "session_id": session_id})
                 try:
-                    return bool(resp_q.get(timeout=300))
+                    resp = resp_q.get(timeout=300)
                 except queue.Empty:
                     return False
+                # The client answers with {approved, scope}: scope "session" remembers
+                # the tool so later calls in this chat skip the prompt. (A bare bool is
+                # still honored for safety.)
+                if not isinstance(resp, dict):
+                    return bool(resp)
+                approved = bool(resp.get("approved"))
+                if approved and resp.get("scope") == "session":
+                    session_allow.setdefault(session_id, set()).add(tool)
+                return approved
             return approval
 
         def askpass(prompt: str):
@@ -971,10 +1136,16 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
                     "session_id": result.session_id,
                     "tools_used": result.tools_used,
                     # Per-turn stats for the UI: time-to-first-token (seconds) and the
-                    # total tokens the request spent (input + output, summed across the
-                    # whole tool loop).
+                    # headline token total — fresh input + cache writes + output, summed
+                    # across the whole tool loop. Cheap cache *reads* (the prompt prefix
+                    # re-served on every step) are reported separately as `cached` so the
+                    # headline matches the provider's usage dashboard.
                     "ttft": result.ttft,
-                    "tokens": (_u.get("input_tokens", 0) or 0) + (_u.get("output_tokens", 0) or 0),
+                    "tokens": usage_tokens(_u),
+                    "cached": _u.get("cache_read_tokens", 0) or 0,
+                    # Structured activity timeline (thinking / tool steps) for the
+                    # transparency UI — pinned under the reply, persisted via turn meta.
+                    "steps": result.steps,
                 })
                 # Auto-title the chat from its first exchange (background, best-effort)
                 # so the sidebar shows a concise label, not the raw first message.
@@ -1001,7 +1172,8 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
                 elif mtype == "approval_response":
                     q = approvals.pop(msg.get("id"), None)
                     if q is not None:
-                        q.put(bool(msg.get("approved")))
+                        q.put({"approved": bool(msg.get("approved")),
+                               "scope": msg.get("scope") or "once"})
                 elif mtype == "password_response":
                     # Hand the secret straight to the waiting tool; never log it.
                     q = passwords.pop(msg.get("id"), None)

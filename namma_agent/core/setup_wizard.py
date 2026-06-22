@@ -60,10 +60,35 @@ def configure_provider(provider_type: str, model: Optional[str] = None,
     if api_key_env:
         provider["api_key_env"] = api_key_env
     url = base_url if base_url is not None else preset["base_url"]
-    if url:
-        provider["base_url"] = url
+    # Always pin base_url (even to "") so a provider with no base URL doesn't inherit
+    # a stale one from the shipped default `provider:` via deep-merge.
+    provider["base_url"] = url or ""
 
     update_config({"provider": provider}, path=config_path)
+
+    # Also register this as a switchable connection + model, so the freshly
+    # configured brain shows up in the UI picker (Settings → Providers / Models and
+    # the chat model dropdown) — not just as the silent default `provider:`. Without
+    # this, a fresh install has empty `providers:`/`models:` lists and the app reads
+    # as "no provider / no model set" even though the default brain is configured.
+    # Appends without clobbering any list the user has already curated.
+    from namma_agent.config import configured_models, configured_providers, load_config
+
+    cfg = load_config(config_path)
+    pid = provider_type
+    connection = {"id": pid, "label": preset["label"], "type": provider_type,
+                  "base_url": url or "", "api_key_env": api_key_env or ""}
+    provs = configured_providers(cfg)
+    if not any(p["id"] == pid for p in provs):
+        provs.append(connection)
+    model_id = provider["model"] or provider_type
+    model_entry = {"id": model_id, "label": model_id, "provider": pid,
+                   "model": provider["model"], "type": "", "base_url": "", "api_key_env": ""}
+    models = configured_models(cfg)
+    if not any(m["id"] == model_id for m in models):
+        models.append(model_entry)
+    update_config({"providers": provs, "models": models}, path=config_path)
+
     if api_key and api_key_env:
         set_env_values({api_key_env: api_key}, path=env_path)
     return provider

@@ -13,7 +13,7 @@ from typing import Optional
 
 from namma_agent.core.logger import logger
 
-from .base import LLMResponse, Provider, ProviderError, TokenCallback, ToolCall
+from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback, ToolCall
 
 
 class AnthropicProvider(Provider):
@@ -67,7 +67,26 @@ class AnthropicProvider(Provider):
                 out.append({"role": "assistant", "content": blocks})
             else:
                 out.append({"role": role, "content": m.get("content", "")})
+        # Cache the conversation prefix: drop an ephemeral breakpoint on the last
+        # block so the next tool-loop step re-reads everything up to here from the
+        # cache instead of re-billing it as fresh input. This is what stops a deep
+        # tool loop from paying full input price for the whole (growing) prefix on
+        # every single step.
+        AnthropicProvider._cache_last_block(out)
         return out
+
+    @staticmethod
+    def _cache_last_block(out: list[dict]) -> None:
+        if not out:
+            return
+        content = out[-1].get("content")
+        if isinstance(content, str):
+            if content:  # skip empty strings — an empty text block is rejected
+                out[-1]["content"] = [
+                    {"type": "text", "text": content, "cache_control": {"type": "ephemeral"}}
+                ]
+        elif isinstance(content, list) and content:
+            content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
 
     @staticmethod
     def _to_wire_tools(tools: Optional[list[dict]]) -> Optional[list[dict]]:
@@ -93,6 +112,7 @@ class AnthropicProvider(Provider):
         tools: Optional[list[dict]] = None,
         stream: bool = False,
         on_token: Optional[TokenCallback] = None,
+        on_thinking: Optional[ThinkingCallback] = None,
     ) -> LLMResponse:
         import anthropic
 
@@ -121,7 +141,7 @@ class AnthropicProvider(Provider):
         for attempt in range(self.max_retries):
             try:
                 if stream:
-                    return self._generate_stream(client, body, on_token)
+                    return self._generate_stream(client, body, on_token, on_thinking)
                 return self._generate_once(client, body)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
@@ -146,6 +166,8 @@ class AnthropicProvider(Provider):
             usage={
                 "input_tokens": getattr(resp.usage, "input_tokens", 0),
                 "output_tokens": getattr(resp.usage, "output_tokens", 0),
+                "cache_read_tokens": getattr(resp.usage, "cache_read_input_tokens", 0) or 0,
+                "cache_write_tokens": getattr(resp.usage, "cache_creation_input_tokens", 0) or 0,
             },
             finish_reason=getattr(resp, "stop_reason", "") or "",
             provider=self.name,
@@ -157,14 +179,20 @@ class AnthropicProvider(Provider):
         resp = client.messages.create(**body)
         return self._parse_blocks(resp)
 
-    def _generate_stream(self, client, body: dict, on_token: Optional[TokenCallback]) -> LLMResponse:
+    def _generate_stream(self, client, body: dict, on_token: Optional[TokenCallback],
+                         on_thinking: Optional[ThinkingCallback] = None) -> LLMResponse:
+        # Iterate raw stream events so we can split `text_delta` (the visible answer)
+        # from `thinking_delta` (extended-thinking reasoning) onto their own channels.
+        # Draining the loop fully is required either way to reach the final message.
         with client.messages.stream(**body) as stream:
-            if on_token:
-                for text in stream.text_stream:
-                    on_token(text)
-            else:
-                # Drain without per-token callback.
-                for _ in stream.text_stream:
-                    pass
+            for event in stream:
+                if getattr(event, "type", "") != "content_block_delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                dtype = getattr(delta, "type", "")
+                if dtype == "text_delta" and on_token:
+                    on_token(delta.text)
+                elif dtype == "thinking_delta" and on_thinking:
+                    on_thinking(getattr(delta, "thinking", "") or "")
             final = stream.get_final_message()
         return self._parse_blocks(final)

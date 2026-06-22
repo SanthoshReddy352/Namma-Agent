@@ -23,7 +23,7 @@ from typing import Optional
 from namma_agent.core.logger import logger
 
 from .anthropic_provider import AnthropicProvider
-from .base import LLMResponse, Provider, ProviderError, TokenCallback
+from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback
 from .google_provider import GoogleProvider
 from .openai_compat import OpenAICompatProvider
 from .openai_provider import OpenAIProvider
@@ -91,6 +91,7 @@ class ProviderChain(Provider):
         tools: Optional[list[dict]] = None,
         stream: bool = False,
         on_token: Optional[TokenCallback] = None,
+        on_thinking: Optional[ThinkingCallback] = None,
     ) -> LLMResponse:
         last_exc: Optional[Exception] = None
         any_available = False
@@ -101,7 +102,8 @@ class ProviderChain(Provider):
                 continue
             any_available = True
             try:
-                return provider.generate(messages, tools=tools, stream=stream, on_token=on_token)
+                return provider.generate(messages, tools=tools, stream=stream,
+                                         on_token=on_token, on_thinking=on_thinking)
             except ProviderError as exc:
                 last_exc = exc
                 logger.warning("[chain] %s failed, trying next: %s", provider.name, exc)

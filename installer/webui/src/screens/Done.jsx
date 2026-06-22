@@ -1,7 +1,7 @@
 import React from "react";
 import { Wordmark } from "../components/Logo.jsx";
 
-export default function Done({ installDir, onLaunch, onClose, launching, verifyState }) {
+export default function Done({ installDir, onLaunch, onClose, launching, verifyState, configWarning }) {
   return (
     <div className="flex h-full flex-col items-center justify-center px-10 text-center animate-rise">
       <span className="mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-ok-soft text-ok">
@@ -25,6 +25,11 @@ export default function Done({ installDir, onLaunch, onClose, launching, verifyS
       {verifyState === "bad" && (
         <p className="mt-4 max-w-md text-[13px] text-bad">
           The backend didn&rsquo;t respond during a quick check — Launch may take a moment on first run.
+        </p>
+      )}
+      {configWarning && (
+        <p className="mt-4 max-w-md text-[13px] text-bad">
+          {configWarning} — you can set it in the app&rsquo;s Settings.
         </p>
       )}
 

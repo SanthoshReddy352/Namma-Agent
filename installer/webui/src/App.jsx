@@ -16,6 +16,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [launching, setLaunching] = useState(false);
   const [verifyState, setVerifyState] = useState("idle"); // idle|checking|ok|bad
+  const [configWarning, setConfigWarning] = useState("");
   const dirRef = useRef("");
 
   // Load defaults + wire the Python→JS event channel once. Retries until the
@@ -52,12 +53,16 @@ export default function App() {
     };
   }, []);
 
-  const changeDir = async () => {
+  const setDir = (v) => {
+    setInstallDir(v);
+    dirRef.current = v;
+  };
+
+  const browse = async () => {
     const chosen = await Installer.chooseDir();
     if (!chosen) return;
     const resolved = await Installer.resolveDir(chosen);
-    setInstallDir(resolved);
-    dirRef.current = resolved;
+    setDir(resolved);
   };
 
   const beginInstall = () => {
@@ -70,16 +75,18 @@ export default function App() {
   const saveProvider = async (provider) => {
     if (provider) {
       setBusy(true);
-      await Installer.saveProvider(dirRef.current, provider);
+      const r = await Installer.saveProvider(dirRef.current, provider);
       setBusy(false);
+      if (r && r.ok === false) setConfigWarning(`Provider not saved: ${r.error || "unknown error"}`);
     }
     setScreen("onboarding");
   };
 
   const finishOnboarding = async (values) => {
     setBusy(true);
-    await Installer.saveOnboarding(dirRef.current, values || {});
+    const r = await Installer.saveOnboarding(dirRef.current, values || {});
     setBusy(false);
+    if (r && r.ok === false) setConfigWarning(`Onboarding not saved: ${r.error || "unknown error"}`);
     setScreen("done");
     // Background sanity check so "Launch" is known-good.
     setVerifyState("checking");
@@ -100,7 +107,8 @@ export default function App() {
         <Welcome
           defaults={defaults}
           installDir={installDir}
-          onChangeDir={changeDir}
+          onDirChange={setDir}
+          onBrowse={browse}
           onInstall={beginInstall}
         />
       )}
@@ -126,6 +134,7 @@ export default function App() {
           onClose={() => Installer.close()}
           launching={launching}
           verifyState={verifyState}
+          configWarning={configWarning}
         />
       )}
     </div>

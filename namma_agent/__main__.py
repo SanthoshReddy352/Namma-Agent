@@ -7,6 +7,7 @@ Subcommands (used by the installers):
                         (keys: type, model, api_key, base_url) — for the GUI installer
   --onboard <file>      non-interactive: save onboarding answers from a JSON file
   --server              run headless (no native window)
+  --chat                local CLI chat gateway (REPL in the terminal)
 """
 import sys
 
@@ -50,6 +51,24 @@ if "--setup" in sys.argv:
     from namma_agent.core.setup_wizard import run_onboarding, run_wizard
     run_wizard()
     run_onboarding()
+    raise SystemExit(0)
+
+if "--chat" in sys.argv:
+    # Local CLI chat gateway: talk to the same agent (memory, tools, model picker,
+    # /commands, !shell) right in the terminal — no server, no window.
+    from namma_agent.comms.console import ConsoleInbound
+    from namma_agent.config import assistant_name, load_config
+    from namma_agent.service import NammaAgentService
+
+    _svc = NammaAgentService(config=load_config())
+
+    def _chat_turn(text, session_id, mode, askpass=None, model=None):
+        res = _svc.run_turn(text, session_id=session_id, mode=mode,
+                            askpass=askpass, model_id=model)
+        return res.content, res.session_id
+
+    ConsoleInbound(_chat_turn, get_models=_svc.configured_models,
+                   name=assistant_name(_svc.config)).run_blocking()
     raise SystemExit(0)
 
 from namma_agent.app import main  # noqa: E402

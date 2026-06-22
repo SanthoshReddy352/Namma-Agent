@@ -23,7 +23,7 @@ export default function ChatView() {
     voiceOn, setVoiceOn, send, stop, newChat, refreshSessions, showLocal,
     chatContext, suggestion, sendToSession, openChat,
     configuredModels, currentModel, selectModel, switchModelNewSession, chatHasTurns, confirmAction,
-    currentSessionId, setActiveModel,
+    currentSessionId, setActiveModel, respondApproval,
   } = useOutletContext();
   const navigate = useNavigate();
 
@@ -226,7 +226,7 @@ export default function ChatView() {
                 return <Message key={m.id} {...m} />;
               })}
               {awaitingOutput && <ThinkingRow name={assistantName} />}
-              {busy && timeline.length > 0 && <Timeline items={timeline} />}
+              {busy && timeline.length > 0 && <Timeline items={timeline} onApprove={respondApproval} />}
               {/* Gentle "want to go deeper?" nudge, centered below the reply — solo
                   chats only (never inside a project workspace or the Learning Room). */}
               {suggestion && !busy && !chatContext?.project && !chatContext?.topic && (
