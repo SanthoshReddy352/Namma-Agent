@@ -56,16 +56,20 @@ def _ui_index() -> Path:
 
 
 def _version() -> str:
-    # Read from the bundled app source when available; else "dev".
+    # Read from the bundled app source when available; else "dev". Never raises — a
+    # version-read hiccup must not break get_defaults (which would blank the whole
+    # Welcome screen, not just the version line).
+    import re
+    from contextlib import suppress
     for root in (core.bundled_source(), Path(__file__).resolve().parents[1]):
         if not root:
             continue
-        vf = Path(root) / "namma_agent" / "version.py"
-        if vf.exists():
-            import re
-            m = re.search(r'__version__\s*=\s*"([^"]+)"', vf.read_text(encoding="utf-8"))
-            if m:
-                return m.group(1)
+        with suppress(Exception):
+            vf = Path(root) / "namma_agent" / "version.py"
+            if vf.exists():
+                m = re.search(r'__version__\s*=\s*"([^"]+)"', vf.read_text(encoding="utf-8"))
+                if m:
+                    return m.group(1)
     return "dev"
 
 
@@ -162,10 +166,17 @@ class Bridge:
 
     # ── inbound calls ← JS ──────────────────────────────────────────────────
     def get_defaults(self) -> dict:
+        # Each field is computed defensively: this call is awaited by the Welcome
+        # screen, so a single slow/failing piece must never blank the whole payload
+        # (which would leave the provider/onboarding screens empty too).
+        try:
+            install_dir = str(core.default_install_dir())
+        except Exception:  # noqa: BLE001
+            install_dir = str(Path.home() / core.APP_DIR_NAME)
         return {
             "version": _version(),
             "os": platform.system(),
-            "default_install_dir": str(core.default_install_dir()),
+            "default_install_dir": install_dir,
             "providers": [
                 {"id": p[0], "label": p[1], "model": p[2], "needs_key": p[3], "base_url": p[4]}
                 for p in PROVIDERS

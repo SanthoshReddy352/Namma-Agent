@@ -56,16 +56,69 @@ def _startupinfo():
 
 # ── locations ────────────────────────────────────────────────────────────────
 
-def desktop_dir() -> Path:
-    home = Path.home()
-    d = home / "Desktop"
-    return d if d.exists() else home
+def _windows_desktop() -> Optional[Path]:
+    """The current user's Desktop from the registry (``Shell Folders\\Desktop``).
+
+    Authoritative and **OneDrive-redirect-aware**, and — crucially — it reads a string
+    from the registry and expands env vars only: it never `stat`s the folder. A
+    OneDrive Desktop can be "online-only", where `os.path.exists`/`os.access` block for
+    several seconds while the file is hydrated; doing that inside the installer's
+    ``get_defaults`` (which pywebview runs on the UI thread) is exactly what made the
+    Welcome window freeze / show "not responding". Reading the registry is instant."""
+    if os.name != "nt":
+        return None
+    try:
+        import winreg  # Windows-only; absent elsewhere.
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders",
+        ) as key:
+            raw, _ = winreg.QueryValueEx(key, "Desktop")
+        path = os.path.expandvars(raw or "")
+        return Path(path) if path else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _onedrive_desktop() -> Optional[Path]:
+    """A OneDrive-redirected Desktop derived from ``%OneDrive%`` (string only, no
+    `stat`) — a fallback for the rare case the registry lookup fails."""
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        base = os.environ.get(var)
+        if base:
+            return Path(base) / "Desktop"
+    return None
+
+
+def desktop_dir() -> Optional[Path]:
+    """The user's Desktop, or ``None``. Resolved **without any filesystem probing** so
+    the installer's Welcome screen fills the default path instantly (no freeze): Windows
+    reads the registry (handles OneDrive redirection); elsewhere it uses ``~/Desktop``
+    when that local folder exists (a `stat` on a local fs is cheap)."""
+    if os.name == "nt":
+        return _windows_desktop() or _onedrive_desktop()
+    d = Path.home() / "Desktop"
+    return d if d.is_dir() else None
+
+
+def _fallback_install_root() -> Path:
+    """A per-user, always-writable base to install under when there's no usable
+    Desktop: ``%LOCALAPPDATA%`` on Windows (exists, writable, no admin, not
+    redirected), the home directory elsewhere."""
+    if os.name == "nt":
+        base = os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base)
+    return Path.home()
 
 
 def default_install_dir() -> Path:
-    """Where the app lands by default: <Desktop>/Namma-Agent. The user can pick
-    any other folder in the UI — every step takes ``install_dir`` as a parameter."""
-    return desktop_dir() / APP_DIR_NAME
+    """Where the app lands by default: ``<Desktop>/Namma-Agent``, else a per-user
+    writable location (``%LOCALAPPDATA%/Namma-Agent`` on Windows). Computed with **no**
+    ``os.access``/``is_dir`` on the (possibly online-only OneDrive) Desktop, so it's
+    instant and never freezes the UI; install-time writability is handled by
+    :func:`_prepare_install_dir`. The user can override it in the UI."""
+    return (desktop_dir() or _fallback_install_root()) / APP_DIR_NAME
 
 
 def resolve_install_dir(chosen: Optional[str | os.PathLike]) -> Path:
@@ -322,11 +375,25 @@ def ensure_optional_tools(log: Log) -> None:
             _run(cmd, log=log, check=False)
 
 
+def _prepare_install_dir(install_dir: Path) -> None:
+    """Create the install folder (and parents), turning a raw OS 'Access is denied'
+    (WinError 5 — e.g. the chosen path is under a protected/non-existent profile root)
+    into a clear, actionable message instead of an opaque traceback."""
+    try:
+        install_dir.mkdir(parents=True, exist_ok=True)
+    except (PermissionError, OSError) as exc:
+        raise RuntimeError(
+            f"Can't write to {install_dir} (access denied). Pick a different install "
+            f"folder you own — for example your Documents folder — using “Browse…”, "
+            f"then try again."
+        ) from exc
+
+
 def fetch_source(install_dir: Path, log: Log) -> None:
     src = bundled_source()
     if src:
         log(f"  Copying app files to {install_dir} …")
-        install_dir.mkdir(parents=True, exist_ok=True)
+        _prepare_install_dir(install_dir)
         # Copy the *contents* of the bundle into install_dir (not a nested child) —
         # guards against the Namma-Agent/Namma-Agent double-nesting.
         shutil.copytree(src, install_dir, dirs_exist_ok=True)
@@ -335,7 +402,7 @@ def fetch_source(install_dir: Path, log: Log) -> None:
         _run(["git", "pull", "--ff-only"], cwd=install_dir, log=log, check=False)
     else:
         log(f"  Cloning {REPO_URL} to {install_dir} …")
-        install_dir.parent.mkdir(parents=True, exist_ok=True)
+        _prepare_install_dir(install_dir.parent)
         _run(["git", "clone", "--depth", "1", REPO_URL, str(install_dir)], log=log)
 
 
@@ -571,7 +638,6 @@ def windows_namma_cmd(install_dir: Path) -> str:
     ``--server`` / any args run in the console so their output is visible. Pure → tested."""
     pyw = venv_pythonw(install_dir)
     py = venv_python(install_dir)
-    root = str(install_dir)
     return (
         "@echo off\r\n"
         'if "%~1"=="" (\r\n'

@@ -20,6 +20,58 @@ def test_default_install_dir_on_desktop():
     assert d.parent.name in ("Desktop", d.parent.name)  # Desktop, or home fallback
 
 
+# ── install-dir defaulting: instant (no freeze) + redirect-aware ─────────────
+
+def test_desktop_dir_prefers_explorer_registry_on_windows(tmp_path, monkeypatch):
+    desk = tmp_path / "OneDrive" / "Desktop"
+    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_windows_desktop", lambda: desk)
+    assert core.desktop_dir() == desk
+
+
+def test_desktop_dir_onedrive_fallback_when_registry_fails(tmp_path, monkeypatch):
+    od = tmp_path / "OneDrive"
+    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_windows_desktop", lambda: None)
+    monkeypatch.setenv("OneDrive", str(od))
+    assert core.desktop_dir() == od / "Desktop"
+
+
+def test_default_install_dir_falls_back_to_localappdata(tmp_path, monkeypatch):
+    # No Desktop anywhere → land under %LOCALAPPDATA% (writable), never C:\Users\x root.
+    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_windows_desktop", lambda: None)
+    for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    assert core.default_install_dir() == tmp_path / "Namma-Agent"
+
+
+def test_default_install_dir_does_no_filesystem_probing(monkeypatch):
+    # Regression guard: computing the default must NOT call os.access / Path.is_dir —
+    # those stall for seconds on an online-only OneDrive Desktop and froze the installer.
+    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_windows_desktop", lambda: Path(r"D:\Desktop"))
+
+    def _no_access(*_a, **_k):
+        raise AssertionError("os.access called on the install-dir hot path")
+
+    def _no_isdir(*_a, **_k):
+        raise AssertionError("Path.is_dir called on the install-dir hot path")
+
+    monkeypatch.setattr(core.os, "access", _no_access)
+    monkeypatch.setattr(core.Path, "is_dir", _no_isdir)
+    assert core.default_install_dir() == Path(r"D:\Desktop") / "Namma-Agent"
+
+
+def test_prepare_install_dir_wraps_permission_error(tmp_path, monkeypatch):
+    def boom(*_a, **_k):
+        raise PermissionError(13, "Access is denied")
+    monkeypatch.setattr(core.Path, "mkdir", boom)
+    with pytest.raises(RuntimeError, match="access denied"):
+        core._prepare_install_dir(tmp_path / "x")
+
+
 def test_dependency_status_shape():
     s = core.dependency_status()
     assert set(s) == {"python", "git", "node"}

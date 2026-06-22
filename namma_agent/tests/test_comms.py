@@ -9,7 +9,7 @@ from namma_agent.comms.discord import DiscordChannel, DiscordInbound
 from namma_agent.comms.manager import CommsManager
 from namma_agent.comms.signal import SignalChannel, SignalInbound
 from namma_agent.comms import slack as slack_mod
-from namma_agent.comms.slack import SlackChannel, SlackInbound, SlackSocketInbound
+from namma_agent.comms.slack import SlackChannel, SlackSocketInbound
 from namma_agent.comms.telegram import TelegramChannel, TelegramInbound, _chunk, _markdown_to_telegram_html
 from namma_agent.comms import signal as signal_mod
 from namma_agent.comms import whatsapp as whatsapp_mod
