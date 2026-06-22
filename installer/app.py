@@ -58,10 +58,17 @@ def _ui_index() -> Path:
 def _version() -> str:
     # Read from the bundled app source when available; else "dev". Never raises — a
     # version-read hiccup must not break get_defaults (which would blank the whole
-    # Welcome screen, not just the version line).
+    # Welcome screen, not just the version line). We probe every place the app source
+    # can live, including the PyInstaller extraction root, so the frozen installer
+    # always shows the real version instead of "dev".
     import re
+    import sys
     from contextlib import suppress
-    for root in (core.bundled_source(), Path(__file__).resolve().parents[1]):
+    roots = [core.bundled_source(), Path(__file__).resolve().parents[1]]
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        roots += [Path(meipass) / "app", Path(meipass)]
+    for root in roots:
         if not root:
             continue
         with suppress(Exception):
@@ -104,7 +111,7 @@ class Bridge:
     long-running work runs on a thread and reports via ``_push``."""
 
     def __init__(self):
-        self.window = None  # set by main() after the window is created
+        self._window = None  # set by main() after the window is created
         # Progress events are COALESCED through a single timed flusher. Each
         # window.evaluate_js() is a synchronous round-trip marshalled onto the
         # WebView2 UI thread; firing one per log line / step update floods that
@@ -119,10 +126,10 @@ class Bridge:
     # ── outbound events → JS ────────────────────────────────────────────────
     def _evaluate(self, event: str, payload) -> None:
         """One marshalled call into the page. Best-effort (UI may be navigating)."""
-        if self.window is None:
+        if self._window is None:
             return
         try:
-            self.window.evaluate_js(
+            self._window.evaluate_js(
                 f"window.__installer && window.__installer.{event} "
                 f"&& window.__installer.{event}({json.dumps(payload)})"
             )
@@ -196,11 +203,11 @@ class Bridge:
         if os.name == "nt":
             return _windows_folder_dialog(str(core.default_install_dir().parent))
         # macOS/Linux: pywebview's native dialog (no UI-thread freeze observed there).
-        if self.window is None:
+        if self._window is None:
             return None
         try:
             import webview
-            res = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+            res = self._window.create_file_dialog(webview.FOLDER_DIALOG)
             if res:
                 return res[0] if isinstance(res, (list, tuple)) else str(res)
         except Exception:  # noqa: BLE001
@@ -259,9 +266,9 @@ class Bridge:
             return {"ok": False, "error": str(exc)}
 
     def close(self) -> None:
-        if self.window is not None:
+        if self._window is not None:
             with __import__("contextlib").suppress(Exception):
-                self.window.destroy()
+                self._window.destroy()
 
 
 def _centered_geometry(width: int, height: int):
@@ -306,7 +313,7 @@ def main() -> None:
         width=gw, height=gh, x=gx, y=gy, min_size=(820, 620),
         background_color="#f5f7fb",
     )
-    bridge.window = window
+    bridge._window = window
     webview.start(gui=gui, icon=icon, private_mode=False)
 
 

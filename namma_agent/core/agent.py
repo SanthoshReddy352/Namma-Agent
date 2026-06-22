@@ -19,6 +19,7 @@ the backend WebSocket (Phase 4), and TTS can all subscribe to the same stream.
 from __future__ import annotations
 
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -27,8 +28,47 @@ from typing import Callable, Optional
 from namma_agent.core.logger import logger
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import Persona, load_persona
-from namma_agent.core.providers.base import USAGE_KEYS, Provider, usage_tokens
+from namma_agent.core.providers.base import ProviderError, USAGE_KEYS, Provider, usage_tokens
 from namma_agent.core.tools import ToolRegistry
+
+
+def _generate_timeout(provider: Provider) -> float:
+    """Hard wall-clock ceiling for one model call. Generous enough to let the
+    provider's own per-attempt timeout + retries play out, then a margin."""
+    base = float(getattr(provider, "timeout_s", 60.0) or 60.0)
+    retries = int(getattr(provider, "max_retries", 1) or 1)
+    return max(120.0, base * (retries + 1) + 30.0)
+
+
+def _generate_bounded(provider: Provider, timeout: float, **kwargs):
+    """Run ``provider.generate`` with a hard wall-clock ceiling.
+
+    Some endpoints (notably local reasoning models served over an OpenAI-compatible
+    API) stall when the model emits a tool call — the stream never closes, so the
+    read blocks forever and the whole turn (and the app process, which then keeps its
+    port) hangs with no recovery. We run generate on a daemon thread and stop waiting
+    after ``timeout``, raising a clear error the UI can show instead of freezing. The
+    orphaned worker exits on its own once the underlying HTTP read finally times out;
+    any late stream callbacks are harmless (the turn has already moved on)."""
+    box: dict = {}
+
+    def _work():
+        try:
+            box["result"] = provider.generate(**kwargs)
+        except BaseException as exc:  # noqa: BLE001 — re-raised on the caller thread
+            box["error"] = exc
+
+    t = threading.Thread(target=_work, name="provider-generate", daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise ProviderError(
+            f"The model didn't respond within {int(timeout)}s — it may be stuck "
+            f"(some models stall on tool calls). Try again, or switch model in Settings."
+        )
+    if "error" in box:
+        raise box["error"]
+    return box["result"]
 
 # References to our media mount. The ONLY legitimate source of these is a
 # successful render_diagram / fetch_image / render_simulation tool result (the
@@ -452,9 +492,11 @@ class Agent:
                 emit("turn_cancelled", {"session_id": session_id})
                 break
             step += 1
-            resp = provider.generate(messages, tools=tool_defs, stream=want_stream,
-                                     on_token=_provider_sink if want_stream else None,
-                                     on_thinking=_provider_thinking if want_stream else None)
+            resp = _generate_bounded(
+                provider, _generate_timeout(provider),
+                messages=messages, tools=tool_defs, stream=want_stream,
+                on_token=_provider_sink if want_stream else None,
+                on_thinking=_provider_thinking if want_stream else None)
             # Emit any link fragment the filter held back before we inject anything,
             # so streamed text stays in order.
             if stream_filter is not None:
@@ -712,7 +754,8 @@ class Agent:
         ]
         for attempt in range(1, max_attempts + 1):
             try:
-                resp = provider.generate(convo, tools=tool_defs, stream=False)
+                resp = _generate_bounded(provider, _generate_timeout(provider),
+                                         messages=convo, tools=tool_defs, stream=False)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("[turn] visual-repair generation failed: %s", exc)
                 return ""

@@ -3,11 +3,10 @@ import { Installer, ready, onEvents } from "./api.js";
 import Welcome from "./screens/Welcome.jsx";
 import Progress from "./screens/Progress.jsx";
 import Provider from "./screens/Provider.jsx";
-import Onboarding from "./screens/Onboarding.jsx";
 import Done from "./screens/Done.jsx";
 
 export default function App() {
-  const [screen, setScreen] = useState("welcome"); // welcome|progress|provider|onboarding|done
+  const [screen, setScreen] = useState("welcome"); // welcome|progress|provider|done
   const [defaults, setDefaults] = useState(null);
   const [installDir, setInstallDir] = useState("");
   const [steps, setSteps] = useState([]);
@@ -79,14 +78,8 @@ export default function App() {
       setBusy(false);
       if (r && r.ok === false) setConfigWarning(`Provider not saved: ${r.error || "unknown error"}`);
     }
-    setScreen("onboarding");
-  };
-
-  const finishOnboarding = async (values) => {
-    setBusy(true);
-    const r = await Installer.saveOnboarding(dirRef.current, values || {});
-    setBusy(false);
-    if (r && r.ok === false) setConfigWarning(`Onboarding not saved: ${r.error || "unknown error"}`);
+    // Provider is the last setup step — the app handles personal onboarding on first
+    // run, so the installer goes straight to Done.
     setScreen("done");
     // Background sanity check so "Launch" is known-good.
     setVerifyState("checking");
@@ -123,9 +116,6 @@ export default function App() {
       )}
       {screen === "provider" && (
         <Provider providers={defaults?.providers || []} onSave={saveProvider} busy={busy} />
-      )}
-      {screen === "onboarding" && (
-        <Onboarding fields={defaults?.onboarding_fields || []} onFinish={finishOnboarding} busy={busy} />
       )}
       {screen === "done" && (
         <Done

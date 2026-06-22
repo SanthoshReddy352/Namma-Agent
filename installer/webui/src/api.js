@@ -7,24 +7,24 @@ const hasBridge = () =>
   window.pywebview.api &&
   typeof window.pywebview.api.get_defaults === "function";
 
-// Resolves once the REAL pywebview bridge is fully injected (its methods registered),
-// or falls back to the browser dev-mock only when there's genuinely no pywebview
-// (i.e. running under vite dev). Polling avoids the race where `pywebviewready` fires
-// before our listener attaches, or the API isn't registered yet at 600 ms.
+// True only under `npm run dev` (vite). Vite statically replaces import.meta.env.DEV,
+// so the whole dev-mock is dead code — and tree-shaken out — in the packaged build.
+const DEV = !!(import.meta && import.meta.env && import.meta.env.DEV);
+
+// Resolves once the REAL pywebview bridge is fully injected (its methods registered).
+// In the packaged app we WAIT for the bridge indefinitely (polling) and NEVER fall back
+// to the mock: the mock's placeholder install path (C:\Users\you\…) would otherwise be
+// shown in the Welcome field and then handed to the real installer → "access denied" on
+// a path that doesn't exist. The browser mock is reserved strictly for vite dev, where
+// no pywebview will ever appear.
 export function ready() {
   return new Promise((resolve) => {
     const t0 = Date.now();
     const poll = () => {
       if (hasBridge()) return resolve("bridge");
-      const elapsed = Date.now() - t0;
-      // pywebview injects `window.pywebview` almost immediately; if it's entirely
-      // absent after a short grace, we're in a plain browser → use the mock.
-      if (!window.pywebview && elapsed > 1500) {
-        installDevMock();
-        return resolve("mock");
-      }
-      // Last resort so the UI is never permanently dead.
-      if (elapsed > 15000) {
+      // Only ever use the mock under vite dev (DEV), and only once it's clear there's
+      // no real bridge coming (no window.pywebview after a short grace).
+      if (DEV && !window.pywebview && Date.now() - t0 > 1500) {
         installDevMock();
         return resolve("mock");
       }
@@ -36,7 +36,10 @@ export function ready() {
 
 const api = (name, ...args) => {
   if (hasBridge()) return window.pywebview.api[name](...args);
-  return window.__devApi[name](...args);
+  if (DEV && window.__devApi) return window.__devApi[name](...args);
+  // Packaged app, bridge not ready yet: reject (recoverable — callers retry) rather
+  // than reach into an undefined mock.
+  return Promise.reject(new Error("installer bridge not ready"));
 };
 
 export const Installer = {
@@ -73,7 +76,7 @@ function installDevMock() {
     get_defaults: async () => ({
       version: "dev",
       os: "Windows",
-      default_install_dir: "C:\\Users\\you\\Desktop\\Namma-Agent",
+      default_install_dir: "C:\\Users\\Example\\Desktop\\Namma-Agent",
       providers: [
         { id: "anthropic", label: "Anthropic (Claude)", model: "claude-opus-4-8", needs_key: true, base_url: "" },
         { id: "openai", label: "OpenAI (GPT)", model: "gpt-4o", needs_key: true, base_url: "" },
@@ -91,7 +94,7 @@ function installDevMock() {
       steps: steps.map((s) => ({ ...s })),
     }),
     choose_dir: async () => "C:\\Apps",
-    resolve_dir: async (d) => (d ? d + "\\Namma-Agent" : "C:\\Users\\you\\Desktop\\Namma-Agent"),
+    resolve_dir: async (d) => (d ? d + "\\Namma-Agent" : "C:\\Users\\Example\\Desktop\\Namma-Agent"),
     start_install: async () => {
       const local = steps.map((s) => ({ ...s }));
       const I = () => window.__installer;
@@ -106,7 +109,7 @@ function installDevMock() {
           setTimeout(tick, 700);
         } else {
           I() && I().onSteps([...local.map((s) => ({ ...s }))]);
-          I() && I().onInstallDone({ install_dir: "C:\\Users\\you\\Desktop\\Namma-Agent" });
+          I() && I().onInstallDone({ install_dir: "C:\\Users\\Example\\Desktop\\Namma-Agent" });
         }
       };
       tick();

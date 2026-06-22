@@ -16,6 +16,7 @@ import threading
 import time
 from contextlib import suppress
 from pathlib import Path
+from typing import Optional
 
 from namma_agent.config import load_config
 from namma_agent.core.logger import configure_logging, logger
@@ -71,6 +72,20 @@ def _serve(service: NammaAgentService) -> None:
     except BaseException as exc:  # noqa: BLE001 — surface every startup failure
         _serve_error = exc
         logger.exception("[app] backend failed to start")
+
+
+def _server_already_running() -> bool:
+    """True if something is already serving our app on the port. Lets a second launch
+    REUSE the running instance instead of starting a duplicate uvicorn — that bind
+    failure is what surfaced as the 'SystemExit: 1' error page + a 'refused to connect'
+    window when an earlier instance was still alive (e.g. holding the port)."""
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{_URL}/api/health", timeout=1.5):
+            return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _wait_for_server(timeout: float = 60.0) -> bool:
@@ -417,15 +432,28 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
     _open_browser(server_thread)
 
 
-def _open_browser(server_thread: threading.Thread) -> None:
+def _open_browser(server_thread: Optional[threading.Thread]) -> None:
     import webbrowser
 
     webbrowser.open(_URL)
-    server_thread.join()
+    if server_thread is not None:
+        server_thread.join()
 
 
 def main(server_only: bool = False) -> None:
     service = _build_service()
+
+    # If a previous instance is already serving on our port, REUSE it rather than
+    # starting a second uvicorn (the duplicate bind fails with SystemExit and the
+    # window then shows 'refused to connect'). Just open the window onto the running
+    # backend. With this + the provider hard-timeout, a relaunch is reliable.
+    if _server_already_running():
+        logger.info("[app] backend already running at %s — reusing it", _URL)
+        if server_only:
+            return
+        _launch_window(service, None, healthy=True)
+        return
+
     server_thread = threading.Thread(target=_serve, args=(service,), daemon=True)
     server_thread.start()
 

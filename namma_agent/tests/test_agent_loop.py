@@ -357,3 +357,54 @@ def test_does_not_duplicate_repeated_media():
     # placed into the stream exactly once too — the dedup guard keeps the repeated
     # render from streaming a second copy.
     assert "".join(chunks).count("same.png") == 1
+
+
+# ── provider hard-timeout (a stuck model can't freeze the turn forever) ───────
+
+def test_generate_bounded_times_out_on_a_stuck_provider():
+    import threading
+
+    from namma_agent.core import agent as agent_mod
+    from namma_agent.core.providers.base import ProviderError
+
+    class _Stuck:
+        def generate(self, **kwargs):
+            threading.Event().wait()  # blocks forever — simulates a hung stream
+
+    import pytest
+    with pytest.raises(ProviderError, match="didn't respond"):
+        agent_mod._generate_bounded(_Stuck(), 0.2, messages=[])
+
+
+def test_generate_bounded_propagates_result_and_errors():
+    from namma_agent.core import agent as agent_mod
+
+    class _Ok:
+        def generate(self, **kwargs):
+            return "RESULT"
+
+    assert agent_mod._generate_bounded(_Ok(), 1.0, messages=[]) == "RESULT"
+
+    class _Bad:
+        def generate(self, **kwargs):
+            raise ValueError("boom")
+
+    import pytest
+    with pytest.raises(ValueError, match="boom"):
+        agent_mod._generate_bounded(_Bad(), 1.0, messages=[])
+
+
+def test_generate_timeout_scales_with_provider_and_has_a_floor():
+    from namma_agent.core import agent as agent_mod
+
+    class _P:
+        timeout_s = 60.0
+        max_retries = 3
+
+    assert agent_mod._generate_timeout(_P()) == 60.0 * 4 + 30.0
+
+    class _Pmin:
+        timeout_s = 5.0
+        max_retries = 0
+
+    assert agent_mod._generate_timeout(_Pmin()) == 120.0  # floor
