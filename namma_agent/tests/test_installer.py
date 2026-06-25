@@ -116,7 +116,8 @@ def test_ensure_optional_tools_never_raises(monkeypatch):
 
 # ── add the `namma` command to PATH ──────────────────────────────────────────
 
-def test_windows_namma_cmd(tmp_path):
+def test_windows_namma_cmd(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
     body = core.windows_namma_cmd(tmp_path)
     assert "@echo off" in body
     assert "-m namma_agent" in body
