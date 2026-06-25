@@ -915,6 +915,18 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """Enable/disable every tool in a toolset at once; persists the disabled-set."""
         return service.set_toolset_enabled(body.category, body.enabled)
 
+    # -- MCP servers (Settings → MCP: Config + Servers) ---------------------
+
+    @app.get("/api/mcp")
+    def mcp_status():
+        """MCP config JSON + connected servers and their tools for the MCP tabs."""
+        return service.mcp_detail()
+
+    @app.post("/api/mcp/reload")
+    def mcp_reload():
+        """Reconnect MCP servers from the saved config (no restart) and return state."""
+        return service.reload_mcp()
+
     @app.get("/api/comms/status")
     def comms_status():
         return service.comms_status()

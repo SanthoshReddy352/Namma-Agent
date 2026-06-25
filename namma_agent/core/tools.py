@@ -123,6 +123,11 @@ class ToolRegistry:
     def add(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
 
+    def unregister(self, name: str) -> bool:
+        """Drop a tool from the registry. Used when MCP servers are reloaded so a
+        removed server's tools don't linger. Returns True if a tool was removed."""
+        return self._tools.pop(name, None) is not None
+
     def register_function(self, fn: Callable) -> Tool:
         """Register a function decorated with :func:`tool`."""
         spec = getattr(fn, "_tool_spec", None)

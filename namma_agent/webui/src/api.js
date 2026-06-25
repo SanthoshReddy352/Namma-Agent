@@ -152,6 +152,10 @@ export const listTools = () => j("/api/tools");
 export const toggleTool = (name, enabled) => jpost("/api/tools/toggle", { name, enabled });
 export const toggleToolset = (category, enabled) => jpost("/api/toolset/toggle", { category, enabled });
 
+// ── MCP servers (Settings → MCP tab: Config + Servers) ───────────────────────
+export const fetchMcp = () => j("/api/mcp");
+export const reloadMcp = () => jpost("/api/mcp/reload");
+
 let _id = 0;
 const nextId = () => `m${++_id}`;
 

@@ -216,6 +216,81 @@ class NammaAgentService:
             logger.warning("[service] MCP setup failed: %s", exc)
             return None
 
+    def mcp_detail(self) -> dict:
+        """MCP state for the Settings → MCP tabs: the raw config (for the Config
+        editor) and the list of servers with their tools + per-tool enabled flags
+        (for the Servers list). Tool enabled flags mirror the Toolsets tab — MCP
+        tools land in the registry as ``mcp_<server>_<tool>`` under the ``mcp``
+        toolset, so toggling reuses ``/api/tools/toggle``."""
+        from namma_agent.mcp.manager import _safe
+
+        mcp_cfg = self.config.get("mcp") or {}
+        servers_cfg = mcp_cfg.get("servers") or []
+        clients = getattr(self.mcp, "clients", {}) if self.mcp else {}
+
+        def tools_for(server_name: str, client) -> list[dict]:
+            out = []
+            for t in (client.list_tools() if client else []):
+                raw = t.get("name", "")
+                if not raw:
+                    continue
+                reg_name = f"mcp_{_safe(server_name)}_{_safe(raw)}"
+                tool = self.registry.get(reg_name)
+                out.append({
+                    "name": reg_name,
+                    "tool": raw,
+                    "description": " ".join((t.get("description") or "").split())[:220],
+                    "enabled": bool(tool.enabled) if tool else True,
+                })
+            return out
+
+        servers: list[dict] = []
+        seen: set[str] = set()
+        for cfg in servers_cfg:
+            if not isinstance(cfg, dict):
+                continue
+            name = cfg.get("name") or "unnamed"
+            seen.add(name)
+            client = clients.get(name)
+            servers.append({
+                "name": name,
+                "command": cfg.get("command") or [],
+                "enabled": cfg.get("enabled", True),
+                "connected": client is not None,
+                "tools": tools_for(name, client),
+            })
+        # Connected servers that aren't in the (possibly stale) config snapshot.
+        for name, client in clients.items():
+            if name in seen:
+                continue
+            servers.append({
+                "name": name, "command": [], "enabled": True,
+                "connected": True, "tools": tools_for(name, client),
+            })
+
+        import json as _json
+        return {
+            "available": True,
+            "config_json": _json.dumps(mcp_cfg or {"servers": []}, indent=2),
+            "servers": servers,
+        }
+
+    def reload_mcp(self) -> dict:
+        """Reconnect MCP servers from the current config WITHOUT a restart — used
+        after the Config editor saves. Closes existing clients, drops their tools
+        from the registry, and rebuilds. Persisted per-tool disabled flags are
+        re-applied automatically (``register`` honours the disabled-set)."""
+        if self.mcp is not None:
+            try:
+                self.mcp.close()
+            except Exception:  # noqa: BLE001
+                pass
+        for name in [n for n in self.registry.names() if n.startswith("mcp_")]:
+            self.registry.unregister(name)
+        with self.registry.categorize("mcp"):
+            self.mcp = self._build_mcp(self.config, self.registry)
+        return self.mcp_detail()
+
     # -- reminders ---------------------------------------------------------
 
     def _build_reminder_runner(self):

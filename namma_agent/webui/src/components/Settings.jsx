@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { applyUpdate, checkUpdate, clearMemory, deletePersona, exportPack, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchModels, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listSkills, listTools, packDownloadUrl, savePersona, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona, startComms, stopComms, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
+import { applyUpdate, checkUpdate, clearMemory, deletePersona, exportPack, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchModels, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listSkills, listTools, packDownloadUrl, reloadMcp, savePersona, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona, startComms, stopComms, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
 import { COMPLETION_PRESETS, SOUND_EVENTS, completionPreset, previewPreset, setCompletionPreset, setSoundEventEnabled, setSoundVolume, setSoundsEnabled, soundEventEnabled, soundVolume, soundsEnabled } from "../sounds.js";
 import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
 
@@ -39,6 +39,7 @@ const TAB_GROUPS = [
   { label: "Intelligence", tabs: ["Providers", "Models"] },
   { label: "Capabilities", tabs: ["Skills", "Toolsets", "Packs", "Browser"] },
   { label: "Channels", tabs: ["Messaging"] },
+  { label: "MCP", tabs: ["Config", "Servers"] },
   { label: "System", tabs: ["Memory", "About"] },
 ];
 const TABS = TAB_GROUPS.flatMap((g) => g.tabs);
@@ -56,6 +57,8 @@ const TAB_ICONS = {
   Packs: "M21 8l-9-5-9 5 9 5 9-5zM3 8v8l9 5 9-5V8M12 13v8",
   Browser: "M12 3a9 9 0 100 18 9 9 0 000-18zM3 12h18M12 3c2.5 2.5 4 5.7 4 9s-1.5 6.5-4 9c-2.5-2.5-4-5.7-4-9s1.5-6.5 4-9z",
   Messaging: "M4 5h16v11H8l-4 4z",
+  Config: "M10.3 4.3l-.7 2.1-2.1.8-2-1-1.5 1.5 1 2-.8 2.1-2.1.7v2.1l2.1.7.8 2.1-1 2 1.5 1.5 2-1 2.1.8.7 2.1h2.1l.7-2.1 2.1-.8 2 1 1.5-1.5-1-2 .8-2.1 2.1-.7v-2.1l-2.1-.7-.8-2.1 1-2-1.5-1.5-2 1-2.1-.8-.7-2.1zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z",
+  Servers: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   Memory: "M4 7a8 4 0 0016 0 8 4 0 00-16 0v10a8 4 0 0016 0M4 12a8 4 0 0016 0",
   About: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v5M12 7.5h.01",
 };
@@ -332,6 +335,10 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                     </Section>
                   </>
                 )}
+
+                {tab === "Config" && <McpConfigTab />}
+
+                {tab === "Servers" && <McpServersTab />}
 
                 {tab === "Skills" && <SkillsTab />}
 
@@ -1178,6 +1185,173 @@ function ToolsetsTab() {
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// The "MCP → Config" tab: edit the Model Context Protocol server config as JSON.
+// What you write here is the `mcp` block of the config (servers + their launch
+// commands), saved into config.local.yaml and applied live by reconnecting — no
+// restart. Each server's tools then appear in the Servers tab (and the Toolsets
+// tab) as mcp_<server>_<tool>.
+const MCP_CONFIG_PLACEHOLDER = `{
+  "servers": [
+    {
+      "name": "filesystem",
+      "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "C:/Users/me"],
+      "enabled": true
+    }
+  ]
+}`;
+
+function McpConfigTab() {
+  const [text, setText] = useState(null);   // JSON string being edited
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState(null);     // {ok, text}
+
+  useEffect(() => {
+    fetchMcp().then((r) => setText(r?.config_json || '{\n  "servers": []\n}'));
+  }, []);
+
+  async function save() {
+    let parsed;
+    try {
+      parsed = JSON.parse(text);
+    } catch (e) {
+      setMsg({ ok: false, text: "Invalid JSON — " + (e?.message || "parse error") });
+      return;
+    }
+    if (typeof parsed !== "object" || Array.isArray(parsed)) {
+      setMsg({ ok: false, text: 'Top level must be an object, e.g. { "servers": [ … ] }.' });
+      return;
+    }
+    setBusy(true); setMsg(null);
+    // Persist the `mcp` block, then reconnect so the change applies without a restart.
+    await saveSettings({ mcp: parsed }, {});
+    const r = await reloadMcp();
+    setBusy(false);
+    if (r && r.available) {
+      const n = (r.servers || []).length;
+      const connected = (r.servers || []).filter((s) => s.connected).length;
+      setText(r.config_json || text);
+      setMsg({ ok: true, text: `Saved & reconnected — ${connected}/${n} server(s) connected. See the Servers tab.` });
+    } else {
+      setMsg({ ok: false, text: "Saved, but couldn't reconnect — check the command and try Reload in the Servers tab." });
+    }
+  }
+
+  if (text === null) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
+  return (
+    <Section title="MCP server config"
+             hint="Configure external Model Context Protocol servers as JSON. Each server is launched as a local process; its tools become callable by the assistant. Saving reconnects immediately — no restart.">
+      <textarea value={text} onChange={(e) => setText(e.target.value)} spellCheck={false}
+                rows={16} placeholder={MCP_CONFIG_PLACEHOLDER}
+                className="w-full rounded-lg border border-line dark:border-night-line bg-paper dark:bg-night px-3 py-2 text-[12.5px] font-mono leading-relaxed outline-none focus:border-brand resize-y" />
+      <div className="text-[11.5px] text-ink-faint dark:text-night-faint">
+        Each entry needs a <span className="font-mono">name</span> and a <span className="font-mono">command</span> (argv array). Optional: <span className="font-mono">env</span> (object), <span className="font-mono">cwd</span> (string), <span className="font-mono">enabled</span> (bool, default true).
+      </div>
+      <div className="flex items-center gap-3 pt-0.5">
+        <button onClick={save} disabled={busy} className={_btn}>{busy ? "Saving…" : "Save & reconnect"}</button>
+        {msg && (
+          <span className={`text-[12.5px] ${msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-brand-deep dark:text-amber-400"}`}>
+            {msg.text}
+          </span>
+        )}
+      </div>
+    </Section>
+  );
+}
+
+// The "MCP → Servers" tab: every configured MCP server, whether it connected, and
+// the tools it exposes — each with an on/off switch. Toggling a tool reuses the
+// same per-tool disable used by the Toolsets tab (mcp tools register as
+// mcp_<server>_<tool>), so a flipped tool drops out of every turn.
+function McpServersTab() {
+  const [data, setData] = useState(null);   // {servers:[...]}
+  const [busy, setBusy] = useState({});     // tool name -> in-flight
+  const [reloading, setReloading] = useState(false);
+
+  const load = () => fetchMcp().then((r) => setData(r || { servers: [] }));
+  useEffect(() => { load(); }, []);
+
+  async function flip(server, t) {
+    setBusy((b) => ({ ...b, [t.name]: true }));
+    const next = !t.enabled;
+    setData((d) => ({ ...d, servers: d.servers.map((s) => s.name !== server ? s
+      : { ...s, tools: s.tools.map((x) => x.name === t.name ? { ...x, enabled: next } : x) }) }));
+    const r = await toggleTool(t.name, next);
+    if (!r?.ok)  // revert on failure
+      setData((d) => ({ ...d, servers: d.servers.map((s) => s.name !== server ? s
+        : { ...s, tools: s.tools.map((x) => x.name === t.name ? { ...x, enabled: t.enabled } : x) }) }));
+    setBusy((b) => ({ ...b, [t.name]: false }));
+  }
+
+  async function reload() {
+    setReloading(true);
+    const r = await reloadMcp();
+    if (r) setData(r);
+    setReloading(false);
+  }
+
+  if (!data) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
+  const servers = data.servers || [];
+
+  return (
+    <div className="space-y-4">
+      <Section title="MCP servers"
+               hint="Configured Model Context Protocol servers and the tools each exposes. Turn a tool off to keep it out of every turn. Add or edit servers in the Config tab.">
+        <button onClick={reload} disabled={reloading} className={_btnGhost + " disabled:opacity-50 text-[13px]"}>
+          {reloading ? "Reconnecting…" : "↻ Reconnect servers"}
+        </button>
+      </Section>
+
+      {servers.length === 0 && (
+        <div className="text-ink-faint dark:text-night-faint text-[13px]">
+          No MCP servers configured yet — add one in the <span className="font-medium text-ink-soft dark:text-night-ink">Config</span> tab.
+        </div>
+      )}
+
+      {servers.map((s) => (
+        <div key={s.name}>
+          <div className="flex items-center gap-2 mb-2">
+            <span className={`h-2 w-2 rounded-full shrink-0 ${s.connected ? "bg-emerald-500" : "bg-amber-500"}`} />
+            <span className="font-medium text-[13.5px]">{s.name}</span>
+            <span className="text-[11px] text-ink-faint dark:text-night-faint">
+              {s.connected ? `${s.tools.length} tool${s.tools.length === 1 ? "" : "s"}` : "not connected"}
+            </span>
+            {s.enabled === false && <SkillBadge>disabled in config</SkillBadge>}
+          </div>
+          {s.command?.length > 0 && (
+            <div className="text-[11px] font-mono text-ink-faint dark:text-night-faint mb-2 truncate">
+              {s.command.join(" ")}
+            </div>
+          )}
+          {!s.connected ? (
+            <div className="text-[12px] text-ink-faint dark:text-night-faint">
+              Couldn't connect — check the command in the Config tab, then Reconnect.
+            </div>
+          ) : s.tools.length === 0 ? (
+            <div className="text-[12px] text-ink-faint dark:text-night-faint">Server exposes no tools.</div>
+          ) : (
+            <div className="space-y-1.5">
+              {s.tools.map((t) => (
+                <div key={t.name} className={`${_box} flex items-start justify-between gap-3`}>
+                  <div className="min-w-0">
+                    <span className="font-medium font-mono text-[13px]">{t.tool}</span>
+                    {t.description && (
+                      <div className="text-[12.5px] text-ink-faint dark:text-night-faint mt-0.5">{t.description}</div>
+                    )}
+                  </div>
+                  <button type="button" disabled={!!busy[t.name]} onClick={() => flip(s.name, t)}
+                          className={`h-6 w-11 rounded-full transition relative shrink-0 mt-0.5 disabled:opacity-50 ${t.enabled ? "bg-brand" : "bg-line dark:bg-night-line"}`}>
+                    <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${t.enabled ? "left-[22px]" : "left-0.5"}`} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
