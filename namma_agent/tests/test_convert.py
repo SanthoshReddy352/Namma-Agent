@@ -61,7 +61,8 @@ def test_requires_source(reg):
     assert not r.ok and ("content" in r.error or "path" in r.error)
 
 
-def test_txt_fallback_strips_markdown(reg):
+def test_txt_fallback_strips_markdown(reg, monkeypatch):
+    monkeypatch.setattr(convert_mod.shutil, "which", lambda _: None)
     r = reg.execute("convert_document", {"content": _SAMPLE, "to": "txt"})
     assert r.ok and r.data["format"] == "txt"
     path = convert_mod._OUT_DIR / r.data["url"].split("/")[-1]

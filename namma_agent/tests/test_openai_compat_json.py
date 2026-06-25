@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
 from namma_agent.core.providers.openai_compat import OpenAICompatProvider
 from namma_agent.core.tools import ToolRegistry
@@ -74,6 +73,7 @@ def test_openai_compat_json_error_parsing_stream():
     # Mock stream chunks
     mock_chunk1 = MagicMock()
     mock_chunk1.choices = []
+    mock_chunk1.usage = None
 
     mock_tcd_start = MagicMock()
     mock_tcd_start.index = 0
@@ -82,7 +82,9 @@ def test_openai_compat_json_error_parsing_stream():
     mock_tcd_start.function.arguments = "{"
 
     mock_chunk2 = MagicMock()
+    mock_chunk2.usage = None
     mock_choice2 = MagicMock()
+    mock_choice2.delta.content = None
     mock_choice2.delta.tool_calls = [mock_tcd_start]
     mock_choice2.finish_reason = None
     mock_chunk2.choices = [mock_choice2]
@@ -94,7 +96,9 @@ def test_openai_compat_json_error_parsing_stream():
     mock_tcd_end.function.arguments = "invalid_json"
 
     mock_chunk3 = MagicMock()
+    mock_chunk3.usage = None
     mock_choice3 = MagicMock()
+    mock_choice3.delta.content = None
     mock_choice3.delta.tool_calls = [mock_tcd_end]
     mock_choice3.finish_reason = "stop"
     mock_chunk3.choices = [mock_choice3]

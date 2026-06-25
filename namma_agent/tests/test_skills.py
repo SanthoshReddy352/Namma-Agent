@@ -109,9 +109,9 @@ def test_ported_hermes_skills_present(tmp_path):
     """The bulk hermes port landed and loads (category injected from the folder)."""
     store = SkillStore(user_dir=tmp_path / "skills")
     by_name = {s.name: s for s in store.all()}
-    assert {"systematic-debugging", "notion", "obsidian"} <= set(by_name)
-    assert by_name["notion"].category == "productivity"
-    assert by_name["systematic-debugging"].category == "software-development"
+    assert {"deep-research", "one-three-one-rule", "organize-files"} <= set(by_name)
+    assert by_name["organize-files"].category == "productivity"
+    assert by_name["deep-research"].category == "research"
 
 
 # ── prerequisites / support ──────────────────────────────────────────────────
