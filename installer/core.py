@@ -37,16 +37,20 @@ Log = Callable[[str], None]
 _PY_CANDIDATES = ("python3.13", "python3.12", "python3.11", "python3.10", "python3", "python")
 
 
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
 # ── windowless subprocess (no flashing consoles on Windows) ──────────────────
 
 # CREATE_NO_WINDOW keeps console children (git/pip/winget/npm) from popping a
 # window when the installer itself is a windowed (no-console) process.
-_NO_WINDOW = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+_NO_WINDOW = subprocess.CREATE_NO_WINDOW if _is_windows() else 0
 
 
 def _startupinfo():
     """A STARTUPINFO that hides any window, on Windows; None elsewhere."""
-    if os.name != "nt":
+    if not _is_windows():
         return None
     si = subprocess.STARTUPINFO()
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -65,7 +69,7 @@ def _windows_desktop() -> Optional[Path]:
     several seconds while the file is hydrated; doing that inside the installer's
     ``get_defaults`` (which pywebview runs on the UI thread) is exactly what made the
     Welcome window freeze / show "not responding". Reading the registry is instant."""
-    if os.name != "nt":
+    if not _is_windows():
         return None
     try:
         import winreg  # Windows-only; absent elsewhere.
@@ -95,7 +99,7 @@ def desktop_dir() -> Optional[Path]:
     the installer's Welcome screen fills the default path instantly (no freeze): Windows
     reads the registry (handles OneDrive redirection); elsewhere it uses ``~/Desktop``
     when that local folder exists (a `stat` on a local fs is cheap)."""
-    if os.name == "nt":
+    if _is_windows():
         return _windows_desktop() or _onedrive_desktop()
     d = Path.home() / "Desktop"
     return d if d.is_dir() else None
@@ -105,7 +109,7 @@ def _fallback_install_root() -> Path:
     """A per-user, always-writable base to install under when there's no usable
     Desktop: ``%LOCALAPPDATA%`` on Windows (exists, writable, no admin, not
     redirected), the home directory elsewhere."""
-    if os.name == "nt":
+    if _is_windows():
         base = os.environ.get("LOCALAPPDATA")
         if base:
             return Path(base)
@@ -139,7 +143,7 @@ def resolve_install_dir(chosen: Optional[str | os.PathLike]) -> Path:
 
 
 def venv_python(install_dir: Path) -> Path:
-    if os.name == "nt":
+    if _is_windows():
         return install_dir / ".venv" / "Scripts" / "python.exe"
     return install_dir / ".venv" / "bin" / "python"
 
@@ -699,7 +703,7 @@ def add_to_path(install_dir: Path, log: Optional[Log] = None) -> None:
 def launch(install_dir: Path) -> None:
     """Open the installed app, detached and windowless, then return."""
     install_dir = Path(install_dir)
-    if os.name == "nt":
+    if _is_windows():
         exe = str(venv_pythonw(install_dir))
         subprocess.Popen([exe, "-m", "namma_agent"], cwd=str(install_dir), close_fds=True,
                          env=_clean_env(), creationflags=_NO_WINDOW, startupinfo=_startupinfo())

@@ -24,14 +24,14 @@ def test_default_install_dir_on_desktop():
 
 def test_desktop_dir_prefers_explorer_registry_on_windows(tmp_path, monkeypatch):
     desk = tmp_path / "OneDrive" / "Desktop"
-    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
     monkeypatch.setattr(core, "_windows_desktop", lambda: desk)
     assert core.desktop_dir() == desk
 
 
 def test_desktop_dir_onedrive_fallback_when_registry_fails(tmp_path, monkeypatch):
     od = tmp_path / "OneDrive"
-    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
     monkeypatch.setattr(core, "_windows_desktop", lambda: None)
     monkeypatch.setenv("OneDrive", str(od))
     assert core.desktop_dir() == od / "Desktop"
@@ -39,7 +39,7 @@ def test_desktop_dir_onedrive_fallback_when_registry_fails(tmp_path, monkeypatch
 
 def test_default_install_dir_falls_back_to_localappdata(tmp_path, monkeypatch):
     # No Desktop anywhere → land under %LOCALAPPDATA% (writable), never C:\Users\x root.
-    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
     monkeypatch.setattr(core, "_windows_desktop", lambda: None)
     for var in ("OneDrive", "OneDriveConsumer", "OneDriveCommercial"):
         monkeypatch.delenv(var, raising=False)
@@ -50,7 +50,7 @@ def test_default_install_dir_falls_back_to_localappdata(tmp_path, monkeypatch):
 def test_default_install_dir_does_no_filesystem_probing(monkeypatch):
     # Regression guard: computing the default must NOT call os.access / Path.is_dir —
     # those stall for seconds on an online-only OneDrive Desktop and froze the installer.
-    monkeypatch.setattr(core.os, "name", "nt")
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
     monkeypatch.setattr(core, "_windows_desktop", lambda: Path(r"D:\Desktop"))
 
     def _no_access(*_a, **_k):
