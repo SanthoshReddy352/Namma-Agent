@@ -168,8 +168,8 @@ class OpenAICompatProvider(Provider):
         for tc in (msg.tool_calls or []):
             try:
                 args = json.loads(tc.function.arguments or "{}")
-            except json.JSONDecodeError:
-                args = {}
+            except json.JSONDecodeError as exc:
+                args = {"_json_error": str(exc), "_raw_args": tc.function.arguments}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
         usage = getattr(resp, "usage", None)
         return LLMResponse(
@@ -235,8 +235,8 @@ class OpenAICompatProvider(Provider):
                 continue
             try:
                 args = json.loads(slot["args"] or "{}")
-            except json.JSONDecodeError:
-                args = {}
+            except json.JSONDecodeError as exc:
+                args = {"_json_error": str(exc), "_raw_args": slot["args"]}
             tool_calls.append(ToolCall(id=slot["id"], name=slot["name"], args=args))
 
         return LLMResponse(

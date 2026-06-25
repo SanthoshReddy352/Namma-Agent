@@ -205,6 +205,18 @@ class ToolRegistry:
 
     def execute(self, name: str, args: Optional[dict] = None) -> ToolResult:
         args = args or {}
+        if "_json_error" in args:
+            return ToolResult(
+                ok=False,
+                content="",
+                error=(
+                    f"Failed to parse tool call arguments as valid JSON. "
+                    f"Error: {args['_json_error']}. "
+                    f"Raw arguments sent: {args.get('_raw_args') or ''}. "
+                    f"Please make sure your arguments match the JSON schema, escape backslashes on Windows "
+                    f"(use \\\\ instead of \\), and ensure all quotes and JSON syntax are valid."
+                )
+            )
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(ok=False, content="", error=f"Unknown tool: {name}")
