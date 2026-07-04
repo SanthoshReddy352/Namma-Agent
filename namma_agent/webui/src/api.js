@@ -25,6 +25,10 @@ export const clearMemory = (scope) =>
   j("/api/memory/clear", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }) });
 export const fetchProviders = () => j("/api/providers");
 export const fetchEnvStatus = (keys) => j(`/api/env_status?keys=${encodeURIComponent((keys || []).join(","))}`);
+// Link status for the QR (personal-number) WhatsApp backend: {mode, available, linked, qr}.
+export const fetchWhatsappQR = () => j("/api/whatsapp/qr");
+// Reconnect: drop the linked session and re-issue a QR to scan.
+export const relinkWhatsapp = () => j("/api/whatsapp/qr/relink", { method: "POST" });
 export const fetchConfiguredModels = () => j("/api/configured_models");
 export const saveConfiguredModels = (models) =>
   j("/api/configured_models", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ models }) });
@@ -170,6 +174,8 @@ export const memoryGraph = () => j("/api/memory/graph");
 export const fetchCogneeConfig = () => j("/api/cognee/config");
 export const saveCogneeConfig = (env, flags) => jpost("/api/cognee/config", { env, flags });
 export const registerCogneeServer = (body = {}) => jpost("/api/cognee/register", body);
+// Targeted restart of just the cognee server (other MCP servers keep running).
+export const reconnectCognee = () => jpost("/api/cognee/reconnect", {});
 
 let _id = 0;
 const nextId = () => `m${++_id}`;

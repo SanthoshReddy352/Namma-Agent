@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # Namma Agent — Cognee memory setup (Linux / macOS / Git-Bash).
+# One command to make Cognee — Namma's memory — work on a fresh machine.
 # Cognee runs FULLY CONTAINERIZED — it adds NO Python dependencies to Namma.
-# The only prerequisite is Docker. See docs/COGNEE.md for the full guide.
+# The only prerequisite is Docker. See README.md + docs/COGNEE.md.
 #
 #   Run from the project root:  bash scripts/setup_cognee.sh
+#   SKIP_LOCAL_LLM=1 bash scripts/setup_cognee.sh   # skip the 4.7 GB local model
+#                                                   # (if you'll use a cloud LLM)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -14,20 +17,25 @@ if ! docker info >/dev/null 2>&1; then
   exit 1
 fi
 
+# The compose file pins the network name to agi_default so the cognee container
+# can always join it, regardless of this folder's name.
 echo "-> Starting Ollama container..."
 docker compose -f docker-compose.cognee.yml up -d
 
 echo "-> Pulling embedding model (nomic-embed-text, ~275 MB)..."
 docker exec namma-cognee-ollama ollama pull nomic-embed-text
-echo "-> Pulling extraction model (llama3.2:3b, ~2 GB)..."
-docker exec namma-cognee-ollama ollama pull llama3.2:3b
+if [ "${SKIP_LOCAL_LLM:-0}" != "1" ]; then
+  echo "-> Pulling local extraction model (qwen2.5:7b, ~4.7 GB)..."
+  echo "   (skip with SKIP_LOCAL_LLM=1 if you use a cloud LLM instead)"
+  docker exec namma-cognee-ollama ollama pull qwen2.5:7b
+fi
 
 echo "-> Pulling Cognee MCP image (cognee/cognee-mcp:main, large)..."
 docker pull cognee/cognee-mcp:main
 
 if [ ! -f .env.cognee ]; then
   cp .env.cognee.example .env.cognee
-  echo "-> Created .env.cognee from the example."
+  echo "-> Created .env.cognee from the example (fully local, key-free)."
 fi
 
 # PERSISTENCE: create the cognee-data volume + pre-create its dirs with write perms.
@@ -40,22 +48,10 @@ docker run --rm -v cognee-data:/cognee-data busybox sh -c \
 
 cat <<'EOF'
 
-Done. Now register Cognee in Namma -> Settings -> MCP -> Config and paste
-(adjust the --env-file absolute path for your OS):
+Done. Now start Namma Agent and click ONE button:
 
-{
-  "servers": [
-    {
-      "name": "cognee",
-      "command": ["docker","run","-i","--rm","--network","agi_default",
-                  "--env-file","/ABSOLUTE/PATH/TO/.env.cognee",
-                  "-v","cognee-data:/cognee-data","cognee/cognee-mcp:main"],
-      "enabled": true,
-      "connect_timeout": 90,
-      "call_timeout": 900
-    }
-  ]
-}
+  Settings -> MCP -> Cognee -> "Register Cognee server"
 
-Then click Save & reconnect. See docs/COGNEE.md for verification + troubleshooting.
+It connects in ~30s. To use a cloud LLM for faster graph building, pick a
+preset under "Models & embeddings" in the same tab. See docs/COGNEE.md.
 EOF

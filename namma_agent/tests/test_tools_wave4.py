@@ -30,11 +30,21 @@ class ScriptedProvider(Provider):
         return self._responses.pop(0)
 
 
+class _StubIngestor:
+    def __init__(self):
+        self.texts = []
+
+    def ingest_text(self, text):
+        self.texts.append(text)
+
+
 @pytest.fixture
 def wired():
     db = Database(":memory:")
     reg = ToolRegistry()
-    register_memory_tools(reg, db)
+    ing = _StubIngestor()
+    reg._test_ingestor = ing  # handle for tests
+    register_memory_tools(reg, db, get_cognee_ingestor=lambda: ing)
     # a couple of research tools so delegate_task has something to copy
     reg.register("system_info", "host", {"type": "object", "properties": {}},
                  lambda a: ToolResult(ok=True, content="os: TestOS"))
@@ -47,22 +57,21 @@ def wired():
 
 def test_memory_tools_registered(wired):
     reg, _, _ = wired
-    for name in ("remember_fact", "recall_facts", "forget_fact", "search_conversations"):
+    for name in ("remember_fact", "recall_facts", "search_conversations", "clear_memory"):
         assert name in reg
 
 
-def test_remember_forget_roundtrip(wired):
+def test_remember_fact_goes_to_cognee(wired):
     reg, db, _ = wired
     assert reg.execute("remember_fact", {"key": "editor", "value": "neovim"}).ok
-    assert db.get_fact("editor") == "neovim"
-    r = reg.execute("forget_fact", {"key": "editor"})
-    assert r.ok and db.get_fact("editor") is None
+    assert any("neovim" in t for t in reg._test_ingestor.texts)
+    assert db.all_facts() == []  # Cognee is the memory - no SQLite fact rows
 
 
-def test_forget_missing_fact(wired):
+def test_recall_facts_requires_cognee(wired):
     reg, _, _ = wired
-    r = reg.execute("forget_fact", {"key": "nope"})
-    assert not r.ok
+    r = reg.execute("recall_facts", {"query": "editor"})
+    assert not r.ok and "cognee" in (r.error or "").lower()
 
 
 def test_search_conversations(wired):
@@ -74,10 +83,9 @@ def test_search_conversations(wired):
     assert r.ok and "water the plants" in r.content
 
 
-def test_forget_fact_destructive(wired):
+def test_clear_memory_destructive(wired):
     reg, _, _ = wired
-    assert reg.get("forget_fact").destructive is True
-    assert is_destructive("forget_fact")
+    assert reg.get("clear_memory").destructive is True
 
 
 # ── delegate_task ─────────────────────────────────────────────────────────────

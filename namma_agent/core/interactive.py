@@ -9,7 +9,23 @@ logged, or shown to the model.
 from __future__ import annotations
 
 import contextvars
-from typing import Callable, Optional
+from typing import Any, Callable, Optional
+
+# The live CommsManager (process-wide, not turn-local). The service registers it
+# once so stateless tools — notably send_notification — can reach the *running*
+# channels instead of rebuilding them from env. That matters for stateful channels
+# like WhatsApp QR, whose connected client lives only in the running gateway.
+_COMMS: Any = None
+
+
+def set_comms(comms: Any) -> None:
+    global _COMMS
+    _COMMS = comms
+
+
+def get_comms() -> Any:
+    return _COMMS
+
 
 # Set inside the turn's worker thread; read by run_shell in the same thread.
 _ASKPASS: "contextvars.ContextVar[Optional[Callable[[str], Optional[str]]]]" = (
@@ -61,6 +77,29 @@ def emit_event(event: str, payload: dict) -> None:
     fn = _EVENT_SINK.get()
     if fn:
         fn(event, payload)
+
+
+# Turn-local progress sink: a comms bridge (Telegram/Signal/…) sets this so the
+# agent's intermediate "preamble" lines — the explanation that accompanies each
+# tool round — are delivered to the user as separate messages AS THEY HAPPEN,
+# instead of being bundled into the final reply. None for the web UI (which already
+# streams those tokens live) and outside a turn.
+_PROGRESS: "contextvars.ContextVar[Optional[Callable[[str], None]]]" = (
+    contextvars.ContextVar("namma_agent_progress", default=None)
+)
+
+
+def set_progress_sink(fn: Optional[Callable[[str], None]]):
+    """Set the per-turn progress sink; returns a token to pass to ``reset_progress_sink``."""
+    return _PROGRESS.set(fn)
+
+
+def reset_progress_sink(token) -> None:
+    _PROGRESS.reset(token)
+
+
+def get_progress_sink() -> Optional[Callable[[str], None]]:
+    return _PROGRESS.get()
 
 
 # Turn-local artifact recorder: media tools call this so generated diagrams/images/

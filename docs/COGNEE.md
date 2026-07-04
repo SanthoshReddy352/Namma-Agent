@@ -1,9 +1,11 @@
-# Cognee Enhanced Memory (optional)
+# Cognee Memory
 
-Namma Agent can use **[Cognee](https://www.cognee.ai)** — an open-source AI memory
-engine — to add **semantic + knowledge-graph memory** on top of the built-in
-SQLite/FTS5 store. It's **opt-in** and **non-destructive**: with it off, Namma
-behaves exactly as before.
+**[Cognee](https://www.cognee.ai)** — an open-source AI memory engine — is Namma
+Agent's long-term memory. Everything the assistant remembers about you lives in
+Cognee's **semantic + knowledge-graph** store; the local SQLite file only keeps
+chat *transcripts* and app state (projects, learning plans), not memory. Without
+Cognee connected the assistant still works, but it won't remember you across
+sessions.
 
 > Built for the WeMakeDevs × Cognee hackathon. Full design & status live in
 > [`Cognee_Implementation.md`](../Cognee_Implementation.md).
@@ -19,8 +21,8 @@ Cognee runs **fully containerized** and Namma talks to it through its built-in
   [`namma_agent/requirements.txt`](../namma_agent/requirements.txt). Cognee's heavy
   native stack lives inside its Docker image, never in Namma's venv. (This also
   sidesteps Python 3.14 wheel issues.)
-- **Cannot degrade Namma.** It's isolated in a container, opt-in, and falls back to
-  SQLite/FTS5 if unavailable.
+- **Cannot degrade Namma.** It's isolated in a container; when it's unreachable
+  the assistant simply says memory is unavailable instead of crashing.
 - **The only prerequisite is Docker.**
 
 ```
@@ -30,16 +32,17 @@ Namma Agent (your venv)                     Docker
                                               └─ files ─▶ LanceDB (vectors) · Kuzu (graph) · SQLite
 ```
 
-**Models (fully local / free):** extraction LLM `llama3.2:3b` and embeddings
+**Models (fully local / free):** extraction LLM `qwen2.5:7b` and embeddings
 `nomic-embed-text`, both served by a local **Ollama** container. No API keys, no
-cloud calls — the strongest "Best Use of Open Source" story.
+cloud calls — the strongest "Best Use of Open Source" story. (Prefer speed? Pick
+the Groq or OpenAI preset in Settings → MCP → Cognee → Models & embeddings.)
 
 ---
 
 ## Prerequisites
 
 - **Docker Desktop** (running). Everything else is pulled by the setup script.
-- ~30 GB free disk (the Cognee MCP image is large; models add ~2.3 GB).
+- ~35 GB free disk (the Cognee MCP image is large; models add ~5 GB).
 
 No OpenAI/Groq/Google key is required for the local setup.
 
@@ -60,8 +63,10 @@ bash scripts/setup_cognee.sh
 ```
 
 This will: start the Ollama container ([`docker-compose.cognee.yml`](../docker-compose.cognee.yml)),
-pull `nomic-embed-text` + `llama3.2:3b`, pull `cognee/cognee-mcp:main`, and create
-`.env.cognee` from the example.
+pull `nomic-embed-text` + `qwen2.5:7b`, pull `cognee/cognee-mcp:main`, create
+`.env.cognee` from the example, and prepare the persistent `cognee-data` volume.
+Using a cloud LLM instead of the local one? Skip the 4.7 GB pull with
+`-SkipLocalLLM` (PowerShell) / `SKIP_LOCAL_LLM=1` (bash).
 
 <details>
 <summary>Manual steps (what the script does)</summary>
@@ -69,42 +74,30 @@ pull `nomic-embed-text` + `llama3.2:3b`, pull `cognee/cognee-mcp:main`, and crea
 ```bash
 docker compose -f docker-compose.cognee.yml up -d
 docker exec namma-cognee-ollama ollama pull nomic-embed-text
-docker exec namma-cognee-ollama ollama pull llama3.2:3b
+docker exec namma-cognee-ollama ollama pull qwen2.5:7b
 docker pull cognee/cognee-mcp:main
 cp .env.cognee.example .env.cognee
+docker volume create cognee-data
+docker run --rm -v cognee-data:/cognee-data busybox sh -c   "mkdir -p /cognee-data/system /cognee-data/data /cognee-data/cache && chmod -R 777 /cognee-data"
 ```
 </details>
 
 ---
 
-## Register Cognee in Namma
+## Register Cognee in Namma (one click)
 
-1. Open Namma → **Settings → MCP → Config**.
-2. Paste (adjust the `--env-file` path to your OS; on Windows it's `D:/AGI/.env.cognee`):
+1. Open Namma → **Settings → MCP → Cognee**.
+2. Click **Register Cognee server**. That writes the correct `docker run` entry
+   (env file, `cognee-data` volume, `agi_default` network, generous timeouts) and
+   connects — no JSON to paste. The container cold-starts in ~30 s.
+3. **Settings → MCP → Servers** now shows `cognee` connected with its tools
+   (`remember`, `recall`, `forget`, …), each toggleable — and toggling any *other*
+   server no longer restarts the Cognee container (server toggles are targeted).
 
-```json
-{
-  "servers": [
-    {
-      "name": "cognee",
-      "command": ["docker","run","-i","--rm","--network","agi_default",
-                  "--env-file","D:/AGI/.env.cognee",
-                  "-v","cognee-data:/cognee-data","cognee/cognee-mcp:main"],
-      "enabled": true,
-      "connect_timeout": 90,
-      "call_timeout": 900
-    }
-  ]
-}
-```
-
-3. Click **Save & reconnect**.
-4. Go to **Settings → MCP → Servers** — you should see `cognee` connected with its
-   tools (`remember`, `recall`, `forget`, …), each toggleable.
-
-`connect_timeout`/`call_timeout` matter: Cognee cold-starts in ~20 s and graph
-builds (`cognify`) can take minutes on CPU — the defaults (60 s / 120 s) are too
-short, so the entry overrides them.
+Everything else about the integration is configured in the same tab: the backend
+(self-hosted vs Cognee Cloud), the extraction/embedding models (presets for fully
+local Ollama, Groq hybrid, OpenAI), behaviour flags (auto-ingest, learning
+ingestion, recall-in-chat — all sensible defaults), and a danger-zone wipe.
 
 ---
 
@@ -139,6 +132,8 @@ Once connected, the assistant can call:
 | `cognify` slow/errored with Groq free tier | Possible **rate limits** on bursts. Fine for pre-building small docs; for live use keep extraction to short inputs or upgrade tier. |
 | Memory doesn't persist across restarts | **Fixed.** Set `DATA_ROOT_DIRECTORY` / `SYSTEM_ROOT_DIRECTORY` / `CACHE_ROOT_DIRECTORY` to paths under the mounted `cognee-data` volume (in `.env.cognee`), and pre-create those dirs with write perms (the setup script does this — the volume is root-owned, Cognee runs non-root). Verified surviving container restarts. |
 | `PermissionError: Permission denied` creating `/cognee-data/...` | The volume is root-owned and Cognee runs non-root. Run: `docker run --rm -v cognee-data:/cognee-data busybox sh -c "mkdir -p /cognee-data/{system,data,cache} && chmod -R 777 /cognee-data"` (the setup script does this). |
+| Every `remember` returns **409** "An error occurred during remember", `forget` returns **500** "An error occurred during deletion", and the graph shows many **entities but 0 links** | The persisted `cognee-data` volume is in a **corrupted / half-deleted state** (usually from a cognify run interrupted mid-write, or backend-switching while a write was in flight). `forget` can't even clean it up. **Fix = reset the volume** (it only holds re-seedable demo memory): `docker rm -f namma_cognee` → `docker volume rm cognee-data` → recreate it with the `busybox … chmod 777` line above → **Settings → MCP → Cognee → Reconnect** → re-seed with `python scripts/seed_demo_memory.py --stress`. |
+| First **Reconnect after a volume reset fails** with `handshake failed: cognee: server closed the connection` | On a **fresh/empty volume**, cognee 1.1.0 runs **database migrations (~30–60 s)** before the MCP server starts listening, so the first connect can exceed the handshake window. **Not corruption — just click Reconnect a second time** (migrations are one-time; the next connect is fast). If it persists, raise the cognee server's `connect_timeout` to `120` in Settings → MCP. |
 
 ---
 

@@ -72,18 +72,19 @@ def test_db_clear_methods():
 
 def test_clear_memory_tool():
     from namma_agent.core.builtins import register_memory_tools
-    from namma_agent.core.memory_notes import MemoryNotes
-    import tempfile
+    from namma_agent.core.tools import ToolResult
     db = Database(":memory:")
-    db.save_fact("k", "v")
-    notes = MemoryNotes(tempfile.mkdtemp())
-    notes.append_note("remember this")
+    sid = db.create_session()
+    db.add_turn(sid, "user", "hi")
     reg = ToolRegistry()
-    register_memory_tools(reg, db, notes=notes)
+    register_memory_tools(reg, db)
+    forgotten = []
+    reg.register("mcp_cognee_forget", "forget", {"type": "object", "properties": {}},
+                 lambda a: forgotten.append(a) or ToolResult(ok=True, content="done"))
     out = reg.execute("clear_memory", {"scope": "all"})
     assert out.ok
-    assert db.all_facts() == []
-    assert notes.block() == ""
+    assert forgotten == [{"everything": True}]   # Cognee graph wiped
+    assert db.search_turns("hi") == []           # transcripts wiped
 
 
 # ── config + env write ───────────────────────────────────────────────────────

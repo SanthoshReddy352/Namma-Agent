@@ -3,17 +3,21 @@ from __future__ import annotations
 
 import pytest
 
-from namma_agent.comms._util import chunk_text
+from namma_agent.comms._util import chunk_text, markdown_to_whatsapp
 from namma_agent.comms.console import ConsoleInbound
 from namma_agent.comms.discord import DiscordChannel, DiscordInbound
 from namma_agent.comms.manager import CommsManager
 from namma_agent.comms.signal import SignalChannel, SignalInbound
 from namma_agent.comms import slack as slack_mod
 from namma_agent.comms.slack import SlackChannel, SlackSocketInbound
-from namma_agent.comms.telegram import TelegramChannel, TelegramInbound, _chunk, _markdown_to_telegram_html
+from namma_agent.comms.telegram import (
+    TelegramChannel, TelegramInbound, _chunk, _markdown_to_telegram_html, _split_media,
+)
 from namma_agent.comms import signal as signal_mod
 from namma_agent.comms import whatsapp as whatsapp_mod
+from namma_agent.comms import whatsapp_qr as whatsapp_qr_mod
 from namma_agent.comms.whatsapp import WhatsAppChannel, WhatsAppInbound
+from namma_agent.comms.whatsapp_qr import WhatsAppQRChannel, whatsapp_mode
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.tools import comms as comms_tool
 from namma_agent.tools import load_tools
@@ -55,6 +59,247 @@ def test_markdown_to_html():
     out = _markdown_to_telegram_html("**bold** *it* `code` <x>")
     assert "<b>bold</b>" in out and "<i>it</i>" in out and "<code>code</code>" in out
     assert "&lt;x&gt;" in out  # escaped
+
+
+def test_markdown_headers_links_and_bullets():
+    out = _markdown_to_telegram_html(
+        "## Auth Overview\n"
+        "- first point\n"
+        "* second point\n"
+        "See [the docs](https://x.test/a_b) for more."
+    )
+    assert "<b>Auth Overview</b>" in out          # header → bold (no literal ##)
+    assert "##" not in out
+    assert "• first point" in out and "• second point" in out  # bullets normalized
+    assert '<a href="https://x.test/a_b">the docs</a>' in out   # link → anchor
+    assert "[the docs]" not in out
+
+
+def test_markdown_code_fence_is_protected():
+    out = _markdown_to_telegram_html("text\n```py\nif a < b and c > d:\n    go(**kw)\n```\nend")
+    # Fence body is preserved verbatim (HTML-escaped) inside <pre>, not mangled by
+    # the bold/italic passes.
+    assert "<pre>" in out and "</pre>" in out
+    assert "if a &lt; b and c &gt; d:" in out
+    assert "go(**kw)" in out                       # ** inside code stays literal
+    assert "<b>" not in out.split("</pre>")[0]
+
+
+def test_markdown_narrow_table_becomes_monospace_grid():
+    out = _markdown_to_telegram_html(
+        "| Client | File |\n|---|---|\n| Browser | client.js |\n| Server | server.js |"
+    )
+    assert "|" not in out                          # no raw pipe table leaks
+    assert "<pre>" in out and "</pre>" in out       # aligned monospace grid
+    assert "Browser  client.js" in out              # columns padded/aligned
+
+
+def test_markdown_wide_table_becomes_bullets():
+    out = _markdown_to_telegram_html(
+        "| Client | Purpose |\n|---|---|\n"
+        "| Browser Client | Used in client components that handle the session from cookies |\n"
+        "| Server Client | Reads cookies from next/headers on the server for every request |"
+    )
+    assert "|" not in out and "<pre>" not in out     # too wide for a grid → bullets
+    assert "<b>Browser Client</b>" in out
+    assert "• Purpose: Used in client components" in out
+
+
+def test_table_cell_markdown_is_sanitized():
+    # Bold/inline-code inside cells must not leak ** or ` into the output.
+    out = _markdown_to_telegram_html(
+        "| Name | Note |\n|---|---|\n| **Auth** | use `signUp()` |"
+    )
+    assert "**" not in out and "`" not in out and "|" not in out
+
+
+def test_separatorless_pipe_table_is_detected():
+    out = _markdown_to_telegram_html(
+        "| A | B |\n| one | two |\n| three | four |"      # no |---| delimiter row
+    )
+    assert "|" not in out and ("<pre>" in out or "•" in out)
+
+
+def test_no_markdown_symbols_leak():
+    # Unbalanced/odd markers and missing-space headers must not reach the user.
+    out = _markdown_to_telegram_html(
+        "##Heading\n"                      # header with no space after ##
+        "Some **bold** and a stray ** marker.\n"
+        "### Another Section ###\n"
+        "~~struck~~ and a lone ~~ too.\n"
+        "---\n"
+        "done"
+    )
+    assert "##" not in out and "**" not in out and "~~" not in out
+    assert "<b>Heading</b>" in out and "<b>Another Section</b>" in out
+    assert "<b>bold</b>" in out and "<s>struck</s>" in out
+    assert "────────" in out               # horizontal rule rendered as a divider
+
+
+def test_telegram_plain_fallback_strips_markup():
+    from namma_agent.comms.telegram import _telegram_plain
+    out = _telegram_plain("## Title\n- **bold** point\n`code` and [t](http://x)")
+    assert "<" not in out and "##" not in out and "**" not in out and "`" not in out
+    assert "• bold point" in out and "Title" in out and "[t]" not in out
+
+
+def test_deliver_falls_back_to_plain_on_parse_error():
+    ch = TelegramChannel(token="t", chat_id="42")
+    calls = []
+
+    def fake_post(method, body, timeout=10):
+        calls.append(body)
+        # First (HTML) attempt fails like Telegram's "can't parse entities".
+        if body.get("parse_mode") == "HTML":
+            return {"ok": False, "description": "Bad Request: can't parse entities"}
+        return {"ok": True}
+
+    ch._post = fake_post
+    ch._deliver("**hi** <there>")
+    assert len(calls) == 2
+    assert calls[0]["parse_mode"] == "HTML"
+    assert "parse_mode" not in calls[1]            # plain retry, no parse mode
+    assert "hi" in calls[1]["text"] and "<there>" in calls[1]["text"]
+
+
+# ── outbound media (photos / documents / send_file) ─────────────────────────────
+
+def test_resolve_media_maps_api_url_and_paths():
+    from pathlib import Path
+    assert TelegramChannel._resolve_media("/api/media/diagrams/x.png") == Path("data/media/diagrams/x.png")
+    assert TelegramChannel._resolve_media("/tmp/y.pdf") == Path("/tmp/y.pdf")
+    assert TelegramChannel._resolve_media("") is None
+
+
+def test_send_document_builds_multipart_upload(tmp_path):
+    f = tmp_path / "report.pdf"
+    f.write_bytes(b"%PDF-1.4 fake")
+    ch = TelegramChannel(token="t", chat_id="42")
+    captured = {}
+
+    def fake_mp(method, fields, files, timeout=120):
+        captured.update(method=method, fields=fields, files=files)
+        return {"ok": True}
+
+    ch._post_multipart = fake_mp
+    assert ch.send_document(str(f), caption="here you go", reply_to=7) is True
+    assert captured["method"] == "sendDocument"
+    assert captured["fields"]["chat_id"] == "42"
+    assert captured["fields"]["caption"] == "here you go"
+    assert "reply_parameters" in captured["fields"]            # quotes the user's message
+    name, content, _mime = captured["files"]["document"]
+    assert name == "report.pdf" and content == b"%PDF-1.4 fake"
+
+
+def test_post_multipart_builds_valid_body(tmp_path, monkeypatch):
+    ch = TelegramChannel(token="TOK", chat_id="42")
+    sent = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b'{"ok": true}'
+
+    def fake_urlopen(req, timeout=120):
+        sent["url"] = req.full_url
+        sent["ctype"] = req.headers.get("Content-type")
+        sent["body"] = req.data
+        return _Resp()
+
+    from namma_agent.comms import telegram as tg
+    monkeypatch.setattr(tg.urllib.request, "urlopen", fake_urlopen)
+    out = ch._post_multipart("sendDocument", {"chat_id": "42"},
+                             {"document": ("a.txt", b"hello", "text/plain")})
+    assert out == {"ok": True}
+    assert sent["url"].endswith("/botTOK/sendDocument")
+    assert sent["ctype"].startswith("multipart/form-data; boundary=")
+    body = sent["body"]
+    assert b'name="chat_id"' in body and b"42" in body
+    assert b'filename="a.txt"' in body and b"hello" in body
+
+
+def test_send_photo_uses_sendphoto_for_image(tmp_path):
+    f = tmp_path / "diagram.png"
+    f.write_bytes(b"\x89PNG fake")
+    ch = TelegramChannel(token="t", chat_id="42")
+    seen = {}
+    ch._post_multipart = lambda method, fields, files, timeout=120: (
+        seen.update(m=method) or {"ok": True})
+    assert ch.send_photo(str(f)) is True
+    assert seen["m"] == "sendPhoto"
+
+
+def test_send_media_routes_by_extension(tmp_path):
+    ch = TelegramChannel(token="t", chat_id="42")
+    kinds = []
+    ch.send_photo = lambda src, caption="", reply_to=None: kinds.append("photo") or True
+    ch.send_document = lambda src, caption="", reply_to=None: kinds.append("doc") or True
+    (tmp_path / "a.png").write_bytes(b"x")
+    (tmp_path / "a.zip").write_bytes(b"x")
+    ch.send_media(str(tmp_path / "a.png"))
+    ch.send_media(str(tmp_path / "a.zip"))
+    assert kinds == ["photo", "doc"]
+
+
+def test_send_media_missing_file_returns_false():
+    ch = TelegramChannel(token="t", chat_id="42")
+    assert ch.send_media("/api/media/diagrams/gone.png") is False
+
+
+def test_split_media_separates_text_and_images():
+    parts = _split_media(
+        "intro\n![Flow](/api/media/diagrams/x.png)\n\n"
+        "*Flow* · [⬇ Download](/api/media/diagrams/x.png)\nmore")
+    assert [k for k, _ in parts] == ["text", "media", "text"]
+    assert parts[1][1] == ("/api/media/diagrams/x.png", "Flow")
+
+
+def test_send_reply_uploads_diagram_and_strips_dead_link():
+    ch = TelegramChannel(token="t", chat_id="42")
+    delivered, media = [], []
+    ch._deliver = lambda chunk, reply_to=None: delivered.append(chunk)
+    ch.send_media = lambda src, caption="", reply_to=None: media.append((src, caption)) or True
+    inbound = TelegramInbound(ch, lambda t, s, m, a=None, model=None: ("x", "s"))
+    inbound._send_reply(
+        "Here is the flow:\n\n![Flow](/api/media/diagrams/x.png)\n\n"
+        "*Flow* · [⬇ Download diagram](/api/media/diagrams/x.png)\n\nThat's it.", reply_to=5)
+    # the diagram was uploaded as a real photo with its title as caption …
+    assert media == [("/api/media/diagrams/x.png", "Flow")]
+    # … and the surrounding prose was sent, with the dead /api/media link stripped.
+    joined = "\n".join(delivered)
+    assert "Here is the flow:" in joined and "That's it." in joined
+    assert "/api/media/" not in joined and "Download diagram" not in joined
+
+
+def test_send_file_tool_registered(reg):
+    assert "send_file" in reg
+
+
+def test_send_file_tool_missing_file(reg):
+    r = reg.execute("send_file", {"path": "/no/such/file.pdf"})
+    assert not r.ok and "no file" in r.error.lower()
+
+
+def test_send_file_tool_uploads_document(reg, tmp_path, monkeypatch):
+    f = tmp_path / "doc.pdf"
+    f.write_bytes(b"data")
+    sent = []
+
+    class _FakeCh:
+        available = True
+
+        def send_document(self, p, caption=""):
+            sent.append(("doc", str(p), caption))
+            return True
+
+        def send_photo(self, p, caption=""):
+            sent.append(("photo", str(p), caption))
+            return True
+
+    from namma_agent.tools import send_file as sf
+    monkeypatch.setattr(sf, "TelegramChannel", lambda: _FakeCh())
+    r = reg.execute("send_file", {"path": str(f), "caption": "yours"})
+    assert r.ok and sent == [("doc", str(f), "yours")]
 
 
 def test_chunk_splits_long_text():
@@ -213,6 +458,41 @@ def test_inbound_askpass_captures_password():
     assert any("🔒" in s for s in sent)                    # prompt was shown
 
 
+# ── live progress preambles (mid-turn lines as their own messages) ──────────────
+
+def test_execute_exposes_progress_sink_for_live_preambles():
+    """The bridge sets a per-turn progress sink so the agent's intermediate lines
+    can be delivered as their own messages while the turn is still running."""
+    from namma_agent.core.interactive import get_progress_sink
+
+    out = []
+
+    def on_msg(text, sid, mode, askpass=None, model=None):
+        prog = get_progress_sink()
+        assert prog is not None
+        prog("Let me check my memory…")        # a mid-turn preamble, delivered live
+        return "Here's the final answer.", "s1"
+
+    c = ConsoleInbound(on_msg, output_fn=out.append)
+    reply = c._execute("who am I?")
+    assert "Let me check my memory…" in out     # streamed as its own message
+    assert reply == "Here's the final answer."
+    # The sink is cleared once the turn ends (no leakage between turns).
+    assert get_progress_sink() is None
+
+
+def test_strip_sent_preambles_removes_live_lines_from_final():
+    from namma_agent.service import NammaAgentService
+
+    content = "Let me check my memory.\n\nLet me dig deeper.\n\nHere is the full breakdown."
+    sent = ["Let me check my memory.", "Let me dig deeper."]
+    out = NammaAgentService._strip_sent_preambles(content, sent)
+    assert out == "Here is the full breakdown."
+
+    # If stripping would empty the message, keep the original (never send nothing).
+    assert NammaAgentService._strip_sent_preambles("just this", ["just this"]) == "just this"
+
+
 # ── shared InboundBridge logic (exercised via ConsoleInbound) ───────────────────
 
 def test_console_handles_commands_and_turns():
@@ -313,6 +593,186 @@ def test_whatsapp_verify_handshake():
     assert wb.verify("subscribe", "V", "CHAL") == "CHAL"
     assert wb.verify("subscribe", "wrong", "CHAL") is None
     assert wb.verify("", "V", "CHAL") is None
+
+
+# ── WhatsApp QR (personal-number) backend ───────────────────────────────────────
+
+def test_whatsapp_mode_defaults_to_cloud(monkeypatch):
+    monkeypatch.delenv("NAMMA_WHATSAPP_MODE", raising=False)
+    assert whatsapp_mode() == "cloud"
+    monkeypatch.setenv("NAMMA_WHATSAPP_MODE", "QR")  # case-insensitive
+    assert whatsapp_mode() == "qr"
+
+
+def test_manager_selects_whatsapp_backend_by_mode(monkeypatch):
+    monkeypatch.setenv("NAMMA_WHATSAPP_MODE", "qr")
+    assert isinstance(CommsManager().whatsapp, WhatsAppQRChannel)
+    monkeypatch.setenv("NAMMA_WHATSAPP_MODE", "cloud")
+    assert isinstance(CommsManager().whatsapp, WhatsAppChannel)
+
+
+def test_whatsapp_qr_unavailable_outside_qr_mode(monkeypatch):
+    monkeypatch.setenv("NAMMA_WHATSAPP_MODE", "cloud")
+    assert WhatsAppQRChannel(to="919876543210").available is False
+
+
+def test_whatsapp_qr_send_skipped_until_linked(monkeypatch):
+    monkeypatch.setenv("NAMMA_WHATSAPP_MODE", "qr")
+    ch = WhatsAppQRChannel(to="919876543210")
+    assert ch.send("hi") is False          # not linked yet → nothing dispatched
+    assert ch.status()["linked"] is False
+
+
+def test_whatsapp_qr_extract_text():
+    import types
+    convo = types.SimpleNamespace(conversation="hello", extendedTextMessage=None)
+    assert whatsapp_qr_mod._extract_text(types.SimpleNamespace(Message=convo)) == "hello"
+    ext = types.SimpleNamespace(conversation="",
+                                extendedTextMessage=types.SimpleNamespace(text="  world "))
+    assert whatsapp_qr_mod._extract_text(types.SimpleNamespace(Message=ext)) == "world"
+
+
+def _wa_msg(text, *, sender, chat, from_me=False, group=False, mid="m",
+           sender_alt=None, recipient_alt=None):
+    import types
+    jid = lambda u: types.SimpleNamespace(User=u) if u is not None else None  # noqa: E731
+    src = types.SimpleNamespace(IsFromMe=from_me, IsGroup=group,
+                                Sender=jid(sender), Chat=jid(chat),
+                                SenderAlt=jid(sender_alt), RecipientAlt=jid(recipient_alt),
+                                AddressingMode="lid" if (sender_alt or recipient_alt) else "pn")
+    info = types.SimpleNamespace(MessageSource=src, ID=mid)
+    body = types.SimpleNamespace(conversation=text, extendedTextMessage=None)
+    return types.SimpleNamespace(Info=info, Message=body)
+
+
+def test_whatsapp_qr_matches_lid_via_alt_field():
+    """WhatsApp LID addressing: Sender/Chat carry a privacy LID and the real phone
+    number is in the *Alt field — the configured number must still match."""
+    me = "919398542229"
+    lid = "231997020581942"
+    ch = WhatsAppQRChannel(to=me)
+    seen: list[str] = []
+    ch.set_message_handler(seen.append)
+
+    # Incoming addressed by LID, real number in SenderAlt.
+    ch._handle_incoming(_wa_msg("hi", sender=lid, chat=lid, from_me=False,
+                                sender_alt=me, mid="l1"))
+    # Message-Yourself addressed by LID, real number in RecipientAlt.
+    ch._handle_incoming(_wa_msg("self", sender=lid, chat=lid, from_me=True,
+                                recipient_alt=me, mid="l2"))
+    # A different LID with a different real number is still ignored.
+    ch._handle_incoming(_wa_msg("nope", sender="999888777", chat="999888777",
+                                from_me=False, sender_alt="911111111111", mid="l3"))
+    assert seen == ["hi", "self"]
+
+
+def test_whatsapp_qr_incoming_self_chat_and_loop_guard():
+    """Own-number config: 'Message Yourself' is accepted, but our own replies
+    (tracked by id) and strangers/groups are not."""
+    me = "919876543210"
+    ch = WhatsAppQRChannel(to=me)
+    seen: list[str] = []
+    ch.set_message_handler(seen.append)
+
+    ch._handle_incoming(_wa_msg("hi self", sender=me, chat=me, from_me=True, mid="a"))  # I type to myself
+    ch._handle_incoming(_wa_msg("stranger", sender="111", chat="111", from_me=False, mid="b"))  # not my number
+    ch._handle_incoming(_wa_msg("grp", sender=me, chat=me, group=True, mid="c"))         # group
+    ch._sent_ids.append("d")                                                             # a reply we dispatched
+    ch._handle_incoming(_wa_msg("echo of my reply", sender=me, chat=me, from_me=True, mid="d"))  # loop guard
+    assert seen == ["hi self"]
+
+
+def test_whatsapp_qr_incoming_peer_model():
+    """Peer config (to = a contact): the peer's messages come in, and our own
+    replies to that chat (same id we sent) don't loop back."""
+    peer = "15550001111"
+    ch = WhatsAppQRChannel(to=peer)
+    seen: list[str] = []
+    ch.set_message_handler(seen.append)
+
+    ch._handle_incoming(_wa_msg("hello", sender=peer, chat=peer, from_me=False, mid="p1"))  # peer → me
+    ch._sent_ids.append("p2")
+    ch._handle_incoming(_wa_msg("assistant reply", sender="919876543210", chat=peer,
+                                from_me=True, mid="p2"))  # our echoed reply
+    assert seen == ["hello"]
+
+
+class _FakeChannel:
+    def __init__(self, available, ok):
+        self._available, self._ok, self.sent = available, ok, []
+
+    @property
+    def available(self):
+        return self._available
+
+    def send(self, text):
+        self.sent.append(text)
+        return self._ok
+
+
+def test_markdown_to_whatsapp():
+    out = markdown_to_whatsapp("**bold** and _it_ and ~~gone~~\n## Heading\n- one\n- two\n"
+                               "[link](https://x.io)")
+    assert "*bold*" in out and "_it_" in out and "~gone~" in out
+    assert "*Heading*" in out and "#" not in out
+    assert "• one" in out and "• two" in out
+    assert "link (https://x.io)" in out
+
+
+def test_whatsapp_qr_recipient_reads_env_live(monkeypatch):
+    """Changing NAMMA_WHATSAPP_TO takes effect without a restart (no pinned `to`)."""
+    monkeypatch.setenv("NAMMA_WHATSAPP_TO", "919000000001")
+    ch = WhatsAppQRChannel()  # not pinned → reads env
+    assert ch.recipient == "919000000001"
+    monkeypatch.setenv("NAMMA_WHATSAPP_TO", "919000000002")
+    assert ch.recipient == "919000000002"  # updated live
+
+
+def test_manager_send_each_reports_only_dispatched():
+    tg = _FakeChannel(available=True, ok=True)
+    wa = _FakeChannel(available=True, ok=False)  # available (configured) but not ready
+    mgr = CommsManager(telegram=tg, whatsapp=wa)
+    assert mgr.send_each("hi", "all") == ["telegram"]   # wa didn't dispatch → not listed
+    assert mgr.send_each("hi", "whatsapp") == []
+    assert mgr.send("hi", "telegram") is True
+
+
+def test_send_notification_prefers_live_comms_for_whatsapp():
+    """The tool routes through the running manager (so the connected WhatsApp QR
+    channel is reachable) rather than rebuilding channels from env."""
+    from namma_agent.core import interactive
+
+    class _Live:
+        any_available = True
+        def channels(self):
+            return ["telegram", "whatsapp"]
+        def send_each(self, msg, channel):
+            return [c for c in self.channels() if channel in ("all", c)]
+
+    interactive.set_comms(_Live())
+    try:
+        r = comms_tool._send_notification({"message": "hi", "channel": "whatsapp"})
+        assert r.ok and "whatsapp" in r.content
+    finally:
+        interactive.set_comms(None)
+
+
+def test_send_notification_reports_channel_not_ready():
+    from namma_agent.core import interactive
+
+    class _Live:
+        any_available = True
+        def channels(self):
+            return ["telegram", "whatsapp"]  # whatsapp configured…
+        def send_each(self, msg, channel):
+            return []                          # …but not ready (e.g. QR not linked)
+
+    interactive.set_comms(_Live())
+    try:
+        r = comms_tool._send_notification({"message": "hi", "channel": "whatsapp"})
+        assert not r.ok and "not ready" in (r.error or "")
+    finally:
+        interactive.set_comms(None)
 
 
 # ── manager ───────────────────────────────────────────────────────────────────

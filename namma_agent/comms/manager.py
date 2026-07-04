@@ -18,7 +18,16 @@ from namma_agent.comms.signal import SignalChannel, SignalInbound
 from namma_agent.comms.slack import SlackChannel, SlackInbound, SlackSocketInbound
 from namma_agent.comms.telegram import TelegramChannel, TelegramInbound
 from namma_agent.comms.whatsapp import WhatsAppChannel, WhatsAppInbound
+from namma_agent.comms.whatsapp_qr import (
+    WhatsAppQRChannel, WhatsAppQRInbound, whatsapp_mode,
+)
 from namma_agent.core.logger import logger
+
+
+def _make_whatsapp():
+    """The WhatsApp channel for the selected backend: the QR-linked personal
+    session (``NAMMA_WHATSAPP_MODE=qr``) or the official Cloud API (default)."""
+    return WhatsAppQRChannel() if whatsapp_mode() == "qr" else WhatsAppChannel()
 
 
 class CommsManager:
@@ -30,7 +39,7 @@ class CommsManager:
         self.telegram = telegram or TelegramChannel()
         self.discord = discord or DiscordChannel()
         self.slack = slack or SlackChannel()
-        self.whatsapp = whatsapp or WhatsAppChannel()
+        self.whatsapp = whatsapp or _make_whatsapp()
         self.signal = signal or SignalChannel()
         # Started pollable inbound bridges (Telegram, Signal).
         self._inbound: list[InboundBridge] = []
@@ -84,17 +93,23 @@ class CommsManager:
         self.telegram = TelegramChannel()
         self.discord = DiscordChannel()
         self.slack = SlackChannel()
-        self.whatsapp = WhatsAppChannel()
+        self.whatsapp = _make_whatsapp()
         self.signal = SignalChannel()
+
+    def send_each(self, text: str, channel: str = "all") -> list[str]:
+        """Send to one named channel or 'all'; return the names that actually
+        dispatched. A configured-but-not-ready channel (e.g. WhatsApp QR before it's
+        linked) is skipped — its ``send`` returns False — so it won't be listed."""
+        channel = (channel or "all").lower()
+        out: list[str] = []
+        for name, ch in self._channels().items():
+            if channel in ("all", name) and ch.available and ch.send(text):
+                out.append(name)
+        return out
 
     def send(self, text: str, channel: str = "all") -> bool:
         """Send to one named channel or 'all'. True if any channel dispatched."""
-        channel = (channel or "all").lower()
-        sent = False
-        for name, ch in self._channels().items():
-            if channel in ("all", name) and ch.available:
-                sent = ch.send(text) or sent
-        return sent
+        return bool(self.send_each(text, channel))
 
     def start_inbound(self, on_message: Callable[..., tuple],
                       name: Optional[str] = None,
@@ -120,13 +135,18 @@ class CommsManager:
         slack_socket = SlackSocketInbound(self.slack, on_message, get_models=get_models)
         if slack_socket.available:
             self._inbound.append(slack_socket)
+        # WhatsApp QR: a dial-out multi-device session (no public URL), so it polls
+        # like Telegram/Signal rather than waiting on a webhook.
+        if isinstance(self.whatsapp, WhatsAppQRChannel) and self.whatsapp.available:
+            self._inbound.append(WhatsAppQRInbound(self.whatsapp, on_message, get_models=get_models))
         for bridge in self._inbound:
             bridge.start()
 
         # Webhook-driven bridges are fed by the FastAPI server (no thread here).
         if not slack_socket.available and self.slack.available:
             self._webhooks["slack"] = SlackInbound(self.slack, on_message, get_models=get_models)
-        if self.whatsapp.available:
+        # Cloud-API WhatsApp is webhook-driven; the QR backend (handled above) isn't.
+        if not isinstance(self.whatsapp, WhatsAppQRChannel) and self.whatsapp.available:
             self._webhooks["whatsapp"] = WhatsAppInbound(self.whatsapp, on_message, get_models=get_models)
 
         # Greet on the interactive (pollable/socket) channels only — webhook bridges

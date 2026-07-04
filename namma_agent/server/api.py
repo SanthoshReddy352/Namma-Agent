@@ -348,6 +348,39 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
             _dispatch_inbound("whatsapp", text)
         return {"ok": True}
 
+    @app.get("/api/whatsapp/qr")
+    def whatsapp_qr():
+        """Link status for the QR (personal-number) WhatsApp backend. The Settings
+        UI polls this: while unlinked it returns a QR data URI to scan; once the
+        phone links the session, ``linked`` flips true and ``qr`` clears."""
+        from namma_agent.comms.whatsapp_qr import (
+            WhatsAppQRChannel, _neonize_installed, whatsapp_mode,
+        )
+
+        if whatsapp_mode() != "qr":
+            # Backend not applied on the server yet (the setting needs Save + a
+            # gateway (re)start). Report neonize separately so the UI guides right.
+            return {"mode": "cloud", "available": False, "neonize": _neonize_installed(),
+                    "linked": False, "qr": None}
+        ch = service.comms.whatsapp if service.comms else None
+        if isinstance(ch, WhatsAppQRChannel):
+            return ch.status()
+        # QR mode selected but the gateway isn't running yet (channel not built).
+        return WhatsAppQRChannel().status()
+
+    @app.post("/api/whatsapp/qr/relink")
+    def whatsapp_relink():
+        """Reconnect: log the current WhatsApp session out and re-establish so a
+        fresh QR is issued (to link a different phone or recover a dropped link)."""
+        from namma_agent.comms.whatsapp_qr import WhatsAppQRChannel, whatsapp_mode
+
+        if whatsapp_mode() != "qr":
+            return {"ok": False, "error": "WhatsApp backend is not set to QR mode."}
+        ch = service.comms.whatsapp if service.comms else None
+        if not isinstance(ch, WhatsAppQRChannel):
+            return {"ok": False, "error": "Start the messaging gateway first, then reconnect."}
+        return {"ok": ch.relink()}
+
     @app.post("/webhooks/slack")
     async def slack_webhook(request: Request):
         from namma_agent.comms.slack import extract_texts, verify_signature
@@ -684,6 +717,11 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/projects/{project_id}/memory")
     def add_project_memory(project_id: str, body: ScopeMemoryBody):
         eid = service.db.add_scope_memory("project", project_id, body.content)
+        # The scope row is prompt context for this project's chats; the FACT also
+        # goes into Cognee so it's part of the knowledge graph everywhere.
+        if (body.content or "").strip():
+            name = (service.db.get_project(project_id) or {}).get("name", project_id)
+            service.cognee_ingestor.ingest_text(f"Project \"{name}\": {body.content.strip()}")
         return {"id": eid, "memory": service.db.list_scope_memory("project", project_id)}
 
     @app.delete("/api/scope_memory/{entry_id}")
@@ -892,8 +930,8 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
                     "NAMMA_DISCORD_WEBHOOK_URL", "NAMMA_DISCORD_BOT_TOKEN",
                     "NAMMA_DISCORD_CHANNEL_ID", "NAMMA_SLACK_WEBHOOK_URL",
                     "NAMMA_SLACK_APP_TOKEN", "NAMMA_SLACK_BOT_TOKEN",
-                    "NAMMA_WHATSAPP_TOKEN", "NAMMA_WHATSAPP_PHONE_ID", "NAMMA_WHATSAPP_TO",
-                    "NAMMA_WHATSAPP_VERIFY_TOKEN", "NAMMA_SIGNAL_API_URL",
+                    "NAMMA_WHATSAPP_MODE", "NAMMA_WHATSAPP_TOKEN", "NAMMA_WHATSAPP_PHONE_ID",
+                    "NAMMA_WHATSAPP_TO", "NAMMA_WHATSAPP_VERIFY_TOKEN", "NAMMA_SIGNAL_API_URL",
                     "NAMMA_SIGNAL_NUMBER", "NAMMA_SIGNAL_RECIPIENT", "NAMMA_SLACK_SIGNING_SECRET"]
         return {
             "config": load_config(),
@@ -1021,6 +1059,13 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """One-click: register + connect the cognee MCP server for the chosen track
         (local self-hosted, or Cognee Cloud via --serve-url + key)."""
         return service.register_cognee_server(body.mode, body.serve_url, body.api_key)
+
+    @app.post("/api/cognee/reconnect")
+    def cognee_reconnect():
+        """Restart JUST the cognee MCP server (targeted — other MCP servers keep
+        running). Used by the Cognee tab's Reconnect button."""
+        ok = service._reconnect_cognee()
+        return {"ok": ok, **service.cognee_settings()}
 
     @app.get("/api/comms/status")
     def comms_status():

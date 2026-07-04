@@ -13,12 +13,15 @@ password scrubbing, and voice/document handling.
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
 import re
 import threading
 import time
 import urllib.request
+import uuid
 from html import escape as _html_escape
+from pathlib import Path
 from typing import Callable, Optional
 
 from namma_agent.comms.inbound import InboundBridge
@@ -27,15 +30,291 @@ from namma_agent.core.logger import logger
 _MAX_CHARS = 3800  # safe margin under Telegram's 4096 limit
 _API = "https://api.telegram.org/bot{token}/{method}"
 
+# Local media mount: the agent's render tools write files under data/media/ and
+# reference them as /api/media/<rel> (served read-only by the web app). Telegram
+# can't fetch that relative path, so the reply path resolves it to the on-disk
+# file and uploads it as a real photo/document instead of a dead link.
+_MEDIA_ROOT = Path("data/media")
+_PHOTO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
+# Markdown image the render tools emit: ![alt](/api/media/diagrams/x.png)
+_MEDIA_IMG_RE = re.compile(r"!\[([^\]]*)\]\((/api/media/[^)\s]+)\)")
+
+
+def _split_media(text: str) -> list[tuple]:
+    """Split a reply into an ordered list of ``("text", str)`` runs and
+    ``("media", (url, alt))`` events, so the reply path can interleave text
+    messages with real photo/document uploads in place."""
+    parts: list[tuple] = []
+    pos = 0
+    for m in _MEDIA_IMG_RE.finditer(text):
+        if m.start() > pos:
+            parts.append(("text", text[pos:m.start()]))
+        parts.append(("media", (m.group(2), m.group(1))))
+        pos = m.end()
+    if pos < len(text):
+        parts.append(("text", text[pos:]))
+    return parts
+
+
+def _strip_media_residue(text: str) -> str:
+    """Drop the orphan caption/download lines that referenced media we're now
+    uploading as a file (e.g. ``*Title* · [⬇ Download diagram](/api/media/…)``),
+    so the dead link isn't also sent as text."""
+    kept = [ln for ln in text.split("\n") if "/api/media/" not in ln]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(kept)).strip()
+
+# ── markdown → Telegram HTML ─────────────────────────────────────────────────
+# Telegram's HTML parse mode accepts only a small tag set (<b> <i> <u> <s>
+# <code> <pre> <a> <blockquote>) and none of its own markdown. We reuse
+# hermes-agent's formatting strategy: pull code spans / links out behind
+# placeholders so their contents are never mangled, rewrite the remaining
+# markdown (tables, headers, bold/italic/strike, bullets, blockquotes),
+# HTML-escape the plain prose, then restore the placeholders. A plain-text
+# fallback (`_telegram_plain`) keeps a formatting edge case from ever dropping a
+# message: if Telegram rejects the HTML, the same text is resent unformatted.
+
+# A GFM table delimiter row (|---|:--:|…); needs ≥1 internal '|' so a lone '---'
+# horizontal rule is not mistaken for a table.
+_TABLE_SEP_RE = re.compile(r"^\s*\|?\s*:?-{2,}:?\s*(?:\|\s*:?-{2,}:?\s*){1,}\|?\s*$")
+_FENCE_RE = re.compile(r"```[^\n]*\n?([\s\S]*?)```")
+_INLINE_CODE_RE = re.compile(r"`([^`\n]+?)`")
+# A markdown link or image; an empty alt ([](url)) falls back to the url as text.
+_LINK_RE = re.compile(r"!?\[([^\]]*)\]\(([^()\s]+)\)")
+# Headers: leading #'s, space OPTIONAL (models often drop it → "##Heading"), any
+# trailing #'s trimmed. Requires a non-space first char so a bare "# " is skipped.
+_HEADER_RE = re.compile(r"^[ \t]*#{1,6}[ \t]*(\S.*?)[ \t]*#*$", re.MULTILINE)
+# A horizontal rule: 3+ of -, * or _ (optionally space-separated) on their own line.
+_HR_RE = re.compile(r"^[ \t]*([-*_])(?:[ \t]*\1){2,}[ \t]*$", re.MULTILINE)
+_BOLD_RE = re.compile(r"\*\*(.+?)\*\*", re.DOTALL)
+_BOLD_US_RE = re.compile(r"(?<!\w)__(?!\s)(.+?)(?<!\s)__(?!\w)", re.DOTALL)
+_STRIKE_RE = re.compile(r"~~(.+?)~~", re.DOTALL)
+_ITALIC_STAR_RE = re.compile(r"(?<![\*\w])\*(?!\s)([^\*\n]+?)(?<!\s)\*(?!\w)")
+_ITALIC_US_RE = re.compile(r"(?<!\w)_(?!\s)([^_\n]+?)(?<!\s)_(?!\w)")
+_BULLET_RE = re.compile(r"^([ \t]*)[-*+•][ \t]+(?=\S)", re.MULTILINE)
+_QUOTE_RE = re.compile(r"(?:^[ \t]*>[ \t]?.*(?:\n|$))+", re.MULTILINE)
+# Inline emphasis markers, used to clean table cells down to plain text.
+_CELL_MD_RES = (
+    re.compile(r"\*\*(.+?)\*\*"), re.compile(r"(?<!\w)__(.+?)__(?!\w)"),
+    re.compile(r"~~(.+?)~~"), re.compile(r"\*(.+?)\*"),
+    re.compile(r"(?<!\w)_(.+?)_(?!\w)"), re.compile(r"`(.+?)`"),
+)
+_BLANKS_RE = re.compile(r"\n{3,}")
+
+
+def _split_table_row(line: str) -> list[str]:
+    """Split a GFM table row into cells, honoring escaped pipes (``\\|``)."""
+    s = line.strip().replace("\\|", "\x00PIPE\x00")
+    if s.startswith("|"):
+        s = s[1:]
+    if s.endswith("|"):
+        s = s[:-1]
+    return [c.strip().replace("\x00PIPE\x00", "|") for c in s.split("|")]
+
+
+def _clean_cell(cell: str) -> str:
+    """Reduce a table cell to plain text: strip inline markdown emphasis/code so it
+    never leaks into the rendered table, and collapse internal whitespace."""
+    s = cell
+    for rx in _CELL_MD_RES:
+        s = rx.sub(r"\1", s)
+    s = s.replace("**", "").replace("`", "")
+    return " ".join(s.split())
+
+
+def _detect_table(lines: list[str], start: int):
+    """If a markdown table begins at ``lines[start]``, return ``(rows, consumed)``
+    where ``rows`` is a list of cell-lists (header first); else ``(None, 0)``.
+
+    Handles both GFM tables (header + ``|---|`` delimiter) and the separator-less
+    pipe tables some models emit (header + ≥2 rows with matching column counts)."""
+    header = lines[start]
+    if "|" not in header:
+        return None, 0
+    hcells = _split_table_row(header)
+    if len(hcells) < 2:
+        return None, 0
+    # GFM: a delimiter row sits directly under the header.
+    if start + 1 < len(lines) and _TABLE_SEP_RE.match(lines[start + 1]):
+        rows = [hcells]
+        j = start + 2
+        while (j < len(lines) and lines[j].strip() and "|" in lines[j]
+               and not _TABLE_SEP_RE.match(lines[j])):
+            rows.append(_split_table_row(lines[j]))
+            j += 1
+        return rows, j - start
+    # Separator-less: only treat as a table with ≥2 consistent pipe rows below.
+    body = []
+    j = start + 1
+    while (j < len(lines) and lines[j].strip() and "|" in lines[j]
+           and not _TABLE_SEP_RE.match(lines[j])):
+        rc = _split_table_row(lines[j])
+        if len(rc) != len(hcells):
+            break
+        body.append(rc)
+        j += 1
+    if len(body) >= 2:
+        return [hcells, *body], j - start
+    return None, 0
+
+
+def _table_layout(rows: list[list[str]]):
+    """Normalize a detected table → ``(headers, data, widths)`` of cleaned cells."""
+    headers = [_clean_cell(c) for c in rows[0]]
+    ncol = len(headers)
+    data = []
+    for r in rows[1:]:
+        cells = [_clean_cell(c) for c in r]
+        data.append((cells + [""] * ncol)[:ncol])
+    widths = [max([len(headers[c]), *(len(d[c]) for d in data)] or [0])
+              for c in range(ncol)] if data else [len(h) for h in headers]
+    return headers, data, widths
+
+
+def _render_table_html(rows: list[list[str]]) -> str:
+    """Render a table as Telegram HTML. Narrow tables become an aligned monospace
+    ``<pre>`` grid (an actual table); wide ones fall back to per-row key/value bullet
+    groups so long cells don't force endless horizontal scrolling on mobile."""
+    headers, data, widths = _table_layout(rows)
+    ncol = len(headers)
+    if not data:
+        joined = " · ".join(h for h in headers if h)
+        return f"<b>{_html_escape(joined)}</b>" if joined else ""
+    total = sum(widths) + 2 * (ncol - 1)
+    if ncol <= 4 and max(widths) <= 18 and total <= 44:  # narrow → real grid
+        def line(cells):
+            return "  ".join(cells[c].ljust(widths[c]) for c in range(ncol)).rstrip()
+        grid = [line(headers), "  ".join("-" * widths[c] for c in range(ncol)),
+                *(line(d) for d in data)]
+        return f"<pre>{_html_escape(chr(10).join(grid))}</pre>"
+    groups = []  # wide → bullet groups, first cell as the row heading
+    for d in data:
+        heading = d[0] or next((c for c in d if c), "")
+        bullets = [f"• {_html_escape(h)}: {_html_escape(v)}"
+                   for h, v in list(zip(headers, d))[1:] if (h or v)]
+        head = f"<b>{_html_escape(heading)}</b>" if heading else ""
+        groups.append("\n".join(x for x in [head, *bullets] if x))
+    return "\n\n".join(g for g in groups if g)
+
+
+def _render_table_plain(rows: list[list[str]]) -> str:
+    """Plain-text table render (no HTML) for the fallback path: always key/value
+    bullet groups so nothing tabular leaks as raw pipes."""
+    headers, data, _ = _table_layout(rows)
+    if not data:
+        return " · ".join(h for h in headers if h)
+    groups = []
+    for d in data:
+        heading = d[0] or next((c for c in d if c), "")
+        bullets = [f"• {h}: {v}" for h, v in list(zip(headers, d))[1:] if (h or v)]
+        groups.append("\n".join(x for x in [heading, *bullets] if x))
+    return "\n\n".join(g for g in groups if g)
+
+
+def _replace_tables(text: str, render) -> str:
+    """Walk ``text`` line by line (skipping fenced code) and replace each detected
+    table with ``render(rows)``. Shared by the HTML and plain paths."""
+    if "|" not in text:
+        return text
+    lines = text.split("\n")
+    out: list[str] = []
+    in_fence = False
+    i = 0
+    while i < len(lines):
+        if lines[i].lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(lines[i])
+            i += 1
+            continue
+        if not in_fence:
+            rows, consumed = _detect_table(lines, i)
+            if rows:
+                out.append(render(rows))
+                i += consumed
+                continue
+        out.append(lines[i])
+        i += 1
+    return "\n".join(out)
+
+
+def _strip_residual_markers(text: str) -> str:
+    """Final sweep: drop stray emphasis markers that never formed a valid pair
+    (unbalanced ``**`` / ``~~``) so they can't leak as literal symbols. Runs on the
+    escaped text, before protected code/link spans are restored, so it never touches
+    real code (e.g. Python ``**kwargs`` lives safely inside a <code> placeholder)."""
+    return text.replace("**", "").replace("~~", "")
+
+
+def _render_blockquote(m: "re.Match") -> str:
+    inner = "\n".join(re.sub(r"^[ \t]*>[ \t]?", "", ln)
+                      for ln in m.group(0).rstrip("\n").split("\n"))
+    return f"\x00BQ\x00{inner}\x00/BQ\x00"  # marker resolved after escaping
+
 
 def _markdown_to_telegram_html(text: str) -> str:
-    """Telegram HTML accepts a small tag set; escape then re-introduce **bold**,
-    *italic*, `code` so the chat doesn't leak literal asterisks."""
-    out = _html_escape(text)
-    out = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", out, flags=re.DOTALL)
-    out = re.sub(r"(?<![\*\w])\*([^\*\n]+?)\*(?!\w)", r"<i>\1</i>", out)
-    out = re.sub(r"`([^`]+?)`", r"<code>\1</code>", out)
-    return out
+    """Convert standard markdown to Telegram HTML: headers/tables → bold groups,
+    `code`/```fences``` → <code>/<pre>, [links](…) → <a>, **/__ → <b>, */_ → <i>,
+    ~~ → <s>, '- ' → '• ', '> ' → <blockquote>. Everything else is HTML-escaped."""
+    if not text:
+        return text
+    placeholders: dict[str, str] = {}
+
+    def ph(value: str) -> str:
+        key = f"\x00P{len(placeholders)}\x00"
+        placeholders[key] = value
+        return key
+
+    # Protect spans whose contents must survive verbatim, innermost meaning first.
+    text = _FENCE_RE.sub(lambda m: ph(f"<pre>{_html_escape(m.group(1))}</pre>"), text)
+    text = _INLINE_CODE_RE.sub(lambda m: ph(f"<code>{_html_escape(m.group(1))}</code>"), text)
+    text = _LINK_RE.sub(
+        lambda m: ph(f'<a href="{_html_escape(m.group(2), quote=True)}">'
+                     f"{_html_escape(m.group(1) or m.group(2))}</a>"),
+        text,
+    )
+    # Tables → pre-rendered HTML, protected so the escape/inline passes skip them.
+    text = _replace_tables(text, lambda rows: ph(_render_table_html(rows)))
+    # Blockquotes: collapse a run of '> ' lines into one marker (resolved below).
+    text = _QUOTE_RE.sub(_render_blockquote, text)
+
+    # Escape the remaining plain prose; placeholders/markers carry no special chars.
+    text = _html_escape(text)
+
+    # Rewrite the markdown constructs that survived escaping.
+    text = _HR_RE.sub("────────", text)
+    text = _HEADER_RE.sub(lambda m: f"<b>{m.group(1).replace('**', '')}</b>", text)
+    text = _BULLET_RE.sub(r"\1• ", text)
+    text = _BOLD_RE.sub(r"<b>\1</b>", text)
+    text = _BOLD_US_RE.sub(r"<b>\1</b>", text)
+    text = _STRIKE_RE.sub(r"<s>\1</s>", text)
+    text = _ITALIC_STAR_RE.sub(r"<i>\1</i>", text)
+    text = _ITALIC_US_RE.sub(r"<i>\1</i>", text)
+    text = _strip_residual_markers(text)
+    text = text.replace("\x00BQ\x00", "<blockquote>").replace("\x00/BQ\x00", "</blockquote>")
+
+    # Restore protected spans (reverse insertion order resolves nested refs).
+    for key in reversed(list(placeholders.keys())):
+        text = text.replace(key, placeholders[key])
+    return _BLANKS_RE.sub("\n\n", text).strip()
+
+
+def _telegram_plain(text: str) -> str:
+    """Plain-text fallback (all markdown markers removed) for when Telegram rejects
+    the HTML message — so a formatting edge case degrades to a clean, readable
+    message instead of one littered with stray ``*``, ``#`` and ``|`` symbols."""
+    t = _FENCE_RE.sub(lambda m: m.group(1), text)
+    t = _INLINE_CODE_RE.sub(r"\1", t)
+    t = _LINK_RE.sub(lambda m: m.group(1) or m.group(2), t)
+    t = _replace_tables(t, _render_table_plain)
+    t = _HR_RE.sub("────────", t)
+    t = _HEADER_RE.sub(r"\1", t)
+    t = _BULLET_RE.sub(r"\1• ", t)
+    t = _BOLD_RE.sub(r"\1", t)
+    t = _BOLD_US_RE.sub(r"\1", t)
+    t = _STRIKE_RE.sub(r"\1", t)
+    t = _ITALIC_STAR_RE.sub(r"\1", t)
+    t = _ITALIC_US_RE.sub(r"\1", t)
+    t = _strip_residual_markers(t)
+    return _BLANKS_RE.sub("\n\n", t).strip()
 
 
 def _chunk(text: str, limit: int = _MAX_CHARS) -> list[str]:
@@ -93,20 +372,132 @@ class TelegramChannel:
 
     def _send_sync(self, text: str, reply_to: Optional[int] = None) -> None:
         for chunk in _chunk(text):
-            try:
-                body = {
-                    "chat_id": self._chat_id,
-                    "text": _markdown_to_telegram_html(chunk),
-                    "parse_mode": "HTML",
-                }
-                if reply_to:
-                    body["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
-                result = self._post("sendMessage", body)
-                if not result.get("ok"):
-                    logger.warning("[telegram] send failed: %s", result.get("description"))
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[telegram] send error: %s", exc)
+            self._deliver(chunk, reply_to)
             reply_to = None  # only the first chunk quotes the user's message
+
+    def _deliver(self, chunk: str, reply_to: Optional[int] = None) -> None:
+        """Send one chunk as Telegram HTML; on a parse/format rejection, resend it
+        as plain text so a markdown edge case never drops the message."""
+        base: dict = {"chat_id": self._chat_id}
+        if reply_to:
+            base["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
+        try:
+            result = self._post("sendMessage",
+                                {**base, "text": _markdown_to_telegram_html(chunk),
+                                 "parse_mode": "HTML"})
+            if result.get("ok"):
+                return
+            logger.warning("[telegram] send failed (%s); retrying as plain text",
+                           result.get("description"))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[telegram] send error (%s); retrying as plain text", exc)
+        try:
+            self._post("sendMessage", {**base, "text": _telegram_plain(chunk)})
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[telegram] plain send error: %s", exc)
+
+    # -- outbound media (photos / documents) -------------------------------
+
+    def send_photo(self, src, caption: str = "", reply_to: Optional[int] = None) -> bool:
+        """Upload an image so it previews inline in the chat. Falls back to a
+        document when the image is over Telegram's 10 MB sendPhoto limit. ``src`` is
+        a filesystem path or an ``/api/media/…`` url. Returns True on success."""
+        if not self.available:
+            return False
+        path = self._resolve_media(src)
+        if not path or not path.exists():
+            logger.warning("[telegram] photo not found: %s", src)
+            return False
+        if path.stat().st_size > 10 * 1024 * 1024:
+            return self._deliver_file("sendDocument", "document", path, caption, reply_to)
+        return self._deliver_file("sendPhoto", "photo", path, caption, reply_to)
+
+    def send_document(self, src, caption: str = "", reply_to: Optional[int] = None) -> bool:
+        """Upload any file as a downloadable document (no recompression). ``src`` is a
+        filesystem path or an ``/api/media/…`` url. Returns True on success."""
+        if not self.available:
+            return False
+        path = self._resolve_media(src)
+        if not path or not path.exists():
+            logger.warning("[telegram] file not found: %s", src)
+            return False
+        if path.stat().st_size > 50 * 1024 * 1024:
+            logger.warning("[telegram] file over Telegram's 50 MB limit: %s", path)
+            return False
+        return self._deliver_file("sendDocument", "document", path, caption, reply_to)
+
+    def send_media(self, src, caption: str = "", reply_to: Optional[int] = None) -> bool:
+        """Auto-pick: images go as inline photos, everything else as documents.
+        Used to surface the agent's rendered diagrams/images in replies."""
+        path = self._resolve_media(src)
+        if not path or not path.exists():
+            return False
+        if path.suffix.lower() in _PHOTO_EXTS:
+            return self.send_photo(path, caption, reply_to)
+        return self.send_document(path, caption, reply_to)
+
+    @staticmethod
+    def _resolve_media(src) -> Optional[Path]:
+        """Map an ``/api/media/<rel>`` url (the local media mount) to its file under
+        ``data/media``; treat anything else as a filesystem path (~ expanded)."""
+        if not src:
+            return None
+        s = str(src)
+        if s.startswith("/api/media/"):
+            rel = s[len("/api/media/"):].split("?", 1)[0].split("#", 1)[0]
+            return _MEDIA_ROOT / rel
+        return Path(s).expanduser()
+
+    def _deliver_file(self, method: str, field: str, path: Path,
+                      caption: str = "", reply_to: Optional[int] = None,
+                      timeout: int = 120) -> bool:
+        try:
+            data = path.read_bytes()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[telegram] could not read %s: %s", path, exc)
+            return False
+        fields: dict = {"chat_id": self._chat_id}
+        if (caption or "").strip():
+            fields["caption"] = caption.strip()[:1024]  # Telegram caption cap
+        if reply_to:
+            fields["reply_parameters"] = json.dumps(
+                {"message_id": reply_to, "allow_sending_without_reply": True})
+        mime = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        files = {field: (path.name, data, mime)}
+        try:
+            result = self._post_multipart(method, fields, files, timeout=timeout)
+            if result.get("ok"):
+                return True
+            logger.warning("[telegram] %s failed: %s", method, result.get("description"))
+            return False
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("[telegram] %s error: %s", method, exc)
+            return False
+
+    def _post_multipart(self, method: str, fields: dict, files: dict,
+                        timeout: int = 120) -> dict:
+        """POST multipart/form-data with stdlib only (Telegram media uploads)."""
+        boundary = "----NammaAgent" + uuid.uuid4().hex
+        bnd = boundary.encode()
+        crlf = b"\r\n"
+        body = bytearray()
+        for k, v in fields.items():
+            body += b"--" + bnd + crlf
+            body += f'Content-Disposition: form-data; name="{k}"'.encode() + crlf + crlf
+            body += str(v).encode() + crlf
+        for name, (filename, content, mime) in files.items():
+            body += b"--" + bnd + crlf
+            body += (f'Content-Disposition: form-data; name="{name}"; '
+                     f'filename="{filename}"').encode() + crlf
+            body += f"Content-Type: {mime}".encode() + crlf + crlf
+            body += content + crlf
+        body += b"--" + bnd + b"--" + crlf
+        req = urllib.request.Request(
+            _API.format(token=self._token, method=method), data=bytes(body),
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+            return json.load(resp)
 
 
 _HELP = (
@@ -213,18 +604,35 @@ class TelegramInbound(InboundBridge):
             logger.debug("[telegram] setMyCommands failed: %s", exc)
 
     def _send_reply(self, text: str, reply_to: Optional[int]) -> None:
-        """Send the answer synchronously as a reply to the user's message (chunk-aware;
-        only the first chunk quotes it)."""
-        for i, chunk in enumerate(_chunk(text)):
-            try:
-                body = {"chat_id": self._channel._chat_id,
-                        "text": _markdown_to_telegram_html(chunk), "parse_mode": "HTML"}
-                if i == 0 and reply_to:
-                    body["reply_parameters"] = {"message_id": reply_to,
-                                                "allow_sending_without_reply": True}
-                self._channel._post("sendMessage", body)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("[telegram] reply send failed: %s", exc)
+        """Send the answer synchronously as a reply to the user's message. Rendered
+        diagrams/images (``![…](/api/media/…)``) are uploaded as real photos in place;
+        the surrounding prose goes as chunked text. Only the first message quotes the
+        user's message."""
+        if not (text or "").strip():
+            return
+        first = True
+        for kind, val in _split_media(text):
+            if kind == "text":
+                cleaned = _strip_media_residue(val)
+                if not cleaned:
+                    continue
+                for chunk in _chunk(cleaned):
+                    self._channel._deliver(chunk, reply_to if first else None)
+                    first = False
+            else:
+                url, alt = val
+                caption = (alt or "").strip()
+                if self._channel.send_media(url, caption=caption,
+                                            reply_to=reply_to if first else None):
+                    first = False
+                elif caption:  # upload failed (file gone) — keep the label, drop the link
+                    self._channel._deliver(caption, reply_to if first else None)
+                    first = False
+
+    def _progress_send(self, text: str) -> None:
+        """Deliver one intermediate progress line ('Let me check…') as its own message,
+        synchronously so the live updates stay in order ahead of the final reply."""
+        self._channel._send_sync(text)
 
     # -- poll loop ---------------------------------------------------------
 

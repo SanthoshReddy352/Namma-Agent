@@ -65,16 +65,13 @@ class NammaAgentService:
         # tools.disabled) are excluded from every turn and refused if called.
         disabled_tools = (self.config.get("tools") or {}).get("disabled") or []
         self.registry = registry or ToolRegistry(disabled=disabled_tools)
-        self.memory_notes = self._build_memory_notes(self.config)
-        # Deterministic post-turn fact capture (the model rarely calls
-        # remember_fact itself). On by default; memory.auto_capture: false disables.
-        from namma_agent.core.memory_extract import MemoryExtractor
-        self.memory_extractor = MemoryExtractor(
-            self.db,
-            enabled=bool((self.config.get("memory") or {}).get("auto_capture", True)),
-        )
+        # Cognee is THE memory. The old SQLite facts layer, the USER.md/MEMORY.md
+        # notes and the post-turn fact extractor are gone — remembering/recalling
+        # goes through the cognee MCP server (lazily, via the ingestor getter,
+        # since the ingestor is built after the tools are registered).
         with self.registry.categorize("memory"):
-            register_memory_tools(self.registry, self.db, notes=self.memory_notes)
+            register_memory_tools(self.registry, self.db,
+                                  get_cognee_ingestor=lambda: getattr(self, "cognee_ingestor", None))
         with self.registry.categorize("memory"):
             register_project_tools(self.registry, self.db)
         with self.registry.categorize("learning"):
@@ -133,7 +130,9 @@ class NammaAgentService:
         cog_cfg = self.config.get("cognee") or {}
         self.cognee_ingestor = CogneeIngestor(
             client_getter=self._cognee_client,
-            enabled=bool(cog_cfg.get("auto_ingest", False)),
+            # Cognee is the ONLY memory now, so growing the graph from chat and
+            # guaranteeing recall both default ON (turn off in Settings → Cognee).
+            enabled=bool(cog_cfg.get("auto_ingest", True)),
             include_reply=bool(cog_cfg.get("ingest_replies", False)),
             learning_enabled=bool(cog_cfg.get("ingest_learning", True)),
         )
@@ -143,12 +142,14 @@ class NammaAgentService:
             tool_loop_limit=int(conv.get("tool_loop_limit", 0)),
             max_history_turns=conv.get("max_history_turns", 12),
             skills=self.skills,
-            memory_notes=self.memory_notes,
-            nudge_every=int(conv.get("memory_nudge_every", 6)),
-            memory_extractor=self.memory_extractor,
             cognee_ingestor=self.cognee_ingestor,
-            cognee_recall_context=bool(cog_cfg.get("recall_context", False)),
+            cognee_recall_context=bool(cog_cfg.get("recall_context", True)),
         )
+
+        # One-time: flow any legacy SQLite facts (e.g. what the installer wizard
+        # collected before Cognee was running) into the knowledge graph, then drop
+        # them. The `name` identity fact stays — it's the onboarding-done flag.
+        self._migrate_facts_to_cognee()
 
         # Wave 4: delegate_task + persona tools need the live agent/provider/db.
         # Skipped when a registry is injected (tests provide their own minimal set).
@@ -161,6 +162,10 @@ class NammaAgentService:
         # thread, so it is OPT-IN (config comms.inbound_enabled, default off) per
         # the "no hidden background processes" preference.
         self.comms = self._build_comms() if registry is None else None
+        # Expose the live manager to stateless tools (send_notification) so they
+        # reach the running channels — incl. the connected WhatsApp QR session.
+        from namma_agent.core.interactive import set_comms
+        set_comms(self.comms)
         comms_cfg = self.config.get("comms") or {}
         # Inbound defaults ON when a bot token is configured (so Telegram actually
         # replies); set comms.inbound_enabled false to disable the polling thread.
@@ -191,20 +196,6 @@ class NammaAgentService:
                 self.db, self.comms.send,
                 after_days=float(learn_cfg.get("nudge_after_days", 3)))
             self.learning_nudger.start()
-
-    # -- memory notes ------------------------------------------------------
-
-    @staticmethod
-    def _build_memory_notes(config: dict):
-        try:
-            from namma_agent.core.memory_notes import MemoryNotes
-
-            directory = (config.get("memory") or {}).get("notes_dir", "data/memory")
-            return MemoryNotes(directory)
-        except Exception as exc:  # noqa: BLE001
-            from namma_agent.core.logger import logger
-            logger.warning("[service] memory notes setup failed: %s", exc)
-            return None
 
     # -- skills ------------------------------------------------------------
 
@@ -317,24 +308,41 @@ class NammaAgentService:
 
     def set_mcp_server_enabled(self, name: str, enabled: bool) -> dict:
         """Enable/disable a whole MCP server: flip its ``enabled`` flag in
-        ``config.local.yaml`` and reconnect. A disabled server isn't launched at
-        all (its container/process never starts), unlike per-tool toggles which
-        only hide individual tools of a still-running server."""
+        ``config.local.yaml`` and apply it by starting/stopping ONLY that server.
+        A disabled server isn't launched at all (its container/process never
+        starts), unlike per-tool toggles which only hide individual tools of a
+        still-running server. Targeted on purpose: toggling one server must not
+        restart the others (a github flip used to restart the cognee Docker
+        container — ~30s of the whole tab looking frozen)."""
         from namma_agent.config import update_config
 
         with self._mcp_lock:
             mcp = dict(self.config.get("mcp") or {})
             servers = [dict(s) for s in (mcp.get("servers") or []) if isinstance(s, dict)]
-            found = False
+            target = None
             for s in servers:
                 if (s.get("name") or "") == name:
                     s["enabled"] = bool(enabled)
-                    found = True
-            if not found:
+                    target = s
+            if target is None:
                 return {"ok": False, "error": f"no MCP server named {name!r} in config"}
             self.config = update_config({"mcp": {"servers": servers}})
-            detail = self.reload_mcp()
-            return {"ok": True, "name": name, "enabled": bool(enabled), **detail}
+            self._apply_one_mcp_server(target, bool(enabled))
+            return {"ok": True, "name": name, "enabled": bool(enabled), **self.mcp_detail()}
+
+    def _apply_one_mcp_server(self, cfg: dict, enabled: bool) -> bool:
+        """Start/stop a single MCP server against the live manager (no full
+        reload). Callers hold ``_mcp_lock``. Returns True when the server is
+        connected afterwards (always True for a disable)."""
+        if self.mcp is None:
+            from namma_agent.mcp import MCPManager
+            self.mcp = MCPManager([])
+        name = cfg.get("name") or "unnamed"
+        with self.registry.categorize("mcp"):
+            self.mcp.disconnect_server(name, self.registry)
+            if not enabled:
+                return True
+            return self.mcp.connect_server(cfg, self.registry) > 0 or name in self.mcp.clients
 
     # -- Cognee memory (the Memory tab proxies these to the cognee MCP server) ----
 
@@ -440,8 +448,11 @@ class NammaAgentService:
                     hits.append({"kind": t.get("role", "turn"), "text": txt[:200]})
         except Exception as exc:  # noqa: BLE001
             return {"ok": False, "error": f"Keyword search failed: {exc}"}
-        # 2) Cognee semantic recall.
-        cog = self.cognee_tool("recall", {"query": query}, timeout=120)
+        # 2) Cognee semantic recall. Generous timeout on purpose: if a burst trips
+        # Groq's per-minute token limit, litellm retry-backoff (~128s) must be allowed
+        # to finish — otherwise the MCP client's watchdog kills the (--rm) container and
+        # every later recall fails. Better a slow recall than a dead memory backend.
+        cog = self.cognee_tool("recall", {"query": query}, timeout=240)
         return {"ok": True, "query": query,
                 "fts": {"count": len(hits), "hits": hits[:6]},
                 "cognee": {"connected": bool(cog.get("ok")),
@@ -701,20 +712,25 @@ class NammaAgentService:
             i = cmd.index("--serve-url")
             serve_url = cmd[i + 1] if i + 1 < len(cmd) else ""
         mode = "cloud" if serve_url else "local"
-        cloud_key = (self._read_cognee_env(self._cloud_env_path()).get("COGNEE_API_KEY") or "").strip()
+        cloud_env = self._read_cognee_env(self._cloud_env_path())
+        cloud_key = (cloud_env.get("COGNEE_API_KEY") or "").strip()
+        # The last-used instance URL, remembered even while on the self-hosted backend,
+        # so the Cloud form can pre-fill it (paste once, never again).
+        saved_serve_url = (cloud_env.get("COGNEE_INSTANCE_URL") or "").strip().rstrip("/")
         return {
             "connected": self._cognee_client() is not None,
             "server_present": server is not None,
             "server_enabled": (bool(server.get("enabled", True)) if server else False),
             "env": {k: env.get(k, "") for k in self._COGNEE_ENV_KEYS},
             "llm_api_key_set": bool(key) and not key.upper().startswith("REPLACE"),
-            "auto_ingest": bool(cog.get("auto_ingest", False)),
+            "auto_ingest": bool(cog.get("auto_ingest", True)),
             "ingest_replies": bool(cog.get("ingest_replies", False)),
             "ingest_learning": bool(cog.get("ingest_learning", True)),
-            "recall_context": bool(cog.get("recall_context", False)),
+            "recall_context": bool(cog.get("recall_context", True)),
             # Track B (Cloud) status — same Memory tab/code, only this entry differs.
             "mode": mode,
-            "serve_url": serve_url,
+            "serve_url": serve_url,                       # active (only when on cloud)
+            "cloud_serve_url": serve_url or saved_serve_url,  # remembered → pre-fill the form
             "cloud_key_set": bool(cloud_key) and not cloud_key.upper().startswith("REPLACE"),
         }
 
@@ -727,6 +743,10 @@ class NammaAgentService:
         updates = {k: env[k] for k in self._COGNEE_ENV_KEYS if env and k in env and env[k] is not None}
         if env and (env.get("LLM_API_KEY") or "").strip():
             updates["LLM_API_KEY"] = env["LLM_API_KEY"].strip()  # only write a non-empty key
+        # Only persist values that actually differ — the UI posts the whole form, and
+        # an unchanged save must NOT trigger the ~30s container reconnect below.
+        current = self._read_cognee_env()
+        updates = {k: v for k, v in updates.items() if str(v) != current.get(k, "")}
         if updates:
             self._write_cognee_env(updates)
 
@@ -752,9 +772,26 @@ class NammaAgentService:
                 if "recall_context" in cog and getattr(self, "agent", None) is not None:
                     self.agent._cognee_recall_context_on = cog["recall_context"]
 
-        if updates:   # model/embedding env changed → reconnect so the container reloads
-            self.reload_mcp()
+        if updates:   # model/embedding env changed → restart JUST cognee so the
+            self._reconnect_cognee()  # container reloads it (other servers untouched)
         return {"ok": True, **self.cognee_settings()}
+
+    def _reconnect_cognee(self) -> bool:
+        """Targeted restart of the single ``cognee`` MCP server from the current
+        config — used after env edits and by the Cognee tab's Reconnect. Other MCP
+        servers keep running. Returns True when cognee is connected afterwards."""
+        servers = (self.config.get("mcp") or {}).get("servers") or []
+        entry = next((s for s in servers if isinstance(s, dict) and s.get("name") == "cognee"), None)
+        if entry is None:
+            return False
+        with self._mcp_lock:
+            if self.mcp is not None:
+                with self.registry.categorize("mcp"):
+                    self.mcp.disconnect_server("cognee", self.registry)
+            self._stop_cognee_containers()
+            if not entry.get("enabled", True):
+                return False
+            return self._apply_one_mcp_server(entry, True)
 
     def register_cognee_server(self, mode: str = "local",
                                serve_url: str = "", api_key: str = "") -> dict:
@@ -771,16 +808,24 @@ class NammaAgentService:
 
         mode = (mode or "local").strip().lower()
         if mode == "cloud":
-            url = (serve_url or "").strip().rstrip("/")
+            cloud_env = self._read_cognee_env(self._cloud_env_path())
+            # Remember the instance URL: fall back to the saved one so Reconnect works
+            # without re-typing, and so switching to Self-hosted and back (which rewrites
+            # the cognee entry WITHOUT --serve-url) never loses it.
+            url = (serve_url or "").strip().rstrip("/") \
+                or (cloud_env.get("COGNEE_INSTANCE_URL") or "").strip().rstrip("/")
             if not url:
                 return {"ok": False, "error": "A Cognee Cloud instance URL is required "
                         "(e.g. https://your-instance.cognee.ai)."}
-            if (api_key or "").strip():  # secret → its own gitignored file, never config
-                self._write_cognee_env({"COGNEE_API_KEY": api_key.strip()},
-                                       path=self._cloud_env_path())
-            elif not (self._read_cognee_env(self._cloud_env_path()).get("COGNEE_API_KEY") or "").strip():
+            if not ((api_key or "").strip() or (cloud_env.get("COGNEE_API_KEY") or "").strip()):
                 return {"ok": False, "error": "A Cognee Cloud API key is required the first "
                         "time (get it from platform.cognee.ai)."}
+            # Persist URL (+ key if newly supplied) to the gitignored cloud env file so
+            # both survive reconnects and backend switches. The key never enters config.
+            cloud_updates = {"COGNEE_INSTANCE_URL": url}
+            if (api_key or "").strip():
+                cloud_updates["COGNEE_API_KEY"] = api_key.strip()
+            self._write_cognee_env(cloud_updates, path=self._cloud_env_path())
             env_path = str(self._cloud_env_path()).replace("\\", "/")
             entry = {
                 "name": "cognee",
@@ -793,6 +838,13 @@ class NammaAgentService:
                 "enabled": True, "connect_timeout": 90, "call_timeout": 900,
             }
         else:
+            # Butter-smooth first run: if .env.cognee doesn't exist yet, seed it
+            # from the example (fully-local Ollama defaults) instead of failing.
+            p = self._cognee_env_path()
+            if not p.exists():
+                example = p.with_name(p.name + ".example")
+                if example.exists():
+                    p.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
             env_path = str(self._cognee_env_path()).replace("\\", "/")
             entry = {
                 "name": "cognee",
@@ -806,13 +858,23 @@ class NammaAgentService:
         servers = [dict(s) for s in ((self.config.get("mcp") or {}).get("servers") or [])
                    if isinstance(s, dict) and s.get("name") != "cognee"]
         servers.append(entry)   # upsert: swap the single cognee entry for the chosen track
-        self.config = update_config({"mcp": {"servers": servers}})
-        # Switching backends: stop ANY running cognee container first (covers legacy
-        # un-named ones the per-client cleanup can't target by name), so the new
-        # container — local or cloud — starts clean instead of hitting a held lock.
-        self._stop_cognee_containers()
-        self.reload_mcp()
-        return {"ok": True, **self.cognee_settings()}
+        with self._mcp_lock:
+            self.config = update_config({"mcp": {"servers": servers}})
+            if self.mcp is not None:
+                with self.registry.categorize("mcp"):
+                    self.mcp.disconnect_server("cognee", self.registry)
+            # Switching backends: stop ANY running cognee container first (covers legacy
+            # un-named ones the per-client cleanup can't target by name), so the new
+            # container — local or cloud — starts clean instead of hitting a held lock.
+            self._stop_cognee_containers()
+            # Targeted (re)connect of JUST the cognee entry — other MCP servers
+            # (github, …) keep running instead of being restarted with it.
+            connected = self._apply_one_mcp_server(entry, True)
+        out = {"ok": True, **self.cognee_settings()}
+        if not connected:
+            out["error"] = ("Saved, but the Cognee server didn't connect. Check Docker is "
+                            "running (and for Cloud: the instance URL + API key), then Reconnect.")
+        return out
 
     @staticmethod
     def _stop_cognee_containers() -> None:
@@ -860,10 +922,43 @@ class NammaAgentService:
 
     def _channel_turn(self, text, session_id, mode, askpass=None, model=None):
         """The inbound bridge's per-message callback: run one turn and hand back
-        the reply + (possibly new) session id."""
-        res = self.run_turn(text, session_id=session_id, mode=mode,
+        the reply + (possibly new) session id.
+
+        When the bridge exposed a progress sink (Telegram/Signal/…), the agent's
+        intermediate 'preamble' lines are streamed to the user as their own
+        messages AS THEY HAPPEN, and stripped from the final reply so they aren't
+        repeated. Channels without a progress sink (or simple turns with no tool
+        rounds) behave exactly as before — one message with the whole answer."""
+        from namma_agent.core.interactive import get_progress_sink
+
+        progress = get_progress_sink()
+        sent: list[str] = []
+        sink = None
+        if progress is not None:
+            def sink(event_type, payload, _p=progress, _sent=sent):
+                if event_type == "preamble":
+                    line = (payload.get("text") or "").strip()
+                    if line:
+                        _sent.append(line)
+                        _p(line)
+
+        res = self.run_turn(text, session_id=session_id, sink=sink, mode=mode,
                             askpass=askpass, model_id=model)
-        return res.content, res.session_id
+        content = self._strip_sent_preambles(res.content, sent) if sent else res.content
+        return content, res.session_id
+
+    @staticmethod
+    def _strip_sent_preambles(content: str, preambles: list[str]) -> str:
+        """Remove the preamble blocks already delivered live from the final reply.
+        Falls back to the full content if stripping would leave nothing."""
+        import re as _re
+
+        out = content
+        for p in preambles:
+            if p and p in out:
+                out = out.replace(p, "", 1)
+        out = _re.sub(r"\n{3,}", "\n\n", out).strip()
+        return out or content
 
     def comms_status(self) -> dict:
         """Gateway state for the Settings UI. ``configured`` is False when comms
@@ -986,19 +1081,39 @@ class NammaAgentService:
         if getattr(browser, "_controller", None) is not None:
             browser._controller.close()
 
+    def _migrate_facts_to_cognee(self) -> None:
+        """Move legacy SQLite facts into Cognee (background cognify) and delete
+        them — Cognee is the only memory now. No-op when Cognee isn't connected
+        (the facts stay put and migrate on a later boot)."""
+        try:
+            facts = self.db.all_facts()
+        except Exception:  # noqa: BLE001
+            return
+        pending = [f for f in facts if (f.get("key") or "") != "name"]
+        if not pending or self._cognee_client() is None:
+            return
+        for f in pending:
+            self.cognee_ingestor.ingest_text(
+                f"User {str(f['key']).replace('_', ' ')}: {f['value']}")
+            self.db.delete_fact(f["key"])
+        from namma_agent.core.logger import logger
+        logger.info("[memory] migrated %d legacy fact(s) into Cognee", len(pending))
+
     # -- memory cleanup ----------------------------------------------------
 
     def clear_memory(self, scope: str = "all") -> dict:
-        """Wipe stored memory. scope: facts | conversations | notes | all."""
+        """Wipe stored data. scope: memory (the Cognee knowledge graph) |
+        conversations (chat transcripts + summaries) | all. Legacy scopes
+        ('facts'/'notes') map onto the Cognee wipe."""
         scope = (scope or "all").lower()
-        done: dict[str, int | bool] = {}
-        if scope in ("facts", "all"):
-            done["facts"] = self.db.clear_facts()
+        done: dict = {}
+        if scope in ("memory", "cognee", "facts", "notes", "all"):
+            r = self.cognee_tool("forget", {"everything": True}, timeout=120)
+            done["cognee"] = "cleared" if r.get("ok") else (r.get("error") or "failed")
+            # Also drop legacy local leftovers so a wipe really is a wipe.
+            done["legacy_facts"] = self.db.clear_facts()
         if scope in ("conversations", "sessions", "all"):
             done["conversations"] = self.db.clear_conversations()
-        if scope in ("notes", "all") and self.memory_notes is not None:
-            self.memory_notes.reset()
-            done["notes"] = True
         from namma_agent.core.logger import logger
         logger.info("[memory] cleared scope=%s -> %s", scope, done)
         return {"cleared": done, "scope": scope}
@@ -1278,13 +1393,16 @@ class NammaAgentService:
         return {"needed": not bool(name), "name": name}
 
     def complete_onboarding(self, name: str = "", facts: Optional[dict] = None) -> dict:
+        # The name row is only the "onboarding done" flag for the welcome card —
+        # the MEMORY of who the user is goes into Cognee (background cognify).
         name = (name or "").strip()
         if name:
             self.db.save_fact("name", name, category="identity")
+            self.cognee_ingestor.ingest_text(f"The user's name is {name}.")
         for key, value in (facts or {}).items():
             key, value = str(key).strip(), str(value).strip()
             if key and value:
-                self.db.save_fact(key, value, category="onboarding")
+                self.cognee_ingestor.ingest_text(f"User {key.replace('_', ' ')}: {value}")
         return self.onboarding_status()
 
     # -- persona authoring -------------------------------------------------

@@ -37,9 +37,13 @@ def test_onboarding_needed_when_no_name(service):
 
 
 def test_complete_onboarding_saves_name_and_facts(service):
+    stored = []
+    service.cognee_ingestor.ingest_text = stored.append
     status = service.complete_onboarding("Sri", {"city": "Mumbai"})
     assert status["needed"] is False and status["name"] == "Sri"
-    assert service.db.get_fact("city") == "Mumbai"
+    # the memory itself goes to Cognee (queued), not to SQLite facts
+    assert any("Mumbai" in t for t in stored)
+    assert service.db.get_fact("city") is None
     assert service.onboarding_status()["needed"] is False
 
 

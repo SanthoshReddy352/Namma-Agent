@@ -188,22 +188,20 @@ security:
 #       command: ["uvx", "mcp-server-git"]
 #       enabled: true
 
-# ── Cognee memory (optional — semantic + knowledge graph via the cognee MCP server) ──
-# Connect the cognee server in Settings → MCP first (see docs/COGNEE.md). These flags
-# are opt-in (default off) so Namma is unchanged unless you enable them.
+# ── Cognee memory (THE memory — semantic + knowledge graph via the cognee MCP server) ──
+# Cognee is Namma's only long-term memory (SQLite holds transcripts/app state, not
+# memory). Connect the cognee server in Settings → MCP → Cognee (see docs/COGNEE.md).
 # cognee:
-#   auto_ingest: false     # after each turn, background-ingest the user's message into
+#   auto_ingest: true      # after each turn, background-ingest the user's message into
 #                          # the Cognee graph (cognify) — off the reply path; the graph
-#                          # then grows from normal chat. Needs the cognee server connected.
+#                          # grows from normal chat. No-op until the server is connected.
 #   ingest_replies: false  # also include the assistant's reply in what gets ingested
 #   ingest_learning: true  # when a Learning-Room module is completed, push its recap
 #                          # (concepts + running example) into the Cognee graph too, so
-#                          # the Memory graph grows from what you study. On by default —
-#                          # still a no-op unless the cognee server is connected.
-#   recall_context: false  # proactively inject a Cognee recall for recall-style questions
+#                          # the Memory graph grows from what you study.
+#   recall_context: true   # proactively inject a Cognee recall for recall-style questions
 #                          # ("what do you know about me?") so memory is guaranteed in
-#                          # normal chat even if the model skips the tool. Off by default
-#                          # → the model calls mcp_cognee_recall itself (visible usage).
+#                          # normal chat even if the model skips the tool call.
 
 # ── Logging ────────────────────────────────────────────────────────
 logging:

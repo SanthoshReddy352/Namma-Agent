@@ -113,9 +113,16 @@ def test_loop_limit_guard():
 
 
 def test_memory_tools_via_agent():
+    class _Ing:
+        texts = []
+
+        def ingest_text(self, t):
+            self.texts.append(t)
+
+    ing = _Ing()
     reg = ToolRegistry()
     db = Database(":memory:")
-    register_memory_tools(reg, db)
+    register_memory_tools(reg, db, get_cognee_ingestor=lambda: ing)
     responses = [
         LLMResponse(content="Saving.", tool_calls=[
             ToolCall(id="t1", name="remember_fact", args={"key": "editor", "value": "vim"})]),
@@ -123,19 +130,21 @@ def test_memory_tools_via_agent():
     ]
     agent = Agent(ScriptedProvider(responses), reg, db, load_persona())
     agent.process_turn("remember my editor is vim")
-    assert db.get_fact("editor") == "vim"
+    # the fact flows into the Cognee ingest queue, not SQLite
+    assert any("vim" in t for t in ing.texts)
+    assert db.all_facts() == []
 
 
-def test_facts_injected_into_system_prompt():
+def test_memory_prompt_steers_to_cognee():
     db = Database(":memory:")
-    db.save_fact("name", "Tricky")
     reg = ToolRegistry()
-    agent = Agent(ScriptedProvider([LLMResponse(content="hi Tricky")]), reg, db, load_persona())
+    agent = Agent(ScriptedProvider([LLMResponse(content="hi")]), reg, db, load_persona())
     agent.process_turn("who am i")
     system = agent.provider.seen_messages[0][0]
     assert system["role"] == "system"
-    assert "Tricky" in system["content"]
-    assert "USER_FACTS" in system["content"]
+    # no SQLite fact injection anymore - memory guidance points at Cognee
+    assert "USER_FACTS" not in system["content"]
+    assert "mcp_cognee_recall" in system["content"]
 
 
 def test_media_tool_output_surfaced_in_answer():

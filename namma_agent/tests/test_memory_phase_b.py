@@ -1,9 +1,12 @@
-"""Phase B memory upgrade — FTS turns search, session summaries, curated notes."""
+"""Phase B memory upgrade — FTS turns search + session summaries.
+
+(The curated-notes layer and the memory nudge were removed when Cognee became
+the only memory; transcript search and summaries are what SQLite still does.)
+"""
 from __future__ import annotations
 
 from namma_agent.core.builtins import register_agent_tools, register_memory_tools
 from namma_agent.core.memory import Database
-from namma_agent.core.memory_notes import MemoryNotes
 from namma_agent.core.persona import load_persona
 from namma_agent.core.providers.base import LLMResponse, Provider
 from namma_agent.core.tools import ToolRegistry
@@ -56,33 +59,7 @@ def test_session_turns_chronological():
     assert [t["content"] for t in turns] == ["first", "second"]
 
 
-# ── MemoryNotes ─────────────────────────────────────────────────────────────
-
-def test_memory_notes_roundtrip(tmp_path):
-    notes = MemoryNotes(tmp_path / "mem")
-    assert notes.user_path.exists() and notes.memory_path.exists()
-    assert notes.block() == ""  # empty headers only → no injection
-    notes.append_note("user prefers dark mode")
-    notes.write_user("# User Profile\n\nName: Tricky")
-    block = notes.block()
-    assert "dark mode" in block
-    assert "Tricky" in block
-
-
 # ── Tools ───────────────────────────────────────────────────────────────────
-
-def test_memory_note_tools(tmp_path):
-    db = Database(":memory:")
-    notes = MemoryNotes(tmp_path / "mem")
-    reg = ToolRegistry()
-    register_memory_tools(reg, db, notes=notes)
-    assert {"remember_note", "read_memory", "update_user_profile", "recall_sessions"} <= set(reg.names())
-
-    assert reg.execute("remember_note", {"note": "ships on Fridays"}).ok
-    assert reg.execute("update_user_profile", {"content": "Likes terse answers"}).ok
-    out = reg.execute("read_memory", {})
-    assert out.ok and "ships on Fridays" in out.content and "terse" in out.content
-
 
 def test_recall_sessions_tool():
     db = Database(":memory:")
@@ -113,14 +90,45 @@ def test_summarize_session_tool():
     assert db.get_session_summary(sid) == "User chatted about gardening."
 
 
-# ── Nudge ───────────────────────────────────────────────────────────────────
+# ── Cognee-backed memory tools ──────────────────────────────────────────────
 
-def test_memory_nudge_cadence():
-    from namma_agent.core.agent import Agent
+class _StubIngestor:
+    def __init__(self):
+        self.texts = []
+
+    def ingest_text(self, text):
+        self.texts.append(text)
+
+
+def test_remember_fact_routes_to_cognee():
     db = Database(":memory:")
-    agent = Agent(_FixedProvider(), ToolRegistry(), db, load_persona(), nudge_every=2)
-    sid = db.create_session()
-    assert agent._memory_nudge(sid) == ""        # 0 turns
-    for _ in range(4):                            # 4 turns == 2 exchanges
-        db.add_turn(sid, "user", "x")
-    assert "memory nudge" in agent._memory_nudge(sid)
+    ing = _StubIngestor()
+    reg = ToolRegistry()
+    register_memory_tools(reg, db, get_cognee_ingestor=lambda: ing)
+    out = reg.execute("remember_fact", {"key": "preferred_editor", "value": "vim"})
+    assert out.ok and ing.texts and "vim" in ing.texts[0]
+    # no SQLite fact is written anymore
+    assert db.all_facts() == []
+
+
+def test_remember_fact_without_cognee_errors():
+    db = Database(":memory:")
+    reg = ToolRegistry()
+    register_memory_tools(reg, db)
+    out = reg.execute("remember_fact", {"key": "a", "value": "b"})
+    assert not out.ok and "cognee" in (out.error or "").lower()
+
+
+def test_recall_facts_delegates_to_cognee_tool():
+    db = Database(":memory:")
+    reg = ToolRegistry()
+    register_memory_tools(reg, db)
+    # not connected → clear error
+    out = reg.execute("recall_facts", {"query": "who am I"})
+    assert not out.ok and "cognee" in (out.error or "").lower()
+    # with a fake mcp_cognee_recall present, the call is delegated
+    from namma_agent.core.tools import ToolResult
+    reg.register("mcp_cognee_recall", "recall", {"type": "object", "properties": {}},
+                 lambda a: ToolResult(ok=True, content=f"answer to {a.get('query')}"))
+    out = reg.execute("recall_facts", {"query": "who am I"})
+    assert out.ok and "who am I" in out.content

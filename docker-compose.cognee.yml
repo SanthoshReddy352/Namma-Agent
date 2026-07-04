@@ -30,3 +30,10 @@ services:
 volumes:
   ollama-models:
   cognee-data:                 # persists Cognee's graph/vector/sqlite across MCP sessions
+
+# Pin the network name so the cognee MCP container can always join it as
+# "agi_default", no matter what the project folder is called (compose would
+# otherwise derive the name from the directory).
+networks:
+  default:
+    name: agi_default

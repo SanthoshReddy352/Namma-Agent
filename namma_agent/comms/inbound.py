@@ -205,14 +205,30 @@ class InboundBridge:
 
     # -- turns -------------------------------------------------------------
 
+    def _progress_send(self, text: str) -> None:
+        """Deliver one intermediate progress line (the agent's per-tool-round
+        explanation) as its own message. Default routes through ``_say``; a
+        transport overrides it to send synchronously/in-order if needed."""
+        if (text or "").strip():
+            self._say(text)
+
     def _execute(self, text: str) -> str:
-        """Run one turn through the agent, persisting the session. Returns the reply."""
+        """Run one turn through the agent, persisting the session. Returns the reply.
+
+        Exposes a per-turn *progress sink* (via the interactive contextvar) so the
+        agent's intermediate 'preamble' lines are delivered live, as their own
+        messages, rather than bundled into the final reply (see service._channel_turn)."""
+        from namma_agent.core.interactive import reset_progress_sink, set_progress_sink
+
+        token = set_progress_sink(self._progress_send)
         try:
             reply, self._session_id = self._on_message(
                 text, self._session_id, self._mode, self.askpass, self._model_id)
         except Exception as exc:  # noqa: BLE001
             logger.warning("[%s] turn failed: %s", self.channel_name, exc)
             reply = "Sorry — something went wrong handling that."
+        finally:
+            reset_progress_sink(token)
         return reply or "(no response)"
 
     def _run_turn(self, text: str) -> None:

@@ -43,28 +43,47 @@ class MCPManager:
         number of MCP tools registered. Always registers ``mcp_list_servers``."""
         count = 0
         for cfg in self._configs:
-            name = cfg.get("name") or "unnamed"
-            command = cfg.get("command")
-            if not command:
-                logger.warning("[mcp] server %r has no command — skipping", name)
-                continue
-            client = StdioMCPClient(name, command, env=cfg.get("env"), cwd=cfg.get("cwd"))
-            # Some servers cold-start slowly (e.g. a Dockerised server that runs DB
-            # migrations before answering the handshake). Allow a per-server override;
-            # default generously so a slow server isn't dropped, while a fast one still
-            # returns the instant it answers.
-            connect_timeout = int(cfg.get("connect_timeout") or 60)
-            if not client.connect(timeout=connect_timeout):
-                continue
-            self.clients[name] = client
-            # Per-server tool-call timeout — heavy tools (e.g. graph build) can take
-            # minutes; a fast server is unaffected since it returns immediately.
-            call_timeout = int(cfg.get("call_timeout") or 120)
-            for tool in client.list_tools():
-                count += self._register_tool(registry, name, client, tool, call_timeout)
+            count += self.connect_server(cfg, registry)
         self._register_list_servers(registry)
         logger.info("[mcp] registered %d tool(s) from %d server(s)", count, len(self.clients))
         return count
+
+    def connect_server(self, cfg: dict, registry: ToolRegistry) -> int:
+        """Connect ONE server config and register its tools, leaving every other
+        running server untouched — the targeted path behind per-server enable and
+        backend switches (a github toggle must not restart the cognee container).
+        Returns the number of tools registered (0 when the connect failed)."""
+        name = cfg.get("name") or "unnamed"
+        command = cfg.get("command")
+        if not command:
+            logger.warning("[mcp] server %r has no command — skipping", name)
+            return 0
+        client = StdioMCPClient(name, command, env=cfg.get("env"), cwd=cfg.get("cwd"))
+        # Some servers cold-start slowly (e.g. a Dockerised server that runs DB
+        # migrations before answering the handshake). Allow a per-server override;
+        # default generously so a slow server isn't dropped, while a fast one still
+        # returns the instant it answers.
+        connect_timeout = int(cfg.get("connect_timeout") or 60)
+        if not client.connect(timeout=connect_timeout):
+            return 0
+        self.clients[name] = client
+        # Per-server tool-call timeout — heavy tools (e.g. graph build) can take
+        # minutes; a fast server is unaffected since it returns immediately.
+        call_timeout = int(cfg.get("call_timeout") or 120)
+        count = 0
+        for tool in client.list_tools():
+            count += self._register_tool(registry, name, client, tool, call_timeout)
+        return count
+
+    def disconnect_server(self, name: str, registry: ToolRegistry) -> None:
+        """Close ONE server's client and drop its tools from the registry, leaving
+        the other servers running (counterpart of :meth:`connect_server`)."""
+        client = self.clients.pop(name, None)
+        if client is not None:
+            client.close()
+        prefix = f"mcp_{_safe(name)}_"
+        for reg_name in [n for n in registry.names() if n.startswith(prefix)]:
+            registry.unregister(reg_name)
 
     def _register_tool(self, registry: ToolRegistry, server: str,
                        client: StdioMCPClient, tool: dict, call_timeout: int = 120) -> int:

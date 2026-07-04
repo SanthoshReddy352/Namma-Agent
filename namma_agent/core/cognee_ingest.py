@@ -51,6 +51,14 @@ class CogneeIngestor:
             text = f"{text}\n\n(Assistant replied: {assistant_text.strip()[:800]})"
         self._enqueue(text)
 
+    def ingest_text(self, text: str) -> None:
+        """Queue text for the graph UNCONDITIONALLY (not gated by the auto-ingest
+        flag) — the path behind explicit remembers: memory tools, project /
+        learning notes, onboarding. Still background + best-effort."""
+        text = (text or "").strip()
+        if text:
+            self._enqueue(text)
+
     def ingest_learning(self, text: str) -> None:
         """Queue a Learning-Room concept (e.g. a completed-module recap) for the
         graph. Gated by ``learning_enabled`` (its own switch), not the per-turn

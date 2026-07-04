@@ -100,7 +100,6 @@ def _service():
 
 def test_project_context_injected_and_layered():
     svc = _service()
-    svc.db.save_fact("name", "Tricky")  # global identity fact
     p = svc.db.create_project("Garden", "balcony build")
     sid = svc.db.create_session_in(project_id=p["id"])
     svc.db.add_scope_memory("project", p["id"], "south-facing balcony")
@@ -109,11 +108,10 @@ def test_project_context_injected_and_layered():
     assert "PROJECT CONTEXT" in block
     assert "Garden" in block and "south-facing balcony" in block
 
-    # layered: the full system prompt still carries the global fact
+    # the project scope block lands in the full system prompt
     messages = svc.agent._build_messages("hello", sid)
     system = messages[0]["content"]
     assert "PROJECT CONTEXT" in system
-    assert "Tricky" in system  # global identity preserved inside a project
 
 
 def test_unfiled_chat_has_no_scope_block():

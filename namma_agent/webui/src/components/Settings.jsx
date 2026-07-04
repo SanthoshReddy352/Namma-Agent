@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { applyUpdate, checkUpdate, clearMemory, deletePersona, exportPack, fetchCogneeConfig, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchModels, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listSkills, listTools, memoryForget, packDownloadUrl, registerCogneeServer, reloadMcp, savePersona, saveCogneeConfig, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona, startComms, stopComms, toggleMcpServer, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
+import { applyUpdate, checkUpdate, clearMemory, deletePersona, exportPack, fetchCogneeConfig, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchModels, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listSkills, listTools, memoryForget, packDownloadUrl, reconnectCognee, registerCogneeServer, reloadMcp, savePersona, saveCogneeConfig, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona, startComms, stopComms, toggleMcpServer, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
 import { COMPLETION_PRESETS, SOUND_EVENTS, completionPreset, previewPreset, setCompletionPreset, setSoundEventEnabled, setSoundVolume, setSoundsEnabled, soundEventEnabled, soundVolume, soundsEnabled } from "../sounds.js";
 import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
 
@@ -324,11 +324,7 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                       <Field label="App token (xapp-, Socket Mode)"><Input type="password" placeholder={data.env_set?.NAMMA_SLACK_APP_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_SLACK_APP_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SLACK_APP_TOKEN: v }))} /></Field>
                       <Field label="Bot token (xoxb-, replies)"><Input type="password" placeholder={data.env_set?.NAMMA_SLACK_BOT_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_SLACK_BOT_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SLACK_BOT_TOKEN: v }))} /></Field>
                     </Section>
-                    <Section title="WhatsApp" hint="Outbound via the WhatsApp Cloud API (Meta).">
-                      <Field label="Access token"><Input type="password" placeholder={data.env_set?.NAMMA_WHATSAPP_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_WHATSAPP_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TOKEN: v }))} /></Field>
-                      <Field label="Phone number id"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_PHONE_ID ? "(set)" : "not set"} value={env.NAMMA_WHATSAPP_PHONE_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_PHONE_ID: v }))} /></Field>
-                      <Field label="Recipient (E.164)"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_TO ? "(set)" : "e.g. 919876543210"} value={env.NAMMA_WHATSAPP_TO ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TO: v }))} /></Field>
-                    </Section>
+                    <WhatsAppSettings env={env} setEnv={setEnv} data={data} />
                     <Section title="Signal" hint="Outbound via a signal-cli REST API service.">
                       <Field label="API URL"><Input placeholder={data.env_set?.NAMMA_SIGNAL_API_URL ? "(set)" : "http://localhost:8080"} value={env.NAMMA_SIGNAL_API_URL ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SIGNAL_API_URL: v }))} /></Field>
                       <Field label="Sender number (E.164)"><Input placeholder={data.env_set?.NAMMA_SIGNAL_NUMBER ? "(set)" : "+919876543210"} value={env.NAMMA_SIGNAL_NUMBER ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_SIGNAL_NUMBER: v }))} /></Field>
@@ -362,11 +358,12 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                 )}
 
                 {tab === "Memory" && (
-                  <Section title="Memory" hint="Erase stored memory. This cannot be undone.">
+                  <Section title="Memory"
+                           hint="All remembered knowledge lives in the Cognee knowledge graph; chats are kept as transcripts. Erasing cannot be undone.">
                     <div className="flex flex-wrap gap-2">
-                      {["facts", "conversations", "notes", "all"].map((s) => (
+                      {[["memory", "Clear Cognee memory"], ["conversations", "Clear chats"], ["all", "Clear everything"]].map(([s, label]) => (
                         <button key={s} onClick={() => wipe(s)}
-                                className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-brand-wash dark:hover:bg-night-soft capitalize">Clear {s}</button>
+                                className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-brand-wash dark:hover:bg-night-soft">{label}</button>
                       ))}
                     </div>
                     {cleared && <div className="mt-2 text-brand-deep text-[13px]">Cleared {cleared}.</div>}
@@ -1008,6 +1005,91 @@ const Toggle = ({ label, checked, onChange }) => (
   </label>
 );
 
+// WhatsApp has two backends: the official Cloud API (Meta app, template messages,
+// 24h window) or a QR-linked personal number via the WhatsApp Web protocol (link
+// your own account, full two-way, no restrictions — but unofficial / against ToS).
+function WhatsAppSettings({ env, setEnv, data }) {
+  const [serverMode, setServerMode] = useState(null);
+  useEffect(() => { fetchWhatsappQR().then((r) => setServerMode(r?.mode || "cloud")); }, []);
+  const mode = env.NAMMA_WHATSAPP_MODE ?? serverMode ?? "cloud";
+  const setMode = (v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_MODE: v }));
+  const hint = mode === "qr"
+    ? "Link your own number by scanning a QR (like WhatsApp Web). Full two-way, no templates — but it's an unofficial session and against WhatsApp's ToS, so use your own number at your own risk."
+    : "Outbound + replies via the WhatsApp Cloud API (Meta). Official, but free-form text only inside the 24-hour window.";
+  return (
+    <Section title="WhatsApp" hint={hint}>
+      <Field label="Backend">
+        <Select value={mode} onChange={setMode} options={["cloud", "qr"]} />
+      </Field>
+      {mode === "cloud" ? (
+        <>
+          <Field label="Access token"><Input type="password" placeholder={data.env_set?.NAMMA_WHATSAPP_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_WHATSAPP_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TOKEN: v }))} /></Field>
+          <Field label="Phone number id"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_PHONE_ID ? "(set)" : "not set"} value={env.NAMMA_WHATSAPP_PHONE_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_PHONE_ID: v }))} /></Field>
+          <Field label="Recipient (E.164)"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_TO ? "(set)" : "e.g. 919876543210"} value={env.NAMMA_WHATSAPP_TO ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TO: v }))} /></Field>
+        </>
+      ) : (
+        <>
+          <Field label="Your number (E.164)"><Input placeholder={data.env_set?.NAMMA_WHATSAPP_TO ? "(set)" : "e.g. 919876543210"} value={env.NAMMA_WHATSAPP_TO ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_WHATSAPP_TO: v }))} /></Field>
+          <WhatsAppLink />
+        </>
+      )}
+    </Section>
+  );
+}
+
+// Polls /api/whatsapp/qr and renders the current link state: a QR to scan while
+// unlinked, or a linked confirmation once the phone pairs the session. The QR only
+// appears after the gateway is started (that's what opens the WhatsApp session).
+function WhatsAppLink() {
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    const tick = () => fetchWhatsappQR().then((r) => { if (alive) setSt(r); });
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
+  const reconnect = async () => {
+    setBusy(true);
+    await relinkWhatsapp();
+    // Optimistically drop the linked state so the QR panel shows as soon as the
+    // fresh QR is emitted; polling then reflects the real state.
+    setSt((s) => (s ? { ...s, linked: false, qr: null } : s));
+    setBusy(false);
+  };
+  const box = "rounded-lg border border-line dark:border-night-line p-3 text-[13px]";
+  const btn = "px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-brand-wash dark:hover:bg-night-soft disabled:opacity-50";
+  if (!st) return <div className={box}>Checking link status…</div>;
+  if (!st.available) {
+    if (!st.neonize)
+      return <div className={box}>QR backend needs the <code>neonize</code> package (<code>pip install neonize</code>). If you just installed it, restart the app.</div>;
+    // neonize is present but the qr backend isn't active on the server yet — it
+    // was selected here but not applied.
+    return <div className={box}>Click <b>Save</b> (bottom-right) to apply the QR backend, then <b>Start</b> the messaging gateway (top of this tab) to generate a QR to scan.</div>;
+  }
+  if (st.linked)
+    return (
+      <div className={box}>
+        <div className="text-brand-deep mb-2">✅ WhatsApp is connected — the assistant can send and receive on your number.</div>
+        <button onClick={reconnect} disabled={busy} className={btn}>{busy ? "Reconnecting…" : "Reconnect"}</button>
+        <div className="text-[12px] text-ink-faint dark:text-night-faint mt-1.5">Reconnect unlinks this session and shows a new QR — use it to link a different phone.</div>
+      </div>
+    );
+  if (st.qr)
+    return (
+      <div className={box}>
+        <div className="mb-2">On your phone: <b>WhatsApp → Settings → Linked Devices → Link a device</b>, then scan:</div>
+        <img src={st.qr} alt="WhatsApp linking QR code" className="w-44 h-44 bg-white rounded-md p-2" />
+      </div>
+    );
+  return (
+    <div className={box}>
+      {busy ? "Generating a new QR…" : "Start the messaging gateway (top of this tab) to open the WhatsApp session and generate a QR to scan."}
+    </div>
+  );
+}
+
 // The "Skills" tab: every skill (procedural playbook) with an on/off switch.
 // Disabled skills drop out of the agent's catalog and use_skill refuses them.
 // Skills that declare prerequisites (a CLI / env var) show what they need and are
@@ -1348,7 +1430,7 @@ function McpServersTab() {
   return (
     <div className="space-y-4">
       <Section title="MCP servers"
-               hint="Configured Model Context Protocol servers and the tools each exposes. Use the switch on a server to turn the whole server on/off; expand it to toggle individual tools. Add or edit servers in the Config tab.">
+               hint="Configured Model Context Protocol servers and the tools each exposes. Use the switch on a server to turn the whole server on/off; expand it to toggle individual tools. Add or edit servers in the Config tab. Toggling only touches that one server — but Docker-based servers (like cognee) can take ~30s to start.">
         <button onClick={reload} disabled={reloading} className={_btnGhost + " disabled:opacity-50 text-[13px]"}>
           {reloading ? "Reconnecting…" : "↻ Reconnect servers"}
         </button>
@@ -1459,7 +1541,9 @@ function CogneeTab() {
   const [key, setKey] = useState("");     // new LLM_API_KEY (write-only)
   const [flags, setFlags] = useState({ auto_ingest: false, ingest_replies: false, ingest_learning: true, recall_context: false });
   const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);   // {ok, text}
+  const [msg, setMsg] = useState(null);       // {ok, text} — models & embeddings save
+  const [topMsg, setTopMsg] = useState(null); // {ok, text} — connection / backend actions
+  const [dzMsg, setDzMsg] = useState(null);   // {ok, text} — danger zone
   const [confirm, setConfirm] = useState(false);
   const [track, setTrack] = useState("local");   // which backend the user is choosing
   const [serveUrl, setServeUrl] = useState("");   // cloud instance URL
@@ -1469,7 +1553,9 @@ function CogneeTab() {
     if (!r) return;
     setCfg(r); setEnvState(r.env || {});
     setFlags({ auto_ingest: !!r.auto_ingest, ingest_replies: !!r.ingest_replies, ingest_learning: r.ingest_learning !== false, recall_context: !!r.recall_context });
-    setTrack(r.mode || "local"); setServeUrl(r.serve_url || "");
+    // Pre-fill the instance URL from the REMEMBERED value (cloud_serve_url), which is
+    // kept even while on self-hosted — so you paste it once and never again.
+    setTrack(r.mode || "local"); setServeUrl(r.cloud_serve_url || r.serve_url || "");
   });
   useEffect(() => { load(); }, []);
 
@@ -1492,29 +1578,49 @@ function CogneeTab() {
     if (r?.ok) setCfg(r);
   }
 
-  async function reconnect() { setBusy(true); await reloadMcp(); await load(); setBusy(false); }
+  async function reconnect() {
+    setBusy(true); setTopMsg({ ok: true, text: "Reconnecting the Cognee server — starting its container can take ~30s…" });
+    const r = await reconnectCognee();
+    setBusy(false);
+    if (r) { setCfg(r); setEnvState(r.env || env); }
+    setTopMsg(r?.ok ? { ok: true, text: "Cognee reconnected." }
+                    : { ok: false, text: "Couldn't reconnect — is Docker running? Check the command in Settings → MCP → Config." });
+  }
   async function registerServer(body = { mode: "local" }) {
-    setBusy(true); setMsg(null);
+    setBusy(true);
+    setTopMsg({ ok: true, text: body.mode === "cloud"
+      ? "Connecting to Cognee Cloud — this can take ~30s…"
+      : "Starting the self-hosted Cognee container — this can take ~30s…" });
     const r = await registerCogneeServer(body);
     setBusy(false);
-    if (r?.ok) { setCfg(r); setServeUrl(r.serve_url || ""); setCloudKey(""); setTrack(r.mode || "local"); setMsg({ ok: true, text: r.mode === "cloud" ? "Switched to Cognee Cloud — reconnecting." : "Self-hosted Cognee registered — reconnecting." }); }
-    else setMsg({ ok: false, text: r?.error || "Couldn't register the server." });
+    if (r?.ok) {
+      setCfg(r); setServeUrl(r.cloud_serve_url || r.serve_url || ""); setCloudKey(""); setTrack(r.mode || "local");
+      // ok:true = the entry was saved; a trailing `error` means it saved but didn't connect.
+      if (r.error) setTopMsg({ ok: false, text: r.error });
+      else setTopMsg({ ok: true, text: r.mode === "cloud" ? "Switched to Cognee Cloud — connected." : "Self-hosted Cognee connected." });
+    }
+    else setTopMsg({ ok: false, text: r?.error || "Couldn't register the server." });
   }
   async function registerCloud() {
-    if (!serveUrl.trim()) { setMsg({ ok: false, text: "Enter your Cognee Cloud instance URL." }); return; }
+    if (!serveUrl.trim()) { setTopMsg({ ok: false, text: "Enter your Cognee Cloud instance URL." }); return; }
     await registerServer({ mode: "cloud", serve_url: serveUrl.trim(), api_key: cloudKey.trim() });
   }
   async function toggleServer() {
-    if (!cfg) return;
+    if (!cfg || busy) return;
+    const turningOn = !cfg.server_enabled;
     setBusy(true);
-    const r = await toggleMcpServer("cognee", !cfg.server_enabled);
-    setBusy(false); await load();
+    setTopMsg({ ok: true, text: turningOn ? "Turning the Cognee server on — starting its container can take ~30s…" : "Turning the Cognee server off…" });
+    const r = await toggleMcpServer("cognee", turningOn);
+    await load();
+    setBusy(false);
+    setTopMsg(r?.ok ? { ok: true, text: turningOn ? "Cognee server is on." : "Cognee server is off." }
+                    : { ok: false, text: r?.error || "Couldn't toggle the server." });
   }
   async function forgetAll() {
-    setConfirm(false); setBusy(true); setMsg(null);
+    setConfirm(false); setBusy(true); setDzMsg(null);
     const r = await memoryForget({ everything: true });
     setBusy(false);
-    setMsg(r?.ok ? { ok: true, text: "Cognee memory cleared." } : { ok: false, text: r?.error || "Couldn't clear." });
+    setDzMsg(r?.ok ? { ok: true, text: "Cognee memory cleared." } : { ok: false, text: r?.error || "Couldn't clear." });
   }
 
   if (!cfg) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
@@ -1536,12 +1642,17 @@ function CogneeTab() {
               <button onClick={() => registerServer()} disabled={busy} className={_btn}>{busy ? "…" : "Register Cognee server"}</button>
             ) : (
               <>
-                <Toggle label="" checked={cfg.server_enabled} onChange={toggleServer} />
+                <button type="button" disabled={busy} title={cfg.server_enabled ? "Turn the Cognee server off" : "Turn the Cognee server on"}
+                        onClick={toggleServer}
+                        className={`h-6 w-11 rounded-full transition relative shrink-0 disabled:opacity-50 ${cfg.server_enabled ? "bg-brand" : "bg-line dark:bg-night-line"}`}>
+                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${cfg.server_enabled ? "left-[22px]" : "left-0.5"}`} />
+                </button>
                 <button onClick={reconnect} disabled={busy} className={_btnGhost + " text-[13px] disabled:opacity-50"}>{busy ? "…" : "↻ Reconnect"}</button>
               </>
             )}
           </div>
         </div>
+        {topMsg && <div className={`text-[12.5px] ${topMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-brand-deep dark:text-amber-400"}`}>{topMsg.text}</div>}
         {!cfg.server_present && (
           <div className="text-[12px] text-ink-faint dark:text-night-faint">
             Needs Docker + the one-time setup (<span className="font-mono">scripts/setup_cognee.ps1</span>). See <span className="font-mono">docs/COGNEE.md</span>.
@@ -1644,6 +1755,7 @@ function CogneeTab() {
             <button onClick={() => setConfirm(false)} className={_btnGhost + " text-[13px]"}>Cancel</button>
           </div>
         )}
+        {dzMsg && <div className={`text-[12.5px] ${dzMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-brand-deep dark:text-amber-400"}`}>{dzMsg.text}</div>}
       </Section>
     </div>
   );

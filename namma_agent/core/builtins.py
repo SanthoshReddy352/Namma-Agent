@@ -73,32 +73,45 @@ _RESEARCH_TOOLS = (
 )
 
 
-def register_memory_tools(registry: ToolRegistry, db: Database, notes=None) -> None:
-    """Register memory tools against the database (and optional MemoryNotes).
+def register_memory_tools(registry: ToolRegistry, db: Database,
+                          get_cognee_ingestor=None) -> None:
+    """Register memory tools. **Cognee is THE memory**: everything the assistant
+    remembers or recalls about the user flows through the cognee MCP server
+    (``mcp_cognee_remember`` / ``mcp_cognee_recall`` / ``mcp_cognee_forget``).
+    The old SQLite key/value facts layer and the USER.md/MEMORY.md notes layer
+    were removed in favour of the knowledge graph.
 
-    Structured facts (key/value) + conversation/session recall live on ``db``;
-    free-form curated prose (USER.md / MEMORY.md) lives on ``notes`` when given.
+    What still lives on ``db`` is the *transcript* store — verbatim chat history
+    and session summaries (``search_conversations`` / ``recall_sessions``). That
+    is a log of what was said, not memory of what it means.
     """
 
+    def _queue_ingest(text: str) -> bool:
+        """Queue text for background cognify (never blocks the turn). False when
+        the Cognee ingestor isn't wired."""
+        ingestor = get_cognee_ingestor() if get_cognee_ingestor else None
+        if ingestor is None:
+            return False
+        ingestor.ingest_text(text)
+        return True
+
     def remember_fact(args: dict) -> ToolResult:
+        """Kept under its old name so existing prompts/habits still work, but the
+        fact now goes into the Cognee knowledge graph (queued, background)."""
         key = (args.get("key") or "").strip()
         value = (args.get("value") or "").strip()
         if not key or not value:
             return ToolResult(ok=False, content="", error="both 'key' and 'value' are required")
-        db.save_fact(key, value, category=args.get("category", "general"))
-        return ToolResult(ok=True, content=f"Saved: {key} = {value}")
-
-    def recall_facts(args: dict) -> ToolResult:
-        query = (args.get("query") or "").strip()
-        hits = db.search_facts(query) if query else db.all_facts()
-        if not hits:
-            return ToolResult(ok=True, content="No matching facts.")
-        lines = "\n".join(f"- {h['key']}: {h['value']}" for h in hits)
-        return ToolResult(ok=True, content=lines, data=hits)
+        if not _queue_ingest(f"User {key.replace('_', ' ')}: {value}"):
+            return ToolResult(ok=False, content="",
+                              error="Cognee memory is not available — enable the 'cognee' "
+                                    "server in Settings → MCP → Cognee.")
+        return ToolResult(ok=True, content=f"Remembering in the knowledge graph: {key} = {value}")
 
     registry.register(
         name="remember_fact",
-        description="Save a durable fact about the user for future conversations.",
+        description=("Save a durable fact about the user into Cognee, the knowledge-graph "
+                     "memory (background). For richer context prefer mcp_cognee_remember."),
         parameters={
             "type": "object",
             "properties": {
@@ -111,14 +124,31 @@ def register_memory_tools(registry: ToolRegistry, db: Database, notes=None) -> N
         handler=remember_fact,
     )
 
-    def forget_fact(args: dict) -> ToolResult:
-        key = (args.get("key") or "").strip()
-        if not key:
-            return ToolResult(ok=False, content="", error="'key' is required")
-        removed = db.delete_fact(key)
-        if not removed:
-            return ToolResult(ok=False, content="", error=f"no fact named {key!r}")
-        return ToolResult(ok=True, content=f"Forgot: {key}")
+    def recall_facts(args: dict) -> ToolResult:
+        """Kept under its old name; recall is now Cognee's semantic + graph search."""
+        query = (args.get("query") or "").strip()
+        if not query:
+            return ToolResult(ok=False, content="",
+                              error="'query' is required (Cognee recall is semantic — ask a question)")
+        if "mcp_cognee_recall" not in registry:
+            return ToolResult(ok=False, content="",
+                              error="Cognee memory is not connected — enable the 'cognee' "
+                                    "server in Settings → MCP → Cognee.")
+        return registry.execute("mcp_cognee_recall", {"query": query})
+
+    registry.register(
+        name="recall_facts",
+        description=("Recall what is known about the user from Cognee, the knowledge-graph "
+                     "memory (semantic + relationship search; same as mcp_cognee_recall)."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "the question to recall an answer for"},
+            },
+            "required": ["query"],
+        },
+        handler=recall_facts,
+    )
 
     def search_conversations(args: dict) -> ToolResult:
         query = (args.get("query") or "").strip()
@@ -129,30 +159,6 @@ def register_memory_tools(registry: ToolRegistry, db: Database, notes=None) -> N
             return ToolResult(ok=True, content="No matching messages.")
         lines = "\n".join(f"[{h['role']}] {h['content'][:200]}" for h in hits)
         return ToolResult(ok=True, content=lines, data=hits)
-
-    registry.register(
-        name="recall_facts",
-        description="Search saved facts about the user. Omit query to list all.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "keywords to search; empty lists all"},
-            },
-        },
-        handler=recall_facts,
-    )
-
-    registry.register(
-        name="forget_fact",
-        description="Delete a saved fact about the user by its key.",
-        parameters={
-            "type": "object",
-            "properties": {"key": {"type": "string", "description": "the fact key to forget"}},
-            "required": ["key"],
-        },
-        handler=forget_fact,
-        destructive=True,
-    )
 
     registry.register(
         name="search_conversations",
@@ -193,23 +199,24 @@ def register_memory_tools(registry: ToolRegistry, db: Database, notes=None) -> N
     def clear_memory(args: dict) -> ToolResult:
         scope = (args.get("scope") or "all").lower()
         done: dict = {}
-        if scope in ("facts", "all"):
-            done["facts"] = db.clear_facts()
+        if scope in ("memory", "cognee", "facts", "all"):
+            if "mcp_cognee_forget" in registry:
+                r = registry.execute("mcp_cognee_forget", {"everything": True})
+                done["cognee"] = "cleared" if r.ok else f"failed: {r.error or r.content}"
+            else:
+                done["cognee"] = "not connected (nothing to clear)"
         if scope in ("conversations", "sessions", "all"):
             done["conversations"] = db.clear_conversations()
-        if scope in ("notes", "all") and notes is not None:
-            notes.reset()
-            done["notes"] = True
         return ToolResult(ok=True, content=f"Cleared memory (scope={scope}): {done}", data=done)
 
     registry.register(
         name="clear_memory",
-        description=("Erase stored memory. scope: 'facts' (user facts), 'conversations' "
-                     "(chat history + summaries), 'notes' (USER.md/MEMORY.md), or 'all'."),
+        description=("Erase stored memory. scope: 'memory' (the Cognee knowledge graph), "
+                     "'conversations' (chat history + summaries), or 'all'."),
         parameters={
             "type": "object",
             "properties": {
-                "scope": {"type": "string", "enum": ["facts", "conversations", "notes", "all"],
+                "scope": {"type": "string", "enum": ["memory", "conversations", "all"],
                           "description": "what to wipe (default all)"},
             },
         },
@@ -219,7 +226,10 @@ def register_memory_tools(registry: ToolRegistry, db: Database, notes=None) -> N
 
     # Scope-aware memory: when the current turn belongs to a project (or learning
     # topic), durable details are saved to that scope's dedicated memory, resolved
-    # from the turn-local session id. No-op outside a scoped session.
+    # from the turn-local session id. No-op outside a scoped session. The scope
+    # row is what gets injected verbatim into the scope's system prompt (fast,
+    # deterministic); the same note is ALSO queued into Cognee so it becomes part
+    # of the knowledge graph and is recallable from any chat.
     def _scoped_note(args: dict, scope_type: str, label: str) -> ToolResult:
         from namma_agent.core.interactive import get_current_session
 
@@ -234,84 +244,31 @@ def register_memory_tools(registry: ToolRegistry, db: Database, notes=None) -> N
             scope_id = sess.get("project_id")
             if not scope_id:
                 return ToolResult(ok=False, content="",
-                                  error="This chat is not in a project; use remember_note instead.")
+                                  error="This chat is not in a project; use mcp_cognee_remember instead.")
+            scope_name = (db.get_project(scope_id) or {}).get("name", "")
         else:
             from namma_agent.core.learning import topic_for_session  # lazy (Wave 3)
             topic = topic_for_session(db, sid)
             scope_id = topic["id"] if topic else None
             if not scope_id:
                 return ToolResult(ok=False, content="", error="Not in a learning topic.")
+            scope_name = (topic or {}).get("title", "")
         db.add_scope_memory(scope_type, scope_id, content)
-        return ToolResult(ok=True, content=f"Saved to {label} memory.")
+        _queue_ingest(f"{label.capitalize()} \"{scope_name or scope_id}\": {content}")
+        return ToolResult(ok=True, content=f"Saved to {label} memory (and queued into the knowledge graph).")
 
     registry.register(
         name="remember_project_note",
         description=("Save a durable detail to the CURRENT project's dedicated memory so it is "
                      "never forgotten (a decision, requirement, name, preference, or fact about "
-                     "the project). Only meaningful inside a project chat."),
+                     "the project). Also grows the Cognee knowledge graph. Only meaningful "
+                     "inside a project chat."),
         parameters={
             "type": "object",
             "properties": {"note": {"type": "string", "description": "the project detail to remember"}},
             "required": ["note"],
         },
         handler=lambda a: _scoped_note(a, "project", "project"),
-    )
-
-    if notes is None:
-        return
-
-    def read_memory(_args: dict) -> ToolResult:
-        block = notes.block() or "(memory notes are empty)"
-        return ToolResult(ok=True, content=block)
-
-    def remember_note(args: dict) -> ToolResult:
-        note = (args.get("note") or "").strip()
-        if not note:
-            return ToolResult(ok=False, content="", error="'note' is required")
-        notes.append_note(note)
-        return ToolResult(ok=True, content="Noted to long-term memory.")
-
-    def update_user_profile(args: dict) -> ToolResult:
-        content = (args.get("content") or "").strip()
-        if not content:
-            return ToolResult(ok=False, content="", error="'content' is required")
-        if args.get("mode") == "replace":
-            notes.write_user(content)
-            return ToolResult(ok=True, content="Rewrote the user profile.")
-        notes.write_user(notes.read_user().rstrip() + "\n" + content)
-        return ToolResult(ok=True, content="Updated the user profile.")
-
-    registry.register(
-        name="read_memory",
-        description="Read Namma Agent's curated long-term notes (USER profile + MEMORY working notes).",
-        parameters={"type": "object", "properties": {}},
-        handler=read_memory,
-    )
-    registry.register(
-        name="remember_note",
-        description=("Append a durable free-form note to long-term MEMORY (for context that "
-                     "isn't a single key/value fact — ongoing projects, decisions, how the user "
-                     "likes to work)."),
-        parameters={
-            "type": "object",
-            "properties": {"note": {"type": "string", "description": "the note to remember"}},
-            "required": ["note"],
-        },
-        handler=remember_note,
-    )
-    registry.register(
-        name="update_user_profile",
-        description=("Add to (or, with mode='replace', rewrite) the curated USER profile — a "
-                     "narrative of who the user is and how they like to work."),
-        parameters={
-            "type": "object",
-            "properties": {
-                "content": {"type": "string", "description": "markdown to add or the full new profile"},
-                "mode": {"type": "string", "enum": ["append", "replace"], "description": "default append"},
-            },
-            "required": ["content"],
-        },
-        handler=update_user_profile,
     )
 
 
@@ -631,6 +588,11 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
         if not note:
             return ToolResult(ok=False, content="", error="'note' is required")
         db.add_scope_memory("learning", topic["id"], note)
+        # Also grow the knowledge graph so the learner's goal/background is
+        # recallable from ANY chat, not just this topic's threads.
+        ingestor = get_cognee_ingestor() if get_cognee_ingestor else None
+        if ingestor is not None:
+            ingestor.ingest_text(f"Learning topic \"{topic.get('title', '')}\": {note}")
         return ToolResult(ok=True, content="Saved to this topic's memory.")
 
     def set_teaching_preference(args: dict) -> ToolResult:

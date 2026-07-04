@@ -348,9 +348,6 @@ class Agent:
         max_history_turns: int = 12,
         emit: Optional[EmitFn] = None,
         skills=None,
-        memory_notes=None,
-        nudge_every: int = 6,
-        memory_extractor=None,
         cognee_ingestor=None,
         cognee_recall_context=False,
     ):
@@ -362,14 +359,9 @@ class Agent:
         self.max_history_turns = max_history_turns
         self._emit = emit or (lambda _e, _p: None)
         self.skills = skills  # optional SkillStore; injects a catalog into the prompt
-        self.memory_notes = memory_notes  # optional MemoryNotes; injects USER.md/MEMORY.md
-        self.nudge_every = nudge_every  # inject a memory-curation nudge every N exchanges
-        # Optional MemoryExtractor: after each turn, deterministically capture
-        # durable user facts (the model rarely calls remember_fact itself). Left
-        # None for sub-agents (delegate_task) so research turns don't write memory.
-        self.memory_extractor = memory_extractor
         # Optional CogneeIngestor: after each turn, opt-in async ingest of the turn
         # into Cognee's knowledge graph (off the reply path). None for sub-agents.
+        # Cognee is THE memory — there is no SQLite facts/notes layer anymore.
         self.cognee_ingestor = cognee_ingestor
         # Opt-in: proactively inject Cognee recall for recall-style questions so memory
         # is guaranteed in normal chat, even if the model skips the tool (default off →
@@ -653,11 +645,6 @@ class Agent:
         if steps:
             turn_meta = {**(turn_meta or {}), "steps": steps}
         self.db.add_turn(session_id, "assistant", final_content, tools_used, meta=turn_meta)
-        # Deterministic memory capture: if the user revealed a durable fact about
-        # themselves, save it now (background, best-effort) so future sessions
-        # recall it — independent of whether the model called remember_fact.
-        if self.memory_extractor is not None:
-            self.memory_extractor.capture_async(provider, user_input, final_content)
         # Opt-in: grow the Cognee knowledge graph from this turn (background worker).
         if self.cognee_ingestor is not None:
             self.cognee_ingestor.ingest_async(user_input, final_content)
@@ -829,15 +816,13 @@ class Agent:
         return ""
 
     def _build_messages(self, user_input: str, session_id: str, chat_mode: bool = False) -> list[dict]:
-        facts = self.db.all_facts()
         # Chat mode is pure conversation: no skills catalog (no use_skill tool) and
-        # no tool-routing/learning preamble noise.
+        # no tool-routing/learning preamble noise. User memory is NOT injected here
+        # — Cognee is the memory, recalled via mcp_cognee_recall (steered below)
+        # and the opt-in recall_context safety net.
         catalog = "" if chat_mode else (self.skills.catalog_text() if self.skills is not None else "")
-        memory_block = self.memory_notes.block() if self.memory_notes is not None else ""
-        nudge = "" if chat_mode else self._memory_nudge(session_id)
         system = self.persona.system_prompt(
-            facts=facts, skills_catalog=catalog, memory_block=memory_block, nudge=nudge,
-            chat_mode=chat_mode,
+            skills_catalog=catalog, chat_mode=chat_mode,
         )
         scope = self._scope_block(session_id)
         if scope:
@@ -985,17 +970,3 @@ class Agent:
                      "with keywords.")
         return lines
 
-    def _memory_nudge(self, session_id: str) -> str:
-        """Every N exchanges, gently remind the model to curate memory. Visible
-        (it's part of the prompt; any resulting save shows in the tool timeline)."""
-        if self.nudge_every <= 0:
-            return ""
-        try:
-            turns = self.db.count_turns(session_id)
-        except Exception:  # noqa: BLE001
-            return ""
-        if turns and turns % (2 * self.nudge_every) == 0:
-            return ("(memory nudge) If anything durable came up recently — a new fact, "
-                    "preference, or project detail — save it now with remember_fact / "
-                    "remember_note. If nothing did, ignore this.")
-        return ""

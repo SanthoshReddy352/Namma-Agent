@@ -17,8 +17,13 @@ from namma_agent.service import NammaAgentService
 
 @pytest.fixture
 def svc(tmp_path, monkeypatch):
+    import threading
     s = NammaAgentService.__new__(NammaAgentService)  # skip heavy __init__
     s.config = {"mcp": {"servers": []}}
+    s._mcp_lock = threading.RLock()
+    s.mcp = None
+    # targeted connect is stubbed - no Docker in unit tests
+    monkeypatch.setattr(s, "_apply_one_mcp_server", lambda cfg, enabled: True)
     monkeypatch.setattr(s, "_cognee_env_path", lambda: tmp_path / ".env.cognee")
     monkeypatch.setattr(s, "_cloud_env_path", lambda: tmp_path / ".env.cognee.cloud")
     monkeypatch.setattr(s, "reload_mcp", lambda: None)

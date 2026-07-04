@@ -18,7 +18,7 @@ import threading
 import urllib.request
 from typing import Callable, Optional
 
-from namma_agent.comms._util import chunk_text
+from namma_agent.comms._util import chunk_text, markdown_to_whatsapp
 from namma_agent.comms.inbound import InboundBridge
 from namma_agent.core.logger import logger
 
@@ -47,7 +47,7 @@ class WhatsAppChannel:
 
     def _send_sync(self, text: str) -> None:
         url = _API.format(phone_id=self._phone_id)
-        for chunk in chunk_text(text, _MAX_CHARS):
+        for chunk in chunk_text(markdown_to_whatsapp(text), _MAX_CHARS):
             try:
                 body = {
                     "messaging_product": "whatsapp",

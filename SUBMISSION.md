@@ -16,6 +16,50 @@ recalls by *meaning* and *relationships*, grows a living graph of your life and
 projects, consolidates and forgets — and it does it from inside normal conversation,
 not just a settings page.
 
+## Why build Namma Agent at all? (the prior question)
+
+Fair challenge before we talk memory: Claude, ChatGPT, Hermes, OpenClaw, Open
+Interpreter and a dozen other agents already exist. Why build *another* one?
+
+Because each of those makes a trade Namma refuses:
+
+- **Hosted assistants (Claude, ChatGPT, Gemini)** are walled gardens. One vendor owns
+  the brain, your data lives on their servers, and the capability set is whatever they
+  ship. You can't swap the model, run it offline, hand it your own shell, or truly
+  *own* the memory.
+- **Coding agents** are brilliant but scoped to the repo — they don't find you a PG in
+  Bengaluru, run your smart home, teach you a syllabus, or ping you on Telegram.
+- **Open-source personal agents (Hermes, OpenClaw, …)** get the *self-hosted* part
+  right — Namma is built in that tradition and reaches parity-and-beyond on comms
+  bridges, skills, and toolsets — but they stop at a fixed toolset and skip the parts
+  below.
+
+Namma Agent is the assistant that stays **yours on every axis**:
+
+| Capability | Namma | Hosted chat (Claude/ChatGPT) | Coding agents | Other OSS agents |
+|---|:---:|:---:|:---:|:---:|
+| You host it / own your data | ✅ | ❌ | partial | ✅ |
+| Any brain — swap provider in one key, offline-capable | ✅ | ❌ one vendor | partial | partial |
+| Acts on your real machine + life (~85 tools: shell, files, browser, smart home, Gmail/Calendar) | ✅ | ❌ | code only | partial |
+| Writes its own tools + skills at runtime | ✅ | ❌ | ❌ | rare |
+| Teaches you (Learning Room pedagogy) | ✅ | ❌ | ❌ | ❌ |
+| Persistent, personal memory you own — now a knowledge graph | ✅ | partial (their servers) | ❌ | partial |
+
+Concretely: Namma is **provider-agnostic** (native Anthropic / OpenAI / Google, or any
+OpenAI-compatible endpoint, switched with one config key and an automatic fallback
+chain across providers), runs its tool-loop over **~85 native tools on *your* machine**,
+**extends itself** (`create_tool` writes and hot-loads new Python tools mid-turn; it
+authors its own `SKILL.md` playbooks after solving novel tasks), ships a
+pedagogy-backed **Learning Room**, and — unlike some OSS agents — **declines the unsafe
+shortcuts** (we refused to port Hermes's "God Mode" jailbreak skill).
+
+**And that is exactly why the hangover matters here.** A toy chatbot has no life worth
+remembering. Namma is a real daily driver — it finds your flat, plans your project,
+reviews your code, runs your home — so the context it accumulates is *real*, and losing
+it between sessions genuinely hurts. The more of an agent Namma became, the more its
+keyword-only SQLite memory became the bottleneck. Cognee isn't a feature bolted onto a
+demo; it's the memory a *working* agent finally deserved.
+
 ## All four memory-lifecycle ops — visible and demoable
 
 The grading rewards *depth of memory-lifecycle engagement*. Namma exercises the full
@@ -25,7 +69,7 @@ lifecycle, each with a place you can see it in the **Memory** tab:
 |---|---|---|
 | **remember** | store a fact (fast session, or permanent build) | Memory → *Remember* |
 | **recall** | semantic + graph question answering, even reworded | Memory → *Ask my memory* |
-| **improve** (cognify) | *Consolidate* promotes session notes into the graph (entity extraction + linking) | Memory → *Improve memory* |
+| **improve** (memify / cognify) | *Consolidate* promotes session notes into the graph — entity extraction + linking, the same enrichment step Cognee exposes as `improve`/`memify` | Memory → *Improve memory* |
 | **forget** | delete from graph + vector + relational stores | Memory → *Forget* |
 
 Plus the **knowledge graph** itself — an Obsidian-style, force-directed render of
@@ -71,12 +115,23 @@ runs. The single `cognee` server entry is the only thing that differs between tr
 — flipped with one click in **Settings → MCP → Cognee → Backend**. The Memory tab,
 the four ops, the graph, and the agent loop are **identical** across both.
 
-- **Track A — Best Use of Open Source:** self-hosted `cognee-mcp` container + Ollama
-  embeddings + Kuzu/LanceDB/SQLite. Runs 100% on your machine; reproducible with one
-  setup script. Graph renders from the container's `visualize_graph_ui`.
-- **Track B — Best Use of Cognee Cloud:** same image in serve mode against managed
-  Cognee Cloud (`--serve-url` + `X-Api-Key`). The cloud owns its DB + embeddings; the
-  graph is synced from the cloud REST API (`/api/v1/datasets/{id}/graph`).
+- **Track A — Best Use of Open Source (primary, fully live):** self-hosted `cognee-mcp`
+  container + Ollama embeddings + Kuzu/LanceDB/SQLite. Runs 100% on your machine, no API
+  keys; reproducible with one setup script. Graph renders from the container's
+  `visualize_graph_ui`. **This is the recorded demo end-to-end.**
+- **Track B — Best Use of Cognee Cloud:** the same image in serve mode against managed
+  Cognee Cloud (`--serve-url` + `X-Api-Key`); the cloud owns its DB + embeddings and the
+  graph is synced from the cloud REST API (`/api/v1/datasets/{id}/graph`). **Verified
+  working end-to-end earlier in prep** (connect → seed → cloud graph sync → recall).
+
+> **Both tracks are fully live.** Cognee Cloud was briefly at capacity during early prep;
+> the organizers confirmed **cloud access reopens July 2, 2026**, so both videos are recorded
+> live. Because the cloud path is a **one-line MCP-server swap on identical code**, the two
+> tracks share one story and one graph — the seed script builds an identical demo graph on
+> each backend (`--backend both`), and every clip works on either. See the track-aware
+> guides: [`RECORDING_GUIDE_SELFHOSTED.md`](RECORDING_GUIDE_SELFHOSTED.md) (🅰) and
+> [`RECORDING_GUIDE_CLOUD.md`](RECORDING_GUIDE_CLOUD.md) (🅱), driven by the shared master
+> [`RECORDING_GUIDE.md`](RECORDING_GUIDE.md).
 
 ## Why it's safe (non-degradation)
 
@@ -92,22 +147,35 @@ Self-hosted (Track A):
 ```
 scripts/setup_cognee.ps1        # or scripts/setup_cognee.sh — Docker + Ollama + image
 python -m namma_agent --server  # open http://127.0.0.1:8000 → Settings → MCP → Cognee → Register
-python scripts/seed_demo_memory.py   # optional: seed a rich demo graph
 ```
 Cloud (Track B): Settings → MCP → Cognee → **Backend → Cognee Cloud**, paste your
 instance URL + API key (platform.cognee.ai, dev code `COGNEE-35`), **Connect**.
 
 Full setup + the hard-won troubleshooting table: [`docs/COGNEE.md`](docs/COGNEE.md).
 
-## Rubric map
+## Rubric map — the official six criteria
 
-| Criterion | Where we earn it |
-|---|---|
-| **Best Use of Cognee** (depth) | all four ops in the UI + woven into the agent loop; graph on both backends; consolidate = cognify; recall across sessions |
-| **Technical Excellence** | container isolation (zero new venv deps), persistence across restarts, reliable backend switching, 500+ offline tests |
-| **Impact / UX** | the Memory tab + the keyword-vs-semantic money shot; "Namma remembers you" in a fresh chat |
-| **Creativity** | the Obsidian-style live graph; the "Where's My Context?" framing |
-| **Presentation** | this writeup + [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) + the demo video |
+Mapped 1:1 to the judging criteria for *The Hangover Part AI: Where's My Context?*
+
+| # | Criterion | Where we earn it |
+|---|---|---|
+| 1 | **Potential Impact** | Memory you actually *use*: Namma recalls who you are and what you're building across a brand-new chat days later, and the **Learning Room** pushes everything you study into the same graph — so memory compounds instead of resetting. The "hangover" it kills is real: reworded questions that keyword memory drops on the floor. |
+| 2 | **Creativity & Innovation** | Memory is **ambient, not a settings page** — auto-ingested from normal chat and pulled mid-conversation via prompt-steering. Plus the Obsidian-style **live** knowledge graph and the side-by-side **keyword-vs-semantic** money shot that makes "before/after" a single deterministic screen. |
+| 3 | **Technical Excellence** | Container isolation (**zero new Python deps** — Cognee never enters Namma's venv), persistence across restarts, reliable one-click backend switching (force-removes orphans), **one codebase serving both tracks**, and **506 offline/mocked tests** (`test_cognee_ops/_cloud/_ingest/_recall_context`). |
+| 4 | **Best Use of Cognee** | The **full lifecycle** — `remember` · `recall` · `improve`/**memify** (Consolidate runs cognify: entity extraction + linking) · `forget` — each with a visible home in the Memory tab, **plus** woven into the agent loop. Hybrid **graph + vector** recall routes by meaning. Runs on **both** self-hosted (Kuzu/LanceDB) and Cognee Cloud. |
+| 5 | **User Experience** | The Memory tab is a polished, single place for every op; the graph is draggable/zoomable; the keyword-vs-semantic compare is one click; switching backends is one click. No CLI required to feel the value. |
+| 6 | **Presentation Quality** | This writeup + [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) + [`RECORDING_GUIDE.md`](RECORDING_GUIDE.md) + [`docs/COGNEE.md`](docs/COGNEE.md) (incl. a hard-won troubleshooting table) + the demo video that opens on the money shot.
+
+## AI-assistant usage disclosure
+
+Per the hackathon rules, AI tooling used on this project is declared here:
+
+- **Claude Code** (Anthropic) was used as a pair-programming assistant during
+  development — for implementation, refactoring, tests, and documentation. All
+  architecture decisions, the Cognee integration design, and final review are mine
+  (Namma Agent is a solo project). The committed code was read, run, and verified by me
+  (`pytest namma_agent/tests/ -q` → 506 passing).
+- No other generative-AI services contributed code or content to this submission.
 
 ## Tests
 

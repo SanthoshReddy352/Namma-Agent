@@ -43,6 +43,7 @@ python-multipart         # document upload endpoint (multipart/form-data)
 #   tool still does md/txt/html (stdlib) and docx (python-docx, above). 'markdown' (pip)
 #   upgrades the html fallback when pandoc is absent.
 markdown                 # convert_document: richer md → html fallback (optional)
+neonize                  # comms: QR-linked personal WhatsApp (NAMMA_WHATSAPP_MODE=qr; unofficial/ToS risk — see docs/COMMS.md). Cloud-API WhatsApp needs none of this.
 
 # ── COGNEE ENHANCED MEMORY (optional — NO pip deps) ────────────────
 # Cognee semantic + knowledge-graph memory runs FULLY CONTAINERIZED and is reached

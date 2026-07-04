@@ -22,7 +22,7 @@ in the project's `.env` file (the environment-variable name for each field is sh
 | Signal   | ✅ | ✅ (polling)              | No (local signal-cli) |
 | Discord  | ✅ | ✅ (bot / Gateway)        | No (bot dials out)  |
 | Slack    | ✅ | ✅ (Socket Mode, or webhook) | No with Socket Mode; yes for the webhook path |
-| WhatsApp | ✅ | ✅ (webhook)              | Yes, for inbound    |
+| WhatsApp | ✅ | ✅ (QR: dial-out, or Cloud API: webhook) | Cloud API: yes; QR link: no |
 
 - **Outbound** works as soon as the credentials are saved — ask your assistant to
   "send a test notification."
@@ -117,6 +117,37 @@ public URL needed).
 
 ## WhatsApp
 
+WhatsApp has **two backends**, chosen by **Backend** (`NAMMA_WHATSAPP_MODE`) in
+Settings → Messaging:
+
+| Backend | `NAMMA_WHATSAPP_MODE` | What it is | Public URL? | Restrictions |
+|---------|-----------------------|-----------|-------------|--------------|
+| **Cloud API** (default) | `cloud` | Official Meta Business API | Yes, for inbound | Free-form text only inside the 24-hour window; otherwise pre-approved templates |
+| **QR link** | `qr` | Your own number, linked by scanning a QR (WhatsApp Web protocol, via `neonize`) | No — dials out | None (messages first, replies freely) |
+
+> ⚠️ **QR mode is unofficial.** It drives a multi-device session the same way
+> WhatsApp Web does, which is **against WhatsApp's Terms of Service** and can get a
+> number **banned**. It's the best fit for a self-hosted personal assistant on
+> *your own* number — but that risk is yours. Prefer the Cloud API if you need an
+> official, supported integration.
+
+### QR link (personal number)
+
+1. `pip install neonize` (ships the whatsmeow session engine).
+2. Settings → Messaging → **WhatsApp → Backend: qr**. Set **Your number**
+   (`NAMMA_WHATSAPP_TO`) to your WhatsApp number in **E.164 digits** (e.g.
+   `919876543210`). Save.
+3. **Start** the gateway (top of the Messaging tab) — this opens the WhatsApp
+   session. A **QR code** appears in the WhatsApp panel.
+4. On your phone: **WhatsApp → Settings → Linked Devices → Link a device**, and
+   scan it. Once linked, the panel shows ✅ and the session persists in
+   `~/.namma_agent/whatsapp_qr.sqlite3` (scan once; it reconnects on its own).
+
+Inbound is scoped to `NAMMA_WHATSAPP_TO` so only *you* can drive the agent; leave
+it empty to accept DMs from anyone (personal boxes only). Group messages are ignored.
+
+### Cloud API (Meta)
+
 **Fields:** Access token (`NAMMA_WHATSAPP_TOKEN`), Phone number id
 (`NAMMA_WHATSAPP_PHONE_ID`), Recipient (`NAMMA_WHATSAPP_TO`),
 *(optional, for two-way)* Verify token (`NAMMA_WHATSAPP_VERIFY_TOKEN`)
@@ -204,10 +235,11 @@ the gateway is running.
 | App token (xapp-)         | `NAMMA_SLACK_APP_TOKEN`       | Slack    | inbound (Socket Mode) |
 | Bot token (xoxb-)         | `NAMMA_SLACK_BOT_TOKEN`       | Slack    | inbound replies |
 | Signing secret            | `NAMMA_SLACK_SIGNING_SECRET`  | Slack    | inbound (webhook path) |
-| Access token              | `NAMMA_WHATSAPP_TOKEN`        | WhatsApp | out + in     |
-| Phone number id           | `NAMMA_WHATSAPP_PHONE_ID`     | WhatsApp | out + in     |
-| Recipient                 | `NAMMA_WHATSAPP_TO`           | WhatsApp | outbound     |
-| Verify token              | `NAMMA_WHATSAPP_VERIFY_TOKEN` | WhatsApp | inbound      |
+| Backend (cloud/qr)        | `NAMMA_WHATSAPP_MODE`         | WhatsApp | selects backend |
+| Access token              | `NAMMA_WHATSAPP_TOKEN`        | WhatsApp | out + in (cloud) |
+| Phone number id           | `NAMMA_WHATSAPP_PHONE_ID`     | WhatsApp | out + in (cloud) |
+| Recipient / your number   | `NAMMA_WHATSAPP_TO`           | WhatsApp | out + in scope |
+| Verify token              | `NAMMA_WHATSAPP_VERIFY_TOKEN` | WhatsApp | inbound (cloud) |
 | Webhook URL               | `NAMMA_DISCORD_WEBHOOK_URL`   | Discord  | outbound     |
 | Bot token                 | `NAMMA_DISCORD_BOT_TOKEN`     | Discord  | inbound (two-way) |
 | Channel id                | `NAMMA_DISCORD_CHANNEL_ID`    | Discord  | inbound (optional) |

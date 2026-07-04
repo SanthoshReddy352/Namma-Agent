@@ -28,8 +28,26 @@ def _send_notification(args: dict) -> ToolResult:
     if not message:
         return ToolResult(ok=False, content="", error="a message is required")
     channel = (args.get("channel") or "all").lower()
-    built = {name: factory() for name, factory in _CHANNELS.items()}
 
+    # Prefer the *running* CommsManager when the app is live: it holds stateful
+    # channels — notably the connected WhatsApp QR session — that a fresh, env-built
+    # channel could never reach. Fall back to a stateless build for headless callers.
+    from namma_agent.core.interactive import get_comms
+    comms = get_comms()
+    if comms is not None and getattr(comms, "any_available", False):
+        sent_to = comms.send_each(message, channel)
+        if sent_to:
+            return ToolResult(ok=True, content=f"Notification sent to {', '.join(sent_to)}.")
+        available = comms.channels()
+        if channel != "all" and channel not in available:
+            return ToolResult(ok=False, content="",
+                              error=f"no available channel for {channel!r} "
+                                    f"(available: {', '.join(available) or 'none'})")
+        return ToolResult(ok=False, content="",
+                          error=f"couldn't reach {channel!r} — the channel is configured but "
+                                f"not ready to send (e.g. WhatsApp QR isn't linked yet)")
+
+    built = {name: factory() for name, factory in _CHANNELS.items()}
     if not any(ch.available for ch in built.values()):
         return ToolResult(ok=False, content="",
                           error="no channels configured (set NAMMA_TELEGRAM_TOKEN+"
