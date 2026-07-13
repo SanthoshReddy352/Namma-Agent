@@ -368,6 +368,33 @@ def test_does_not_duplicate_repeated_media():
     assert "".join(chunks).count("same.png") == 1
 
 
+def test_declined_approval_leaves_a_visible_trace():
+    """Denying a confirmation must show up in the activity timeline: the declined
+    tool emits tool_started + tool_finished(declined), and the persisted steps
+    carry the fail state — not a silently vanishing step."""
+    reg = ToolRegistry()
+    reg.register("wipe_disk", "dangerous", {"type": "object", "properties": {}},
+                 lambda a: "gone", destructive=True)
+    responses = [
+        LLMResponse(tool_calls=[ToolCall(id="t1", name="wipe_disk", args={})]),
+        LLMResponse(content="Okay, I won't."),
+    ]
+    agent, db, events = _agent(responses, registry=reg)
+    result = agent.process_turn("wipe it", approval=lambda name, args: False)
+    kinds = [e for e, _ in events]
+    assert "tool_started" in kinds and "tool_finished" in kinds
+    finished = next(p for e, p in events if e == "tool_finished")
+    assert finished["ok"] is False and finished["summary"] == "declined"
+    # the persisted activity records the declined step (reload-safe)
+    step = next(s for s in result.steps if s.get("kind") == "tool")
+    assert step["tool"] == "wipe_disk" and step["state"] == "fail" \
+        and step["summary"] == "declined"
+    # and the model saw the decline as the tool result
+    second_call = agent.provider.seen_messages[1]
+    assert any(m.get("role") == "tool" and "declined" in m.get("content", "")
+               for m in second_call)
+
+
 # ── provider hard-timeout (a stuck model can't freeze the turn forever) ───────
 
 def test_generate_bounded_times_out_on_a_stuck_provider():

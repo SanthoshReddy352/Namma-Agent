@@ -84,8 +84,12 @@ def update_config(updates: dict, path: Optional[str] = None) -> dict:
     local = _local_overrides_path(cfg_path)
     current = (yaml.safe_load(local.read_text(encoding="utf-8")) or {}) if local.exists() else {}
     _deep_merge(current, updates or {})
-    local.write_text(yaml.safe_dump(current, sort_keys=False, default_flow_style=False),
-                     encoding="utf-8")
+    # Atomic write (tmp + replace): a crash mid-write must never leave a truncated
+    # config.local.yaml behind — that would wipe every UI-made setting on next boot.
+    tmp = local.with_name(local.name + ".tmp")
+    tmp.write_text(yaml.safe_dump(current, sort_keys=False, default_flow_style=False),
+                   encoding="utf-8")
+    tmp.replace(local)
     return load_config(path)
 
 

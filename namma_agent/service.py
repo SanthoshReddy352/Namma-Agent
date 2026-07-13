@@ -381,9 +381,55 @@ class NammaAgentService:
     # promotes them into the permanent knowledge graph via the cognify pipeline
     # (entity extraction + linking) — which is exactly the "improve your memory" step.
 
+    # The session-memory buffer must survive an app restart — otherwise quick
+    # "session" remembers silently drop out of the Consolidate queue and never
+    # reach the graph. It's mirrored to a JSON sidecar next to the SQLite DB.
+
+    def _cognee_buffer_path(self):
+        from pathlib import Path
+        cfg = getattr(self, "config", None)
+        if not isinstance(cfg, dict):        # bare test service — in-memory only
+            return None
+        db_path = (cfg.get("database") or {}).get("path", "data/namma_agent.db")
+        if db_path == ":memory:":
+            return None
+        return Path(db_path).parent / "cognee_pending.json"
+
+    def _cognee_buffer(self) -> list:
+        """The pending-consolidation buffer, restored from disk on first access."""
+        buf = getattr(self, "_cognee_session", None)
+        if buf is None:
+            buf = []
+            p = self._cognee_buffer_path()
+            try:
+                if p is not None and p.exists():
+                    import json
+                    data = json.loads(p.read_text(encoding="utf-8"))
+                    if isinstance(data, list):
+                        buf = [str(x) for x in data if str(x).strip()]
+            except Exception:  # noqa: BLE001 — a corrupt sidecar never blocks memory
+                buf = []
+            self._cognee_session = buf
+        return buf
+
+    def _persist_cognee_buffer(self) -> None:
+        """Best-effort atomic write of the buffer sidecar (tmp + replace)."""
+        p = self._cognee_buffer_path()
+        if p is None:
+            return
+        try:
+            import json
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp = p.with_name(p.name + ".tmp")
+            tmp.write_text(json.dumps(self._cognee_buffer(), ensure_ascii=False),
+                           encoding="utf-8")
+            tmp.replace(p)
+        except Exception:  # noqa: BLE001
+            pass
+
     def cognee_pending(self) -> int:
         """How many session memories are buffered, waiting to be consolidated."""
-        return len(getattr(self, "_cognee_session", None) or [])
+        return len(self._cognee_buffer())
 
     def cognee_remember(self, text: str, permanent: bool = True) -> dict:
         """Store text in Cognee. ``permanent`` runs cognify (builds the graph now);
@@ -396,10 +442,9 @@ class NammaAgentService:
             return self.cognee_tool("remember", {"data": text}, timeout=900)
         res = self.cognee_tool("remember", {"data": text, "session_id": "namma_ui"}, timeout=120)
         if res.get("ok"):
-            buf = getattr(self, "_cognee_session", None)
-            if buf is None:
-                buf = self._cognee_session = []
+            buf = self._cognee_buffer()
             buf.append(text)
+            self._persist_cognee_buffer()
             res["pending_consolidation"] = len(buf)
         return res
 
@@ -410,7 +455,7 @@ class NammaAgentService:
         client = self._cognee_client()
         if client is None:
             return {"ok": False, "error": "Cognee memory is not connected."}
-        buf = list(getattr(self, "_cognee_session", None) or [])
+        buf = list(self._cognee_buffer())
         if not buf:
             return {"ok": True, "consolidated": 0, "pending_consolidation": 0,
                     "content": "Nothing pending — store a few quick facts as session "
@@ -423,40 +468,12 @@ class NammaAgentService:
             else:
                 errors.append(r.get("error", "?"))
         # Drop only the items we just processed (keep anything queued meanwhile).
-        self._cognee_session = (getattr(self, "_cognee_session", None) or [])[len(buf):]
+        self._cognee_session = self._cognee_buffer()[len(buf):]
+        self._persist_cognee_buffer()
         msg = f"Consolidated {done} of {len(buf)} note(s) into the knowledge graph."
         return {"ok": done > 0, "consolidated": done, "errors": errors,
                 "pending_consolidation": self.cognee_pending(),
                 "content": msg if done else "Consolidation failed: " + "; ".join(errors[:3])}
-
-    def memory_compare(self, query: str) -> dict:
-        """The 'money shot' — run the SAME query two ways: (1) Namma's original memory,
-        keyword search over SQLite (FTS5/BM25), and (2) Cognee's semantic + graph
-        recall. On a *reworded* question keyword search often returns nothing while
-        Cognee still answers — the before/after that motivates the whole integration."""
-        query = (query or "").strip()
-        if not query:
-            return {"ok": False, "error": "Enter a question to compare."}
-        # 1) Keyword memory (the old way) — facts + past turns, FTS5 with LIKE fallback.
-        hits: list[dict] = []
-        try:
-            for f in self.db.search_facts(query, limit=4):
-                hits.append({"kind": "fact", "text": f"{f.get('key')}: {f.get('value')}"})
-            for t in self.db.search_turns(query, limit=4):
-                txt = " ".join((t.get("content") or "").split())
-                if txt:
-                    hits.append({"kind": t.get("role", "turn"), "text": txt[:200]})
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"Keyword search failed: {exc}"}
-        # 2) Cognee semantic recall. Generous timeout on purpose: if a burst trips
-        # Groq's per-minute token limit, litellm retry-backoff (~128s) must be allowed
-        # to finish — otherwise the MCP client's watchdog kills the (--rm) container and
-        # every later recall fails. Better a slow recall than a dead memory backend.
-        cog = self.cognee_tool("recall", {"query": query}, timeout=240)
-        return {"ok": True, "query": query,
-                "fts": {"count": len(hits), "hits": hits[:6]},
-                "cognee": {"connected": bool(cog.get("ok")),
-                           "answer": cog.get("content") if cog.get("ok") else (cog.get("error") or "")}}
 
     def _cognee_serve_url(self) -> str:
         """The Cognee Cloud instance URL if the cognee server is in cloud (serve)

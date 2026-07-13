@@ -1,0 +1,577 @@
+{
+  "hospital": {
+    "name": "Apollo Multi-Specialty Hospital",
+    "address": "Plot 123, Jubilee Hills, Hyderabad, Telangana - 500033",
+    "phone": "040-23456789"
+  },
+  "departments": [
+    {
+      "id": "DEPT01",
+      "name": "General Medicine"
+    },
+    {
+      "id": "DEPT02",
+      "name": "Cardiology"
+    },
+    {
+      "id": "DEPT03",
+      "name": "Orthopedics"
+    },
+    {
+      "id": "DEPT04",
+      "name": "Pediatrics"
+    },
+    {
+      "id": "DEPT05",
+      "name": "Neurology"
+    },
+    {
+      "id": "DEPT06",
+      "name": "Dermatology"
+    },
+    {
+      "id": "DEPT07",
+      "name": "Ophthalmology"
+    },
+    {
+      "id": "DEPT08",
+      "name": "ENT"
+    },
+    {
+      "id": "DEPT09",
+      "name": "Gynecology"
+    },
+    {
+      "id": "DEPT10",
+      "name": "Gastroenterology"
+    },
+    {
+      "id": "DEPT11",
+      "name": "Psychiatry"
+    },
+    {
+      "id": "DEPT12",
+      "name": "Pulmonology"
+    }
+  ],
+  "doctors": [
+    {
+      "name": "Shanthi Sharma",
+      "department": "General Medicine",
+      "qualification": "MBBS, MS",
+      "experience_years": 20,
+      "consultation_fee": 750,
+      "languages": [
+        "English",
+        "Tamil",
+        "Telugu"
+      ],
+      "available_days": [
+        "Fri",
+        "Thu",
+        "Mon",
+        "Sat",
+        "Tue",
+        "Wed"
+      ],
+      "slots": [
+        "09:00-13:00",
+        "14:00-17:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Nandini Gupta",
+      "department": "General Medicine",
+      "qualification": "MBBS, MD",
+      "experience_years": 5,
+      "consultation_fee": 800,
+      "languages": [
+        "English",
+        "Telugu"
+      ],
+      "available_days": [
+        "Mon",
+        "Wed",
+        "Thu",
+        "Sat"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Geetha Sharma",
+      "department": "Cardiology",
+      "qualification": "MBBS, DNB",
+      "experience_years": 6,
+      "consultation_fee": 200,
+      "languages": [
+        "Hindi",
+        "Telugu",
+        "Tamil",
+        "English"
+      ],
+      "available_days": [
+        "Tue",
+        "Mon",
+        "Sat"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Suresh Iyer",
+      "department": "Orthopedics",
+      "qualification": "MBBS, MS",
+      "experience_years": 14,
+      "consultation_fee": 200,
+      "languages": [
+        "Hindi",
+        "Tamil",
+        "Telugu"
+      ],
+      "available_days": [
+        "Tue",
+        "Fri",
+        "Wed",
+        "Thu",
+        "Mon",
+        "Sat"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Dinesh Joshi",
+      "department": "Orthopedics",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 18,
+      "consultation_fee": 800,
+      "languages": [
+        "English",
+        "Tamil",
+        "Telugu"
+      ],
+      "available_days": [
+        "Mon",
+        "Wed",
+        "Sat",
+        "Thu",
+        "Tue"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Anjali Patel",
+      "department": "Orthopedics",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 5,
+      "consultation_fee": 400,
+      "languages": [
+        "English",
+        "Hindi",
+        "Tamil",
+        "Telugu"
+      ],
+      "available_days": [
+        "Wed",
+        "Tue",
+        "Thu"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Ananya Sastry",
+      "department": "Pediatrics",
+      "qualification": "MBBS, DM",
+      "experience_years": 20,
+      "consultation_fee": 1000,
+      "languages": [
+        "Tamil",
+        "Telugu",
+        "Hindi",
+        "English"
+      ],
+      "available_days": [
+        "Thu",
+        "Tue",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Sandeep Ranganathan",
+      "department": "Neurology",
+      "qualification": "MBBS, DM",
+      "experience_years": 4,
+      "consultation_fee": 200,
+      "languages": [
+        "Telugu",
+        "Hindi",
+        "Tamil"
+      ],
+      "available_days": [
+        "Tue",
+        "Thu",
+        "Wed",
+        "Sat",
+        "Fri"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Venkat Murthy",
+      "department": "Neurology",
+      "qualification": "MBBS, DNB",
+      "experience_years": 31,
+      "consultation_fee": 800,
+      "languages": [
+        "Telugu",
+        "English"
+      ],
+      "available_days": [
+        "Mon",
+        "Tue",
+        "Thu",
+        "Sat",
+        "Fri"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Uma Sastry",
+      "department": "Dermatology",
+      "qualification": "MBBS, MS",
+      "experience_years": 23,
+      "consultation_fee": 600,
+      "languages": [
+        "English",
+        "Telugu",
+        "Hindi"
+      ],
+      "available_days": [
+        "Wed",
+        "Tue",
+        "Fri",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Dinesh Pillai",
+      "department": "Dermatology",
+      "qualification": "MBBS, DNB",
+      "experience_years": 24,
+      "consultation_fee": 350,
+      "languages": [
+        "Tamil",
+        "English",
+        "Telugu"
+      ],
+      "available_days": [
+        "Wed",
+        "Sat",
+        "Fri",
+        "Tue",
+        "Mon",
+        "Thu"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Sriram Reddy",
+      "department": "Dermatology",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 27,
+      "consultation_fee": 1000,
+      "languages": [
+        "Tamil",
+        "Hindi",
+        "Telugu",
+        "English"
+      ],
+      "available_days": [
+        "Tue",
+        "Sat",
+        "Thu",
+        "Mon"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Radha Kumar",
+      "department": "Ophthalmology",
+      "qualification": "MBBS, MS",
+      "experience_years": 13,
+      "consultation_fee": 400,
+      "languages": [
+        "English",
+        "Hindi"
+      ],
+      "available_days": [
+        "Sat",
+        "Thu",
+        "Wed",
+        "Mon",
+        "Fri"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Bala Chowdary",
+      "department": "Ophthalmology",
+      "qualification": "MBBS, MS",
+      "experience_years": 32,
+      "consultation_fee": 500,
+      "languages": [
+        "English",
+        "Hindi",
+        "Telugu",
+        "Tamil"
+      ],
+      "available_days": [
+        "Tue",
+        "Wed",
+        "Thu",
+        "Fri",
+        "Mon",
+        "Sat"
+      ],
+      "slots": [
+        "09:00-13:00",
+        "14:00-17:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Kavitha Naidu",
+      "department": "Ophthalmology",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 6,
+      "consultation_fee": 600,
+      "languages": [
+        "Telugu",
+        "Hindi",
+        "English",
+        "Tamil"
+      ],
+      "available_days": [
+        "Wed",
+        "Tue",
+        "Sat",
+        "Thu",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Geetha Nair",
+      "department": "ENT",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 13,
+      "consultation_fee": 1000,
+      "languages": [
+        "Hindi",
+        "Telugu"
+      ],
+      "available_days": [
+        "Fri",
+        "Tue",
+        "Thu"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Geetha Varma",
+      "department": "ENT",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 26,
+      "consultation_fee": 600,
+      "languages": [
+        "Tamil",
+        "English",
+        "Hindi"
+      ],
+      "available_days": [
+        "Sat",
+        "Wed",
+        "Thu",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Padma Verma",
+      "department": "Gynecology",
+      "qualification": "MBBS, MD",
+      "experience_years": 29,
+      "consultation_fee": 200,
+      "languages": [
+        "English",
+        "Telugu"
+      ],
+      "available_days": [
+        "Thu",
+        "Tue",
+        "Mon",
+        "Fri",
+        "Sat",
+        "Wed"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Anjali Sastry",
+      "department": "Gastroenterology",
+      "qualification": "MBBS, MD",
+      "experience_years": 7,
+      "consultation_fee": 350,
+      "languages": [
+        "Hindi",
+        "Tamil",
+        "Telugu"
+      ],
+      "available_days": [
+        "Fri",
+        "Wed",
+        "Sat",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00",
+        "14:00-17:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Kavitha Kumar",
+      "department": "Gastroenterology",
+      "qualification": "MBBS, MS",
+      "experience_years": 21,
+      "consultation_fee": 400,
+      "languages": [
+        "Tamil",
+        "English"
+      ],
+      "available_days": [
+        "Thu",
+        "Sat",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Ganesh Sharma",
+      "department": "Gastroenterology",
+      "qualification": "MBBS, MD",
+      "experience_years": 9,
+      "consultation_fee": 1000,
+      "languages": [
+        "Hindi",
+        "Tamil",
+        "Telugu",
+        "English"
+      ],
+      "available_days": [
+        "Tue",
+        "Sat",
+        "Thu",
+        "Mon"
+      ],
+      "slots": [
+        "09:00-13:00"
+      ],
+      "gender": "M"
+    },
+    {
+      "name": "Nandini Sharma",
+      "department": "Psychiatry",
+      "qualification": "MBBS, MRCP",
+      "experience_years": 4,
+      "consultation_fee": 800,
+      "languages": [
+        "English",
+        "Hindi"
+      ],
+      "available_days": [
+        "Tue",
+        "Mon",
+        "Fri"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "F"
+    },
+    {
+      "name": "Murali Kumar",
+      "department": "Pulmonology",
+      "qualification": "MBBS, DNB",
+      "experience_years": 15,
+      "consultation_fee": 400,
+      "languages": [
+        "Hindi",
+        "Tamil",
+        "Telugu",
+        "English"
+      ],
+      "available_days": [
+        "Fri",
+        "Tue",
+        "Sat"
+      ],
+      "slots": [
+        "14:00-17:00"
+      ],
+      "gender": "M"
+    }
+  ]
+}

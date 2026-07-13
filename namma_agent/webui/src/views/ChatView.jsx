@@ -6,6 +6,7 @@ import Message from "../components/Message.jsx";
 import QuizCard from "../components/QuizCard.jsx";
 import Timeline from "../components/Timeline.jsx";
 import Composer from "../components/Composer.jsx";
+import TodoPanel from "../components/TodoPanel.jsx";
 
 const HELP_TEXT = `Commands you can type:
 - **/new** — start a new chat
@@ -19,7 +20,7 @@ const HELP_TEXT = `Commands you can type:
 // comes from the shared app context via the router Outlet.
 export default function ChatView() {
   const {
-    connected, messages, timeline, status, mode, setMode, config, assistantName,
+    connected, messages, timeline, status, todos, mode, setMode, config, assistantName,
     voiceOn, setVoiceOn, send, stop, newChat, refreshSessions, showLocal,
     chatContext, suggestion, sendToSession, openChat,
     configuredModels, currentModel, selectModel, switchModelNewSession, chatHasTurns, confirmAction,
@@ -242,6 +243,7 @@ export default function ChatView() {
           </main>
           <footer className="px-4 md:px-6 pb-4">
             <div className="max-w-3xl mx-auto">
+              <TodoPanel todos={todos} />
               <Composer onSend={handleSend} onStop={stop} busy={busy} mode={mode} setMode={setMode} name={assistantName} />
               <div className="text-center text-[11px] text-ink-faint dark:text-night-faint mt-1.5">
                 {assistantName} can make mistakes. Verify important actions.

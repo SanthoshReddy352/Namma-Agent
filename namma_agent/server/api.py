@@ -600,11 +600,15 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
                         "total": prog.get("total", 0),
                         "next": ({"id": nxt["id"], "title": nxt["title"]} if nxt else None),
                     }
+        from namma_agent.tools.todo import todos_for
         return {"session_id": session_id,
                 "turns": _restore_turns(service.db, session_id),
                 "project": project, "topic": topic,
                 "model": (meta.get("model") or "").strip(),
-                "title": (meta.get("title") or "").strip()}
+                "title": (meta.get("title") or "").strip(),
+                # The agent's live TODO plan (in-memory) so the panel above the
+                # message bar survives a reload while the server is up.
+                "todos": todos_for(session_id)}
 
     @app.delete("/api/sessions/{session_id}")
     def delete_session(session_id: str):
@@ -1024,12 +1028,6 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """The 'improve' op — promote buffered session memories into the permanent
         knowledge graph via cognify (entity extraction + linking)."""
         return service.cognee_consolidate()
-
-    @app.post("/api/memory/compare")
-    def memory_compare(body: MemoryRecallBody):
-        """The before/after money shot — keyword (SQLite FTS5) vs Cognee semantic recall
-        for the same query."""
-        return service.memory_compare(body.query)
 
     @app.post("/api/memory/forget")
     def memory_forget(body: MemoryForgetBody):

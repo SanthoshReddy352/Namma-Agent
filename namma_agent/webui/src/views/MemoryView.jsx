@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
-import { memoryStatus, memoryRecall, memoryRemember, memoryConsolidate, memoryCompare, memoryForget, memoryGraph } from "../api.js";
+import { memoryStatus, memoryRecall, memoryRemember, memoryConsolidate, memoryForget, memoryGraph } from "../api.js";
 import MemoryGraph from "../components/MemoryGraph.jsx";
 
 // The "Memory" tab — a premium window into Cognee's semantic + knowledge-graph
@@ -55,7 +55,9 @@ export default function MemoryView() {
           <p className="text-ink-soft dark:text-night-faint text-[14px]">
             Your knowledge as a living <b>semantic + knowledge graph</b>, powered by
             {" "}<a href="https://www.cognee.ai" target="_blank" rel="noreferrer" className="text-brand-deep underline">Cognee</a>.
-            Drag nodes, scroll to zoom, hover to trace connections.
+            Three views — <b>Graph</b> (organic force layout), <b>Schema</b> (entity types
+            + how they relate) and <b>Ranked</b> (columns by type). Drag nodes, scroll to
+            zoom, hover to trace, click a node to inspect its relations.
           </p>
 
           {status && !connected && (
@@ -90,8 +92,6 @@ export default function MemoryView() {
           </section>
 
           <AskPanel disabled={!connected} />
-
-          <ComparePanel disabled={!connected} />
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <RememberPanel disabled={!connected} onChanged={reloadGraph} onSession={refreshStatus} />
@@ -143,72 +143,6 @@ function AskPanel({ disabled }) {
           ? "bg-paper-soft dark:bg-night text-ink dark:text-night-ink"
           : "bg-amber-50 dark:bg-amber-500/10 text-amber-800 dark:text-amber-300"}`}>
           {answer.text}
-        </div>
-      )}
-    </section>
-  );
-}
-
-// "Keyword vs Semantic" — the money shot. Same query, two engines: old SQLite
-// keyword search (FTS5/BM25) beside Cognee's semantic + graph recall. On a reworded
-// question keyword search usually whiffs while Cognee still answers.
-function ComparePanel({ disabled }) {
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [res, setRes] = useState(null);
-
-  async function run() {
-    if (!q.trim() || busy) return;
-    setBusy(true); setRes(null);
-    const r = await memoryCompare(q.trim());
-    setBusy(false);
-    if (r?.ok) setRes(r); else setRes({ error: r?.error || "Compare failed." });
-  }
-
-  return (
-    <section className={card}>
-      <div className="text-[15px] font-medium mb-1">Keyword vs Semantic</div>
-      <div className="text-[12.5px] text-ink-faint dark:text-night-faint mb-3">
-        The same question, two ways — old <b>keyword search</b> (SQLite FTS5) beside
-        {" "}<b>Cognee</b> semantic recall. Try rephrasing words you never stored.
-      </div>
-      <div className="flex gap-2">
-        <input value={q} onChange={(e) => setQ(e.target.value)} disabled={disabled}
-               onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-               placeholder="e.g. which database engine do I favour?" className={field} />
-        <button onClick={run} disabled={disabled || busy || !q.trim()} className={primary}>
-          {busy ? "Comparing…" : "Compare"}
-        </button>
-      </div>
-      {res?.error && <div className="mt-3 text-[13px] text-amber-700 dark:text-amber-300">{res.error}</div>}
-      {res && !res.error && (
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
-          <div className="rounded-lg border border-line dark:border-night-line p-3">
-            <div className="text-[12px] font-medium mb-1.5 flex items-center gap-2">
-              Keyword search
-              <span className="text-[11px] text-ink-faint dark:text-night-faint">SQLite FTS5</span>
-            </div>
-            {res.fts.count === 0 ? (
-              <div className="text-[13px] text-amber-700 dark:text-amber-400">No matches — the words aren’t there.</div>
-            ) : (
-              <ul className="space-y-1.5">
-                {res.fts.hits.map((h, i) => (
-                  <li key={i} className="text-[12.5px] text-ink-soft dark:text-night-faint">
-                    <span className="text-ink-faint dark:text-night-faint">[{h.kind}]</span> {h.text}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-          <div className="rounded-lg border border-brand/40 bg-brand/5 p-3">
-            <div className="text-[12px] font-medium mb-1.5 flex items-center gap-2">
-              Cognee recall
-              <span className="text-[11px] text-brand-deep dark:text-brand">semantic + graph</span>
-            </div>
-            <div className="text-[13px] leading-relaxed whitespace-pre-wrap">
-              {res.cognee.connected ? res.cognee.answer : <span className="text-amber-700 dark:text-amber-400">{res.cognee.answer || "Cognee offline."}</span>}
-            </div>
-          </div>
         </div>
       )}
     </section>

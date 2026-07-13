@@ -166,7 +166,6 @@ export const memoryStatus = () => j("/api/memory/status");
 export const memoryRecall = (query, topK = 8) => jpost("/api/memory/recall", { query, top_k: topK });
 export const memoryRemember = (text, permanent = true) => jpost("/api/memory/remember", { text, permanent });
 export const memoryConsolidate = () => jpost("/api/memory/consolidate", {});
-export const memoryCompare = (query) => jpost("/api/memory/compare", { query });
 export const memoryForget = (opts = {}) => jpost("/api/memory/forget", opts);
 export const memoryGraph = () => j("/api/memory/graph");
 
@@ -277,13 +276,28 @@ export function useNammaAgent() {
   const connect = useCallback(() => {
     const ws = new WebSocket(wsURL());
     wsRef.current = ws;
-    ws.onopen = () => setConnected(true);
+    ws.onopen = () => {
+      setConnected(true);
+      refreshSessions(); // the server may have restarted while we were away
+    };
     ws.onclose = () => {
       setConnected(false);
+      // A dropped socket loses any in-flight turn's events — the reply can never
+      // arrive, so clear stuck "thinking" spinners instead of spinning forever.
+      setData((all) => {
+        let changed = false;
+        const out = {};
+        for (const [k, v] of Object.entries(all)) {
+          if (v.status === "thinking") { out[k] = { ...v, status: "idle", streamId: null }; changed = true; }
+          else out[k] = v;
+        }
+        if (changed) dataRef.current = out;
+        return changed ? out : all;
+      });
       if (!stopReconnectRef.current) setTimeout(connect, 1500);
     };
     ws.onmessage = (e) => handle(JSON.parse(e.data));
-  }, []);
+  }, [refreshSessions]);
 
   // Append a streamed assistant chunk, opening a fresh assistant bubble if needed.
   // `meta` (on finalize) carries per-turn stats — { ttft, tokens } — for the footer.
@@ -427,6 +441,11 @@ export function useNammaAgent() {
         patch(qsid, (cur) => ({ messages: [...cur.messages, { id: nextId(), role: "quiz", quiz, at: now() }] }));
         break;
       }
+      case "todo_updated":
+        // The agent's live TODO plan (update_todos tool) — full-list replace, so
+        // the panel above the message bar always mirrors the latest call.
+        patch(key || currentRef.current, () => ({ todos: msg.todos || [] }));
+        break;
       case "learn_suggestion":
         // A gentle "want me to teach this?" chip under the reply for this chat.
         patch(key, () => ({ suggestion: msg.topic }));
@@ -596,6 +615,7 @@ export function useNammaAgent() {
     patch(id, () => ({
       messages,
       timeline: [], status: "idle", streamId: null, model: r.model || "",
+      todos: r.todos || [],
       context: { project: r.project || null, topic: r.topic || null, title: r.title || "" },
     }));
   }, [patch]);
@@ -672,6 +692,7 @@ export function useNammaAgent() {
   const cur = data[currentSid] || EMPTY;
   return {
     connected, messages: cur.messages, timeline: cur.timeline, status: cur.status,
+    todos: cur.todos || [],
     chatContext: cur.context || null, suggestion: cur.suggestion || null, learningSignal,
     passwordReq, mode, setMode, sessions, shuttingDown,
     voiceOn, setVoiceOn,

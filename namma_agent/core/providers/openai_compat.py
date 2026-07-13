@@ -15,12 +15,67 @@ endpoint gets them for free.
 from __future__ import annotations
 
 import json
+import re
 import time
-from typing import Optional
+from typing import Callable, Optional
 
 from namma_agent.core.logger import logger
 
 from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback, ToolCall
+
+# Many models served over OpenAI-compatible endpoints (qwen, DeepSeek-R1 on some
+# hosts, Nemotron, …) don't use the separate `reasoning_content` field — they emit
+# their chain-of-thought INLINE as <think>…</think> in the content stream. That
+# reasoning must go to the thinking channel (the UI's Thinking section), never
+# into the visible answer.
+_THINK_OPEN = "<think>"
+_THINK_CLOSE = "</think>"
+_THINK_BLOCK_RE = re.compile(r"<think>.*?</think>\s*", re.DOTALL)
+
+
+def _partial_tag_tail(buf: str, tag: str) -> int:
+    """Length of the longest strict prefix of ``tag`` that ``buf`` ends with —
+    i.e. how many trailing chars might still grow into the tag."""
+    for k in range(min(len(tag) - 1, len(buf)), 0, -1):
+        if buf.endswith(tag[:k]):
+            return k
+    return 0
+
+
+class _ThinkTagSplitter:
+    """Routes inline ``<think>…</think>`` reasoning onto the thinking channel and
+    everything else onto the text channel. Tags can arrive split across stream
+    chunks, so a possibly-partial tag tail is held back until it resolves."""
+
+    def __init__(self, emit_text: Callable[[str], None], emit_think: Callable[[str], None]):
+        self._text = emit_text
+        self._think = emit_think
+        self._buf = ""
+        self._in_think = False
+
+    def feed(self, chunk: str) -> None:
+        self._buf += chunk
+        while self._buf:
+            tag = _THINK_CLOSE if self._in_think else _THINK_OPEN
+            emit = self._think if self._in_think else self._text
+            i = self._buf.find(tag)
+            if i >= 0:
+                if i:
+                    emit(self._buf[:i])
+                self._buf = self._buf[i + len(tag):]
+                self._in_think = not self._in_think
+                continue
+            keep = _partial_tag_tail(self._buf, tag)
+            if len(self._buf) > keep:
+                emit(self._buf[: len(self._buf) - keep])
+                self._buf = self._buf[len(self._buf) - keep:]
+            return
+
+    def flush(self) -> None:
+        """Emit whatever is still held (stream ended mid-possible-tag)."""
+        if self._buf:
+            (self._think if self._in_think else self._text)(self._buf)
+            self._buf = ""
 
 
 class OpenAICompatProvider(Provider):
@@ -172,8 +227,11 @@ class OpenAICompatProvider(Provider):
                 args = {"_json_error": str(exc), "_raw_args": tc.function.arguments}
             tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
         usage = getattr(resp, "usage", None)
+        # Inline <think>…</think> reasoning never belongs in the answer. The
+        # non-streamed path has no thinking channel, so it's simply stripped.
+        content = _THINK_BLOCK_RE.sub("", msg.content or "").strip()
         return LLMResponse(
-            content=msg.content or "",
+            content=content,
             tool_calls=tool_calls,
             usage=self._usage(usage),
             finish_reason=choice.finish_reason or "",
@@ -192,6 +250,21 @@ class OpenAICompatProvider(Provider):
         tool_acc: dict[int, dict] = {}
         finish_reason = ""
         usage = {}
+
+        # Content deltas run through the <think>-tag splitter: reasoning goes to
+        # the thinking channel (or is dropped when no listener), the answer text
+        # to the token stream + the final content. Models that use the separate
+        # reasoning_content field never emit the tags, so this is a pass-through.
+        def _emit_text(s: str) -> None:
+            content_parts.append(s)
+            if on_token:
+                on_token(s)
+
+        def _emit_think(s: str) -> None:
+            if on_thinking:
+                on_thinking(s)
+
+        splitter = _ThinkTagSplitter(_emit_text, _emit_think)
 
         try:
             stream = client.chat.completions.create(**body)
@@ -215,9 +288,7 @@ class OpenAICompatProvider(Provider):
                 if think:
                     on_thinking(think)
             if getattr(delta, "content", None):
-                content_parts.append(delta.content)
-                if on_token:
-                    on_token(delta.content)
+                splitter.feed(delta.content)
             for tcd in (getattr(delta, "tool_calls", None) or []):
                 slot = tool_acc.setdefault(tcd.index, {"id": "", "name": "", "args": ""})
                 if tcd.id:
@@ -228,6 +299,7 @@ class OpenAICompatProvider(Provider):
                     slot["args"] += tcd.function.arguments
             if choice.finish_reason:
                 finish_reason = choice.finish_reason
+        splitter.flush()
 
         tool_calls = []
         for _, slot in sorted(tool_acc.items()):

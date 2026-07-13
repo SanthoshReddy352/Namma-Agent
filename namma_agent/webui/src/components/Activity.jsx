@@ -27,6 +27,7 @@ const VERBS = {
   add_reminder: "Set a reminder", list_reminders: "Listed reminders",
   render_diagram: "Drew a diagram", render_simulation: "Built a simulation",
   ping_host: "Pinged a host", public_ip: "Checked the public IP",
+  update_todos: "Updated the todo plan",
 };
 const DETAIL_KEYS = ["query", "q", "url", "path", "file_path", "command", "cmd",
                      "pattern", "name", "place", "location", "topic", "to", "title"];
@@ -46,24 +47,73 @@ export function toolLabel(tool, args = {}) {
   return detail ? `${verb} — ${detail}` : verb;
 }
 
-function Dot({ state }) {
-  const color =
-    state === "running" ? "bg-brand animate-pulse"
-    : state === "ok" ? "bg-emerald-500"
-    : state === "fail" ? "bg-red-500"
-    : "bg-ink-faint";
-  return <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />;
+// Status icon — the same visual language as the TodoPanel: spinning ring while a
+// step runs, green check when it succeeded, red cross when it failed.
+export function StatusIcon({ state, size = 14 }) {
+  if (state === "running") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
+           strokeLinecap="round" className="text-brand animate-spin" style={{ animationDuration: "1.2s" }}>
+        <path d="M21 12a9 9 0 1 1-9-9" />
+      </svg>
+    );
+  }
+  if (state === "ok") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+           strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500">
+        <circle cx="12" cy="12" r="9" /><path d="m8.5 12.5 2.5 2.5 5-5.5" />
+      </svg>
+    );
+  }
+  if (state === "fail") {
+    return (
+      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
+           strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
+        <circle cx="12" cy="12" r="9" /><path d="m9 9 6 6M15 9l-6 6" />
+      </svg>
+    );
+  }
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+         className="text-ink-faint dark:text-night-faint">
+      <circle cx="12" cy="12" r="9" />
+    </svg>
+  );
+}
+
+const SparkIcon = ({ size = 12 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+       strokeLinecap="round" strokeLinejoin="round">
+    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
+    <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z" />
+  </svg>
+);
+
+// Streamed model reasoning — an inset "Thinking" panel, capped at a safety height
+// (it can run long) with internal scroll, so it never swallows the screen.
+function ThinkingBlock({ text }) {
+  return (
+    <li className="rounded-xl bg-paper-soft dark:bg-night-soft border-l-2 border-brand/50 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-medium text-brand-deep dark:text-brand mb-1">
+        <SparkIcon />
+        Thinking
+      </div>
+      <div className="max-h-[160px] overflow-y-auto text-[12.5px] text-ink-soft dark:text-night-faint whitespace-pre-wrap leading-relaxed">
+        {text}
+      </div>
+    </li>
+  );
 }
 
 // Inline tool-approval prompt (Hermes-style): shows what the assistant wants to run,
 // right where it happens in the activity stream, with Approve / Deny actions. Used
-// only in the LIVE timeline — persisted activity never carries an "approval" item
-// (it's resolved before the turn ends). `onApprove(id, approved)` answers it.
+// only in the LIVE timeline — persisted activity records the outcome as a tool step.
 function ApprovalCard({ item, onApprove }) {
   const [open, setOpen] = useState(false);
   const hasArgs = item.args && Object.keys(item.args).length > 0;
   return (
-    <li className="rounded-lg border border-amber-300/70 dark:border-amber-500/40 bg-amber-50/80 dark:bg-amber-500/10 px-3 py-2.5">
+    <li className="rounded-xl border border-amber-300/70 dark:border-amber-500/40 bg-amber-50/80 dark:bg-amber-500/10 px-3 py-2.5">
       <div className="flex items-start gap-2">
         <svg className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" width="15" height="15" viewBox="0 0 24 24"
              fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -107,7 +157,7 @@ function ApprovalCard({ item, onApprove }) {
 }
 
 // One row per activity item: a streamed Thinking block, a spoken preamble, a tool
-// step (dot + friendly label + result summary), or an inline approval prompt.
+// step (status icon + friendly label + result summary), or an inline approval prompt.
 export function StepList({ items, onApprove }) {
   return (
     <ul className="space-y-1.5">
@@ -116,23 +166,31 @@ export function StepList({ items, onApprove }) {
           return <ApprovalCard key={it.id ?? i} item={it} onApprove={onApprove} />;
         }
         if (it.kind === "thinking") {
-          return (
-            <li key={i} className="text-[12.5px] text-ink-soft dark:text-night-faint whitespace-pre-wrap leading-relaxed">
-              {it.text}
-            </li>
-          );
+          return <ThinkingBlock key={i} text={it.text} />;
         }
         if (it.kind === "preamble") {
           return (
-            <li key={i} className="text-[13px] italic text-ink-soft dark:text-night-faint">“{it.text}”</li>
+            <li key={i} className="flex items-start gap-2 text-[13px] italic text-ink-soft dark:text-night-faint">
+              <svg className="mt-[3px] shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none"
+                   stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+              </svg>
+              <span>“{it.text}”</span>
+            </li>
           );
         }
+        const declined = it.state === "fail" && it.summary === "declined";
         return (
-          <li key={i} className="flex items-start gap-2 text-[13px]">
-            <span className="mt-1.5"><Dot state={it.state} /></span>
-            <span className="text-ink-soft dark:text-night-ink">
+          <li key={i} className="flex items-start gap-2 text-[13.5px]">
+            <span className="mt-[2.5px] shrink-0"><StatusIcon state={it.state} /></span>
+            <span className={it.state === "running"
+              ? "text-ink dark:text-night-ink font-medium"
+              : "text-ink-soft dark:text-night-ink"}>
               {toolLabel(it.tool, it.args)}
-              {it.summary && it.state === "fail" && (
+              {declined && (
+                <span className="ml-1.5 text-[12px] font-medium text-amber-600 dark:text-amber-400">— you declined this</span>
+              )}
+              {it.summary && it.state === "fail" && !declined && (
                 <span className="ml-1.5 text-red-500">— {String(it.summary).slice(0, 80)}</span>
               )}
             </span>
@@ -143,7 +201,7 @@ export function StepList({ items, onApprove }) {
   );
 }
 
-// One-line summary of a finished activity timeline, e.g. "Thought · 2 tools".
+// One-line summary of a finished activity timeline, e.g. "Thought it through · 3 steps".
 function summarize(items) {
   const tools = items.filter((it) => it.kind === "tool");
   const thought = items.some((it) => it.kind === "thinking");
@@ -153,22 +211,40 @@ function summarize(items) {
   return bits.join(" · ") || "Activity";
 }
 
-// Persisted activity shown UNDER an assistant reply: a compact, collapsible strip the
-// user can expand to see the thinking + tool steps that produced the answer.
+const ActivityIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+       strokeLinecap="round" strokeLinejoin="round" className="text-brand-deep">
+    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+  </svg>
+);
+
+const Chevron = ({ open }) => (
+  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+       strokeLinecap="round" strokeLinejoin="round"
+       className={`text-ink-faint dark:text-night-faint transition-transform ${open ? "rotate-180" : ""}`}>
+    <path d="m6 9 6 6 6-6" />
+  </svg>
+);
+
+// Persisted activity shown UNDER an assistant reply: the same premium card as the
+// TodoPanel — a header bar (icon + summary + chevron) that expands into the
+// thinking + tool steps that produced the answer, scrolling inside a safety height.
 export default function Activity({ items }) {
   const [open, setOpen] = useState(false);
   if (!items || items.length === 0) return null;
   return (
-    <div className="mb-2 rounded-lg border border-line dark:border-night-line bg-paper-soft/60 dark:bg-night-soft/60">
+    <div className="mb-2 rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel shadow-soft overflow-hidden">
       <button type="button" onClick={() => setOpen((o) => !o)}
-              className="w-full flex items-center gap-1.5 px-2.5 py-1.5 text-[12px] text-ink-faint dark:text-night-faint hover:text-ink dark:hover:text-night-ink">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
-             strokeLinecap="round" strokeLinejoin="round"
-             className={`transition-transform ${open ? "rotate-90" : ""}`}><path d="m9 18 6-6-6-6" /></svg>
-        <span className="font-medium">{summarize(items)}</span>
+              title={open ? "Collapse the activity" : "Show the thinking and tool steps behind this reply"}
+              className="w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-paper-soft dark:hover:bg-night-soft transition">
+        <span className="flex items-center gap-2 text-[12.5px] font-medium text-ink-soft dark:text-night-ink">
+          <ActivityIcon />
+          {summarize(items)}
+        </span>
+        <Chevron open={open} />
       </button>
       {open && (
-        <div className="px-3 pb-2.5 pt-0.5 border-t border-line/70 dark:border-night-line/70">
+        <div className="max-h-[260px] overflow-y-auto px-3.5 pb-2.5 pt-0.5 border-t border-line/70 dark:border-night-line/70">
           <StepList items={items} />
         </div>
       )}

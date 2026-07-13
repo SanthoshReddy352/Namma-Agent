@@ -550,6 +550,11 @@ class Agent:
                     if not approval(tc.name, tc.args):
                         from namma_agent.core.tools import ToolResult
                         declined = ToolResult(ok=False, content="", error="User declined the action.")
+                        # Emit the start too: tool_finished alone matches no running
+                        # step, so the declined confirmation would otherwise vanish
+                        # from the live timeline and the persisted activity.
+                        emit("tool_started", {"session_id": session_id, "tool": tc.name,
+                                              "args": tc.args})
                         emit("tool_finished", {
                             "session_id": session_id, "tool": tc.name,
                             "ok": False, "summary": "declined",
@@ -850,6 +855,26 @@ class Agent:
             ctx = self._cognee_recall_context(user_input)
             if ctx:
                 system += ctx
+        # Steer the model to drive the live TODO panel for multi-step work.
+        if not chat_mode and "update_todos" in self.registry:
+            system = (
+                f"{system}\n\nTODO PLAN — the chat UI shows a live todo panel above the "
+                "message bar, driven ONLY by your `update_todos` calls. For any task that "
+                "needs more than a couple of steps or tools, you MUST use it:\n"
+                "- BEFORE starting the work, call `update_todos` with the full plan: one "
+                "short todo per step, the first `in_progress`, the rest `pending`.\n"
+                "- The tool REPLACES the whole list, so every call resends EVERY todo with "
+                "its current status. The moment a step finishes, call `update_todos` again "
+                "marking it `done` and the next step `in_progress` — update as you go, "
+                "never batch several finished steps into one late update.\n"
+                "- Keep exactly one item `in_progress` at a time.\n"
+                "- If a step turns out to need sub-steps mid-task, add them to that todo's "
+                "`subtasks` (each with its own status) and keep those statuses updated the "
+                "same way.\n"
+                "- Before giving the final answer, make one last `update_todos` call so "
+                "every finished item shows `done` — never end with stale statuses.\n"
+                "- SKIP the todo list entirely for trivial or single-step requests."
+            )
         messages: list[dict] = [{"role": "system", "content": system}]
         messages.extend(self.db.recent_turns(session_id, self.max_history_turns))
         messages.append({"role": "user", "content": user_input})

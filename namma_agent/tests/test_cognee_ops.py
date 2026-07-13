@@ -77,37 +77,27 @@ def test_consolidate_offline_errors_cleanly():
     assert out["ok"] is False and "not connected" in out["error"]
 
 
-class FakeDB:
-    def __init__(self, facts=None, turns=None):
-        self._facts, self._turns = facts or [], turns or []
-
-    def search_facts(self, query, limit=10):
-        return self._facts
-
-    def search_turns(self, query, limit=10):
-        return self._turns
+def _svc_with_disk_buffer(tmp_path):
+    """A bare service whose pending-consolidation buffer persists under tmp_path."""
+    s = NammaAgentService.__new__(NammaAgentService)
+    s._cognee_client = lambda: FakeCogneeClient()
+    s.config = {"database": {"path": str(tmp_path / "namma_agent.db")}}
+    return s
 
 
-def test_memory_compare_keyword_miss_cognee_hit(svc):
-    # keyword search finds nothing; Cognee answers → the money shot
-    svc.db = FakeDB(facts=[], turns=[])
-    out = svc.memory_compare("which database engine do I favour?")
-    assert out["ok"]
-    assert out["fts"]["count"] == 0
-    assert out["cognee"]["connected"] is True
-    assert "recall:" in out["cognee"]["answer"]   # from FakeCogneeClient
+def test_session_buffer_survives_restart(tmp_path):
+    # Buffered session memories must not vanish on an app restart — they'd
+    # silently drop out of the Consolidate queue and never reach the graph.
+    first = _svc_with_disk_buffer(tmp_path)
+    first.cognee_remember("fact before restart", permanent=False)
+    assert first.cognee_pending() == 1
+
+    reborn = _svc_with_disk_buffer(tmp_path)      # fresh process, same data dir
+    assert reborn.cognee_pending() == 1
+    out = reborn.cognee_consolidate()
+    assert out["ok"] and out["consolidated"] == 1
+
+    third = _svc_with_disk_buffer(tmp_path)       # consolidation also persisted
+    assert third.cognee_pending() == 0
 
 
-def test_memory_compare_includes_keyword_hits(svc):
-    svc.db = FakeDB(facts=[{"key": "language", "value": "Python"}],
-                    turns=[{"role": "user", "content": "I love Python"}])
-    out = svc.memory_compare("python")
-    assert out["ok"] and out["fts"]["count"] == 2
-    kinds = {h["kind"] for h in out["fts"]["hits"]}
-    assert "fact" in kinds and "user" in kinds
-
-
-def test_memory_compare_rejects_empty(svc):
-    svc.db = FakeDB()
-    out = svc.memory_compare("  ")
-    assert out["ok"] is False
