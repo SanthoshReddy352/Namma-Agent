@@ -11,6 +11,7 @@ from __future__ import annotations
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from namma_agent.core.docscan import screen_web_text
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
@@ -80,7 +81,11 @@ def _news(args: dict) -> ToolResult:
     lines = [f"Top {category} headlines:"]
     for i, h in enumerate(headlines, 1):
         lines.append(f"{i}. {h['title']}" + (f"\n   {h['url']}" if h["url"] else ""))
-    return ToolResult(ok=True, content="\n".join(lines), data=headlines)
+    # Headlines are fetched third-party text — same injection screening as pages.
+    content, report = screen_web_text("\n".join(lines), source="the news feed")
+    return ToolResult(ok=True, content=content,
+                      data={"headlines": headlines, "flagged": True,
+                            "reasons": report.reasons} if report.flagged else headlines)
 
 
 def register(registry: ToolRegistry) -> None:

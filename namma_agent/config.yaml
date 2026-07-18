@@ -68,6 +68,34 @@ provider:
 #   - label: Llama 3.3 (Groq)
 #     provider: groq
 #     model: llama-3.3-70b
+#
+#   # A LOCAL model (LM Studio / Ollama) with a small context window (~20K tokens)
+#   # needs a lighter turn than a cloud brain — otherwise the fixed prompt (tool
+#   # schemas + persona + history) plus one big tool result overflows the window,
+#   # the endpoint silently truncates, and the model stops calling tools mid-task.
+#   # Each knob below is optional and overrides the global setting FOR THIS MODEL
+#   # ONLY (0 / unset = inherit), so cloud profiles stay full-fat:
+#   - label: Qwen3 14B (LM Studio)
+#     type: lmstudio                     # inline connection; base_url defaults to
+#     model: qwen3-14b                   # http://localhost:1234/v1
+#     max_tokens: 2048                   # output cap — reserved INSIDE the context window
+#     timeout_s: 180                     # local prefill is slow; don't kill the turn early
+#     max_history_turns: 4               # fewer past turns in each prompt
+#     tool_result_max_chars: 8000        # cap each tool result fed back to the model
+#     tools_allow: [file_ops, web, system, memory, update_todos]
+#                                        # expose only these toolsets/tools (names from
+#                                        # Settings → Toolsets) — fewer schemas = a far
+#                                        # smaller prompt + sharper tool selection
+
+# ── Tools exposed to the model ─────────────────────────────────────
+# By default the model sees EVERY enabled tool (~60-90 schemas ≈ 6-8K prompt
+# tokens per request). `allow` scopes that to a subset — entries may be tool
+# names or whole toolset (category) names from Settings → Toolsets. Essential
+# for small-context local models; prefer the per-model `tools_allow` override
+# in `models:` above so only local brains are scoped. (`disabled` is written by
+# the Toolsets tab into config.local.yaml — don't hand-edit it here.)
+# tools:
+#   allow: [file_ops, web, system, memory, update_todos]
 
 # ── Persona ────────────────────────────────────────────────────────
 persona: core              # loaded from personas/<id>.yaml
@@ -76,10 +104,6 @@ persona: core              # loaded from personas/<id>.yaml
 skills:
   user_dir: ~/.namma_agent/skills      # where create_skill writes learned skills
   allow_inline_shell: false       # expand !`cmd` snippets inside SKILL.md (off by default)
-
-# ── Memory (curated notes + cross-session recall, ported from hermes) ─
-memory:
-  notes_dir: data/memory          # USER.md + MEMORY.md the agent curates
 
 # ── Browser (controlled, visible browser for real video playback + control) ──
 browser:
@@ -97,6 +121,17 @@ browser:
 scheduler:
   run_in_background: false        # auto-fire due reminders from a polling thread
 
+# ── Proactive routines (the agent reaches out FIRST) ────────────────
+# Standing scheduled tasks ("every morning at 08:00: brief me on my day"): each
+# run is a full agent turn whose result is delivered over your messaging
+# channels (or a desktop notification). Ask the assistant to "create a routine"
+# — creating one is the opt-in; the poll thread only runs while at least one
+# enabled routine exists. Destructive tools are always declined in routine runs.
+routines:
+  enabled: true                   # false hides the tools and never polls
+  # poll_seconds: 30              # how often due routines are checked
+  # store_path: data/routines.json
+
 # ── Learning Room ───
 learning:
   notify_progress: true           # Telegram/Discord ping when a module completes (needs comms)
@@ -104,6 +139,18 @@ learning:
                                   # the nudge thread rides scheduler.run_in_background)
 comms:
   inbound_enabled: true           # reply to Telegram messages (needs NAMMA_TELEGRAM_TOKEN + CHAT_ID; polling thread)
+  # Per-channel trust levels (Settings → Messaging): owner | trusted | untrusted.
+  # An UNTRUSTED sender's turn runs with destructive tools stripped + declined,
+  # the message wrapped in a data-not-instructions guard in the prompt, and its
+  # memory writes quarantined for review instead of stored. Defaults: pinned-id
+  # channels (telegram/signal) are owner; open webhooks (slack/whatsapp) are
+  # untrusted; unknown channels are always untrusted.
+  # trust:
+  #   telegram: owner
+  #   signal: owner
+  #   discord: trusted
+  #   slack: untrusted
+  #   whatsapp: untrusted
   # Transcribe Telegram voice messages (optional — local STT was removed; the web
   # UI uses the browser, but Telegram needs a transcription endpoint). Put the key
   # in .env under api_key_env. Works with OpenAI or any OpenAI-compatible STT
@@ -120,7 +167,22 @@ conversation:
   progress_delays_s: [4.0, 12.0, 25.0]
   max_history_turns: 12
   tool_loop_limit: 0              # 0 = UNLIMITED tool steps (use the Stop button to halt); >0 = hard cap
+  # Cap on EACH tool result fed back into the model's context, in characters
+  # (0 = unlimited). Protects small-context models from one big document read
+  # overflowing the whole window; the model is told the result was truncated so
+  # it can re-query narrower. Prefer the per-model override in `models:` so only
+  # local brains are capped (~8000 chars ≈ 2K tokens is a good local value).
+  tool_result_max_chars: 0
   memory_nudge_every: 6            # remind the model to curate memory every N exchanges (0=off)
+  # Rolling context compaction: when a chat outgrows max_history_turns, a running
+  # summary of the evicted part is maintained (background, provider chain) and
+  # injected into every prompt — the model never silently loses the middle of a
+  # long conversation. false disables it.
+  compact_history: true
+  # Self-verification: if a turn wrote/edited files and the model tries to answer
+  # without any check after the write, nudge it ONCE to verify (re-read the file,
+  # run a quick check) before finalizing. false disables the nudge.
+  verify_after_writes: true
   default_mode: agent             # 'agent' (all tools/skills) or 'chat' (pure conversation)
   auto_approve: false             # Auto mode: run destructive tools (shell etc.) without asking permission
 
@@ -151,6 +213,25 @@ security:
     # extra_protected_write_paths: ["D:\\Games", "/mnt/backups"]  # ALSO read-only
     # protected_write_paths: [...]   # REPLACE the OS/software read-only roots
     # writable_anywhere: false       # true = allow writes everywhere except secrets
+  # ── Shell sandbox (Phase 1c) ──
+  # Every run_shell child runs inside OS-level resource caps: a Windows Job
+  # Object (kill-on-close — a timeout kill also takes down every descendant —
+  # memory cap, fork-bomb guard, no breakaway) or POSIX rlimits (address space /
+  # CPU / file size, inherited by descendants). If the OS refuses (rare), Namma
+  # warns once in the log and runs as before.
+  sandbox:
+    enabled: true
+    memory_mb: 4096               # per-process memory cap (0 = off)
+    cpu_seconds: 0                # cumulative CPU-time cap (0 = off; the per-
+                                  # command timeout is the first line of defense)
+    fsize_mb: 0                   # POSIX: largest file a child may create (0 = off)
+    max_processes: 128            # Windows: active processes in the job (0 = off)
+  # ── Confined shell root (optional, off by default) ──
+  # When set, run_shell commands that reference absolute paths outside this
+  # folder (or run while cd'd outside it) require your explicit in-chat
+  # approval first. A tripwire against the agent wandering, not a jail.
+  # shell:
+  #   confine_to: "D:\\AgentWork"
   # nmap_binary: nmap
   # gobuster_binary: gobuster
   # dig_binary: dig
@@ -188,20 +269,34 @@ security:
 #       command: ["uvx", "mcp-server-git"]
 #       enabled: true
 
-# ── Cognee memory (THE memory — semantic + knowledge graph via the cognee MCP server) ──
-# Cognee is Namma's only long-term memory (SQLite holds transcripts/app state, not
-# memory). Connect the cognee server in Settings → MCP → Cognee (see docs/COGNEE.md).
-# cognee:
-#   auto_ingest: true      # after each turn, background-ingest the user's message into
-#                          # the Cognee graph (cognify) — off the reply path; the graph
-#                          # grows from normal chat. No-op until the server is connected.
-#   ingest_replies: false  # also include the assistant's reply in what gets ingested
-#   ingest_learning: true  # when a Learning-Room module is completed, push its recap
-#                          # (concepts + running example) into the Cognee graph too, so
-#                          # the Memory graph grows from what you study.
-#   recall_context: true   # proactively inject a Cognee recall for recall-style questions
-#                          # ("what do you know about me?") so memory is guaranteed in
-#                          # normal chat even if the model skips the tool call.
+# ── Memory (Engram — THE memory; see docs/MEMORY_SYSTEM_DESIGN.md) ──
+# Native in-process memory: bounded core memory in every prompt, bi-temporal facts
+# + entity graph in SQLite, fused millisecond recall, always-on salience-gated
+# learning, and a persistent host model (OS/drives/folders/installed tools).
+# All memory model calls use the model YOU picked in Settings (the provider
+# chain) — never a hardcoded one. Manage everything from Settings → Memory
+# (writes config.local.yaml, applies live); values below are optional tuning.
+# An external memory MCP server (e.g. Cognee) can still be attached as a plain
+# plugin under mcp.servers — it is additive, never load-bearing.
+# memory:
+#   write:
+#     salience_min_chars: 24   # user messages shorter than this are never extracted
+#     budget_per_hour: 60      # cap on memory-pipeline model calls per hour
+#   embeddings:                # OPTIONAL vector recall channel (catches paraphrases
+#     base_url: http://localhost:1234/v1   # any OpenAI-compatible /embeddings —
+#     model: text-embedding-nomic-embed-text-v1.5   # OpenAI, Groq, LM Studio, Ollama
+#     api_key_env: OPENAI_API_KEY          # not needed for localhost endpoints
+#                              # unset = recall stays BM25-only (works fine offline)
+#   recall:
+#     prefetch: true           # auto-inject relevant memory into each agent turn
+#     k: 5                     # max prefetched memories per turn
+#   consolidate:               # sleep-time self-improvement (design §8) — summarize,
+#     background: true         #   promote, merge, decay, reflect, compact, re-probe host.
+#     idle_minutes: 20         # run after this much inactivity (0 = never on idle)
+#     daily_at: "03:30"        # and once daily at this local time ("" = never)
+#     half_life_days: 30       # decay: how fast unreinforced facts fade
+#     archive_floor: 0.05      # decay score below which a fact is archived
+#     event_horizon_days: 90   # 'event' facts older than this expire on their own
 
 # ── Logging ────────────────────────────────────────────────────────
 logging:

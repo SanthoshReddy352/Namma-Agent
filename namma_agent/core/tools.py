@@ -230,14 +230,21 @@ class ToolRegistry:
                               error=f"Tool '{name}' is disabled in the Toolsets settings.")
         if tool.destructive and self._approval and not self._approval(tool, args):
             return ToolResult(ok=False, content="", error="User declined the action.")
+        # Phase 1d: known secret values are masked in everything the model (and
+        # the Activity strip / persisted steps, which render the same content)
+        # gets back — a `cat .env` never hands the model a live credential.
+        from namma_agent.core.secrets import redact
+
         try:
             result = tool.handler(args)
-            if isinstance(result, ToolResult):
-                return result
-            return ToolResult(ok=True, content=_coerce_content(result), data=result)
+            if not isinstance(result, ToolResult):
+                result = ToolResult(ok=True, content=_coerce_content(result), data=result)
+            result.content = redact(result.content)
+            result.error = redact(result.error)
+            return result
         except Exception as exc:  # noqa: BLE001 - surfaced back to the model
             logger.warning("[tools] %s raised: %s", name, exc)
-            return ToolResult(ok=False, content="", error=str(exc))
+            return ToolResult(ok=False, content="", error=redact(str(exc)))
 
 
 def tool(name: str, description: str, parameters: dict, destructive: bool = False):

@@ -1,11 +1,20 @@
-"""File tools — read, write, list, and organise. All paths go through PathSecurity."""
+"""File tools — read, write, list, and organise.
+
+Every model-written path is first normalized against the REAL host by
+``engram.environment.resolve_path`` (expands ``~``, maps spoken folder names,
+fixes POSIX guesses on Windows, rejects nonexistent drives with the actual
+layout quoted — so a wrong guess teaches the model the filesystem), then
+validated by PathSecurity.
+"""
 from __future__ import annotations
 
 import fnmatch
 import os
 import shutil
 from pathlib import Path
+from typing import Optional
 
+from namma_agent.core.engram.environment import resolve_path
 from namma_agent.core.safety import check_path
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
@@ -25,11 +34,19 @@ _ORGANIZE_BUCKETS = {
 }
 
 
+def _checked(raw: str, write: bool = False) -> tuple[str, Optional[str]]:
+    """Host-resolve then security-validate a path. Returns ``(path, error)``."""
+    path, err = resolve_path(raw)
+    if err:
+        return path, err
+    ok, reason = check_path(path, write=write)
+    return path, (None if ok else reason)
+
+
 def _read_file(args: dict) -> ToolResult:
-    path = args.get("path", "")
-    ok, reason = check_path(path)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    path, err = _checked(args.get("path", ""))
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     p = Path(path).expanduser()
     if not p.is_file():
         return ToolResult(ok=False, content="", error=f"not a file: {path}")
@@ -38,10 +55,9 @@ def _read_file(args: dict) -> ToolResult:
 
 
 def _write_file(args: dict) -> ToolResult:
-    path = args.get("path", "")
-    ok, reason = check_path(path, write=True)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    path, err = _checked(args.get("path", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     p = Path(path).expanduser()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(args.get("content", ""), encoding="utf-8")
@@ -49,10 +65,9 @@ def _write_file(args: dict) -> ToolResult:
 
 
 def _list_dir(args: dict) -> ToolResult:
-    path = args.get("path", ".")
-    ok, reason = check_path(path)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    path, err = _checked(args.get("path", "."))
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     p = Path(path).expanduser()
     if not p.is_dir():
         return ToolResult(ok=False, content="", error=f"not a directory: {path}")
@@ -72,11 +87,12 @@ def _bucket_for(ext: str) -> str:
 
 def _move_path(args: dict) -> ToolResult:
     # A move both removes the source and creates the dest, so BOTH ends are writes.
-    src, dst = args.get("source", ""), args.get("dest", "")
-    for path in (src, dst):
-        ok, reason = check_path(path, write=True)
-        if not ok:
-            return ToolResult(ok=False, content="", error=reason)
+    src, err = _checked(args.get("source", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
+    dst, err = _checked(args.get("dest", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     sp, dp = Path(src).expanduser(), Path(dst).expanduser()
     if not sp.exists():
         return ToolResult(ok=False, content="", error=f"not found: {src}")
@@ -90,11 +106,12 @@ def _move_path(args: dict) -> ToolResult:
 def _copy_path(args: dict) -> ToolResult:
     # Source is only read; dest is written — so a copy OUT of a system dir is fine,
     # but a copy INTO one is refused.
-    src, dst = args.get("source", ""), args.get("dest", "")
-    for path, is_write in ((src, False), (dst, True)):
-        ok, reason = check_path(path, write=is_write)
-        if not ok:
-            return ToolResult(ok=False, content="", error=reason)
+    src, err = _checked(args.get("source", ""))
+    if err:
+        return ToolResult(ok=False, content="", error=err)
+    dst, err = _checked(args.get("dest", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     sp, dp = Path(src).expanduser(), Path(dst).expanduser()
     if not sp.exists():
         return ToolResult(ok=False, content="", error=f"not found: {src}")
@@ -111,10 +128,9 @@ def _copy_path(args: dict) -> ToolResult:
 
 
 def _delete_path(args: dict) -> ToolResult:
-    path = args.get("path", "")
-    ok, reason = check_path(path, write=True)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    path, err = _checked(args.get("path", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     p = Path(path).expanduser()
     if not p.exists():
         return ToolResult(ok=False, content="", error=f"not found: {path}")
@@ -126,20 +142,18 @@ def _delete_path(args: dict) -> ToolResult:
 
 
 def _make_dir(args: dict) -> ToolResult:
-    path = args.get("path", "")
-    ok, reason = check_path(path, write=True)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    path, err = _checked(args.get("path", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     Path(path).expanduser().mkdir(parents=True, exist_ok=True)
     return ToolResult(ok=True, content=f"Created {path}")
 
 
 def _find_files(args: dict) -> ToolResult:
-    root = args.get("path", ".")
     pattern = args.get("pattern", "*")
-    ok, reason = check_path(root)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    root, err = _checked(args.get("path", "."))
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     base = Path(root).expanduser()
     if not base.is_dir():
         return ToolResult(ok=False, content="", error=f"not a directory: {root}")
@@ -159,10 +173,9 @@ def _find_files(args: dict) -> ToolResult:
 
 
 def _organize_dir(args: dict) -> ToolResult:
-    path = args.get("path", "")
-    ok, reason = check_path(path, write=True)
-    if not ok:
-        return ToolResult(ok=False, content="", error=reason)
+    path, err = _checked(args.get("path", ""), write=True)
+    if err:
+        return ToolResult(ok=False, content="", error=err)
     base = Path(path).expanduser()
     if not base.is_dir():
         return ToolResult(ok=False, content="", error=f"not a directory: {path}")

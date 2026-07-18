@@ -44,7 +44,7 @@ def wired():
     reg = ToolRegistry()
     ing = _StubIngestor()
     reg._test_ingestor = ing  # handle for tests
-    register_memory_tools(reg, db, get_cognee_ingestor=lambda: ing)
+    register_memory_tools(reg, db, get_plugin_ingestor=lambda: ing)
     # a couple of research tools so delegate_task has something to copy
     reg.register("system_info", "host", {"type": "object", "properties": {}},
                  lambda a: ToolResult(ok=True, content="os: TestOS"))
@@ -61,17 +61,17 @@ def test_memory_tools_registered(wired):
         assert name in reg
 
 
-def test_remember_fact_goes_to_cognee(wired):
+def test_remember_fact_goes_to_ingestor(wired):
     reg, db, _ = wired
     assert reg.execute("remember_fact", {"key": "editor", "value": "neovim"}).ok
     assert any("neovim" in t for t in reg._test_ingestor.texts)
-    assert db.all_facts() == []  # Cognee is the memory - no SQLite fact rows
+    assert db.all_facts() == []  # the pipeline is the memory - no SQLite fact rows
 
 
-def test_recall_facts_requires_cognee(wired):
+def test_recall_facts_requires_memory_engine(wired):
     reg, _, _ = wired
     r = reg.execute("recall_facts", {"query": "editor"})
-    assert not r.ok and "cognee" in (r.error or "").lower()
+    assert not r.ok and "memory engine" in (r.error or "").lower()
 
 
 def test_search_conversations(wired):

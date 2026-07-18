@@ -282,9 +282,85 @@ window, `installer/` + `installers/native/build.py`) and **plain bootstrap scrip
 - Files: `installer/core.py`, `installer/app.py`, `installers/{install.ps1,install.sh,uninstall.ps1,uninstall.sh}`,
   `installers/native/build.py`, `namma_agent/core/{uninstaller.py,setup_wizard.py}`, `tests/test_installer.py`.
 
-## Phase 8 — "Better than Hermes" extras
-- [ ] Gap-analysis pass: catalog Hermes UI/backend features not yet captured above; pull the worthwhile ones in.
-- [ ] Identify Namma-only improvements that push past Hermes.
+## Phase 8 — "Better than Hermes" extras  ✅ (first wave, 2026-07-17)
+- [x] **Rolling context compaction** — long chats keep an LLM-maintained running summary
+  of turns evicted from the history window (`sessions.compact_summary/compact_upto`),
+  injected into every prompt ("EARLIER IN THIS CONVERSATION"); updated in the background
+  every ~3 evicted exchanges. `conversation.compact_history` (default on).
+  Files: `core/agent.py` (`_schedule_compaction`/`_update_compaction`), `core/memory.py`
+  (`get/set_compaction`, `evicted_turns`), `tests/test_compaction.py` (7).
+- [x] **Self-verification nudge** — a turn that wrote files (destructive tool in a
+  write-ish toolset: file_ops/documents/authoring/convert) and tries to finalize without
+  any check afterwards gets ONE `[system]` nudge to verify before answering; shell/comms
+  are exempt (results carry their own proof). `conversation.verify_after_writes`
+  (default on). Files: `core/agent.py`, `tests/test_verify_nudge.py` (6).
+- [x] **Proactive routines** — standing scheduled agent runs delivered over comms
+  ("morning brief"): `core/routines.py` (store `data/routines.json`, pure schedule math
+  interval/daily/weekly, lazy-started `RoutineRunner`), tools create/list/toggle/delete/
+  run-now (create+delete approval-gated), API `/api/routines*`, service delivery
+  comms-first → native-notification fallback; routine turns always DECLINE destructive
+  tools. `routines.enabled` (default on; thread only runs when a routine exists).
+  Tests: `tests/test_routines.py` (10).
+- [x] **Background tasks + scoped sub-agents** — `background_task` runs a sub-agent on a
+  detached thread (returns an id immediately, comms ping on completion,
+  `check_background_task` fetches results); `delegate_task` + `background_task` accept
+  an optional `toolsets` scope — destructive tools are ALWAYS stripped from sub-agents
+  (no approval channel). Files: `core/builtins.py` (`register_agent_tools`),
+  `tests/test_background_tasks.py` (5).
+- [x] **Embeddings-backed recall (vector channel)** — optional `memory.embeddings`
+  (any OpenAI-compatible `/embeddings`: OpenAI/Groq/LM Studio/Ollama, stdlib urllib);
+  `memory_vectors` BLOBs + brute-force cosine in `engram/store.py`; new facts embedded
+  on write, consolidation backfills missed ones, recall fuses the vector list via RRF —
+  catches paraphrases BM25 misses ("my college" → KARE). Unconfigured = BM25-only as
+  before. Files: `core/engram/{embeddings.py,store.py,recall.py,writer.py,__init__.py}`,
+  `tests/test_engram_vectors.py` (9).
+- [x] **Cross-chat search in the sidebar** — `GET /api/search` (FTS5 over turns, grouped
+  by session w/ title+snippet+date) + a debounced search box above Recent in
+  `Sidebar.jsx`. Verified live in the app. Files: `service.py` (`search_chats`),
+  `server/api.py`, `webui/src/{api.js,components/Sidebar.jsx}`, `tests/test_server.py`.
+- [x] **Hands-free voice mode** — wake-word listening (the configurable assistant name)
+  via continuous Web Speech recognition; command inline ("<name>, do X") or two-step
+  ("<name>?" → 8s window); replies spoken with the mic paused (no feedback loop);
+  headset toggle in the composer (the click is the mic-permission gesture). Browser-
+  native, zero backend audio. Files: `webui/src/{handsfree.js,api.js,components/
+  Composer.jsx,views/ChatView.jsx}`.
+- [x] **Memory eval** — `scripts/memory_eval.py` (+ `core/engram/evaluate.py`): seeds a
+  12-case dataset through the REAL write pipeline, scores recall@k; `--mock` isolates
+  retrieval (offline, 92% recall@5 — the one miss is the paraphrase case the vector
+  channel targets), `--min-score` gates. Tests: `tests/test_memory_eval.py` (3).
+- [x] **Engram writer fixes** — failed provider calls no longer consume the hourly
+  write budget; salience gate lowers the length bar for non-Latin scripts (Telugu etc.);
+  queue type hint corrected. Files: `core/engram/writer.py`, `tests/test_engram.py`.
+- [x] Full suite **672 pass, 3 skipped**; web UI build clean; search verified live.
+
+### Second wave (2026-07-17) — observability + consolidation polish
+- [x] **Background-work observability** — `NammaAgentService.background_status()`
+  aggregates every background subsystem (memory writer queue, consolidator + last
+  run, context compactor, routines runner + per-routine state, background tasks,
+  reminders, learning nudger, comms gateway, embeddings on/off) + a 7-day usage
+  summary; `GET /api/status`; new **Settings → System → Status** tab (live rows w/
+  green dots, 5 s refresh). Verified live in the app (real data: consolidator
+  scheduled, comms listening). Files: `service.py`, `server/api.py`,
+  `webui/src/{api.js,components/Settings.jsx}`, `tests/test_server.py`.
+- [x] **Cumulative token-usage view** — `Database.usage_stats()` folds the per-turn
+  `{tokens, cached}` meta into daily buckets + totals; shown in the Status tab
+  (total / cached reads / turns tiles + per-day table). Live app shows 1.1M tokens,
+  11.0M cached over 41 recorded turns. Files: `core/memory.py`, `tests/test_server.py`.
+- [x] **Background tasks persist across restarts** — entries mirror to
+  `data/background_tasks.json` (newest 50); finished results survive a restart;
+  tasks that were running when the process died surface as **interrupted** with a
+  clear error; `register_agent_tools` returns handles for the status surface.
+  Files: `core/builtins.py`, `tests/test_background_tasks.py` (7).
+- [x] **Routines tab** — **Settings → Capabilities → Routines**: list w/ schedule
+  chip + last-run, enable/disable toggle, Run now (reports delivery), two-click
+  delete; empty state points at creating routines by chat. Verified live.
+  Files: `webui/src/{api.js,components/Settings.jsx}`.
+- [x] **docs/ARCHITECTURE.md refreshed** — a "July 2026 update" preamble covers
+  Engram, compaction, verify nudge, routines, background tasks, embeddings,
+  observability, hands-free voice, and cross-chat search (diagram set unchanged).
+- [x] Full suite **676 pass, 3 skipped**; web UI build clean; Status + Routines
+  tabs verified in the running app.
+- [ ] Gap-analysis pass: catalog Hermes UI/backend features not yet captured above; pull the worthwhile ones in. *(Deferred — image-gen explicitly skipped per user 2026-07-17.)*
 
 ---
 

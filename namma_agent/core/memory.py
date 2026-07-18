@@ -171,6 +171,10 @@ _SESSION_MIGRATIONS = [
     "ALTER TABLE sessions ADD COLUMN meta TEXT",
     # The model profile id this session is bound to (model switching = new session).
     "ALTER TABLE sessions ADD COLUMN model TEXT",
+    # Rolling context compaction: a running summary of the turns that have fallen
+    # off the history window, and the highest turn id it covers.
+    "ALTER TABLE sessions ADD COLUMN compact_summary TEXT",
+    "ALTER TABLE sessions ADD COLUMN compact_upto INTEGER DEFAULT 0",
     "ALTER TABLE learning_topics ADD COLUMN insights TEXT",
     "ALTER TABLE learning_topics ADD COLUMN preferences TEXT",
     # Full quiz payloads (not just question + right/wrong) so the dashboard can
@@ -294,6 +298,40 @@ class Database:
                 (session_id, limit),
             ).fetchall()
         return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+
+    # -- rolling context compaction -----------------------------------------
+
+    def get_compaction(self, session_id: str) -> dict:
+        """The session's rolling summary of evicted history: {summary, upto}."""
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT compact_summary, compact_upto FROM sessions WHERE id=?",
+                (session_id,)).fetchone()
+        if not row:
+            return {"summary": "", "upto": 0}
+        return {"summary": row["compact_summary"] or "",
+                "upto": int(row["compact_upto"] or 0)}
+
+    def set_compaction(self, session_id: str, summary: str, upto: int) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE sessions SET compact_summary=?, compact_upto=? WHERE id=?",
+                (summary.strip(), int(upto), session_id))
+            self.conn.commit()
+
+    def evicted_turns(self, session_id: str, window: int,
+                      after_id: int = 0) -> list[dict]:
+        """Conversation turns that have fallen OFF the recent-history window (the
+        newest ``window`` rows) and are newer than ``after_id`` — i.e. what the
+        rolling summary hasn't covered yet. Chronological order, with ids."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, role, content FROM turns WHERE session_id=? "
+                "AND role IN ('user','assistant') AND id > ? "
+                "ORDER BY id DESC LIMIT -1 OFFSET ?",
+                (session_id, int(after_id), max(0, int(window)))).fetchall()
+        return [{"id": r["id"], "role": r["role"], "content": r["content"]}
+                for r in reversed(rows)]
 
     # -- facts -------------------------------------------------------------
 
@@ -1096,6 +1134,37 @@ class Database:
 
     # -- audit -------------------------------------------------------------
 
+    def usage_stats(self, days: int = 30, scan_limit: int = 20000) -> dict:
+        """Cumulative token usage, summed from the per-turn stats already
+        persisted in assistant turns' ``meta`` ({tokens, cached}). Grouped by
+        UTC day (the stored timestamp), newest first, plus an all-scanned total.
+        ``scan_limit`` bounds the work on huge histories."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT created_at, meta FROM turns WHERE role='assistant' "
+                "AND meta IS NOT NULL ORDER BY id DESC LIMIT ?",
+                (int(scan_limit),)).fetchall()
+        by_day: dict[str, dict] = {}
+        total = {"tokens": 0, "cached": 0, "turns": 0}
+        for r in rows:
+            try:
+                meta = json.loads(r["meta"] or "{}")
+            except ValueError:
+                continue
+            tokens = int(meta.get("tokens") or 0)
+            cached = int(meta.get("cached") or 0)
+            if not tokens and not cached:
+                continue
+            day = (r["created_at"] or "")[:10]
+            bucket = by_day.setdefault(day, {"tokens": 0, "cached": 0, "turns": 0})
+            for target in (bucket, total):
+                target["tokens"] += tokens
+                target["cached"] += cached
+                target["turns"] += 1
+        day_rows = [{"date": d, **v} for d, v in
+                    sorted(by_day.items(), reverse=True)[:max(1, int(days))]]
+        return {"total": total, "days": day_rows}
+
     def log_audit(self, session_id: Optional[str], tool_name: str, args: dict,
                   result_summary: str, success: bool = True) -> None:
         with self._lock:
@@ -1106,3 +1175,65 @@ class Database:
                  result_summary[:500], int(success), _now()),
             )
             self.conn.commit()
+
+    def recent_audit(self, limit: int = 50) -> list[dict]:
+        """The newest tool executions (the approval/audit trail), newest first.
+        ``success=0`` rows include user-declined destructive calls."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, session_id, tool_name, args, result_summary, success, "
+                "created_at FROM audit ORDER BY id DESC LIMIT ?",
+                (max(1, int(limit)),)).fetchall()
+        out = []
+        for r in rows:
+            args = r["args"] or ""
+            out.append({
+                "id": r["id"], "session_id": r["session_id"],
+                "tool": r["tool_name"],
+                "args": args[:200] + ("…" if len(args) > 200 else ""),
+                "summary": (r["result_summary"] or "")[:200],
+                "ok": bool(r["success"]),
+                "at": r["created_at"],
+            })
+        return out
+
+    def flagged_documents(self) -> list[dict]:
+        """Every quarantined (flagged) project document, with its project name —
+        the Security tab's document-quarantine section."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT d.id, d.name, d.status, d.flag_reasons, d.created_at, "
+                "p.name AS project FROM project_documents d "
+                "LEFT JOIN projects p ON p.id = d.project_id "
+                "WHERE d.status = 'flagged' ORDER BY d.created_at DESC").fetchall()
+        out = []
+        for r in rows:
+            try:
+                reasons = json.loads(r["flag_reasons"] or "[]")
+            except ValueError:
+                reasons = []
+            out.append({"id": r["id"], "name": r["name"], "project": r["project"],
+                        "reasons": [str(x)[:160] for x in reasons][:4],
+                        "at": r["created_at"]})
+        return out
+
+    def skill_usage(self, since: Optional[str] = None) -> dict:
+        """``{skill_name: times loaded}`` from successful ``use_skill`` audit rows
+        (optionally only after ``since``, an ISO timestamp). Feeds the memory
+        consolidator: skills the user exercises reinforce related facts."""
+        q = "SELECT args FROM audit WHERE tool_name='use_skill' AND success=1"
+        params: list = []
+        if since:
+            q += " AND created_at > ?"
+            params.append(since)
+        with self._lock:
+            rows = self.conn.execute(q, params).fetchall()
+        counts: dict[str, int] = {}
+        for (raw,) in rows:
+            try:
+                name = str((json.loads(raw or "{}") or {}).get("name") or "").strip()
+            except ValueError:
+                continue
+            if name:
+                counts[name] = counts.get(name, 0) + 1
+        return counts

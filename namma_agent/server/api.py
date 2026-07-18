@@ -5,7 +5,10 @@ WebSocket ``/ws``: the live turn channel. The client sends ``user_input``; the
 server streams a typed event protocol back:
 
     {"type": "token",            "text": ...}
-    {"type": "preamble",         "text": ...}
+    {"type": "preamble",         "text": ..., "visible": ...}  # visible = canonical
+    #   bubble content so far (media only) — the client rewinds the streamed bubble
+    #   to it so progress lines live in the activity timeline, not the chat bubble.
+    #   Omitted on teaching turns, whose explanations stay in the answer.
     {"type": "tool_started",     "tool": ..., "args": ...}
     {"type": "approval_request", "id": ..., "tool": ..., "args": ...}
     {"type": "tool_finished",    "tool": ..., "ok": ...}
@@ -69,6 +72,20 @@ class SettingsBody(BaseModel):
     env: dict = {}      # written to .env (e.g. API keys)
 
 
+class TrustBody(BaseModel):
+    channel: str
+    level: str
+
+
+class SecretBody(BaseModel):
+    name: str
+    value: str = ""
+
+
+class SecretsMigrateBody(BaseModel):
+    scrub: bool = False
+
+
 class McpServerToggleBody(BaseModel):
     name: str
     enabled: bool = True
@@ -77,27 +94,30 @@ class McpServerToggleBody(BaseModel):
 class MemoryRecallBody(BaseModel):
     query: str = ""
     top_k: int = 8
+    include_expired: bool = False
 
 
 class MemoryRememberBody(BaseModel):
     text: str = ""
-    permanent: bool = True   # False = fast session memory (no graph build)
 
 
 class MemoryForgetBody(BaseModel):
-    dataset: str = ""
+    query: str = ""
+    item_id: str = ""
     everything: bool = False
+    hard: bool = False       # hard-delete instead of invalidate
 
 
-class CogneeSettingsBody(BaseModel):
-    env: dict = {}     # LLM_*/EMBEDDING_* values for .env.cognee (LLM_API_KEY optional)
-    flags: dict = {}   # auto_ingest, ingest_replies
+class MemoryCoreBody(BaseModel):
+    block: str = "user"      # user | agent
+    action: str = "add"      # add | replace | remove
+    text: str = ""
+    entry_id: int = 0        # addresses an exact entry (from GET /api/memory/core)
+    old_text: str = ""       # …or substring matching (the tool-side contract)
 
 
-class CogneeRegisterBody(BaseModel):
-    mode: str = "local"     # "local" (Track A, self-hosted) | "cloud" (Track B, Cognee Cloud)
-    serve_url: str = ""     # cloud only: https://<instance>.cognee.ai
-    api_key: str = ""       # cloud only: written to .env.cognee.cloud (kept out of config)
+class MemorySettingsBody(BaseModel):
+    settings: dict = {}      # prefetch, k, salience_min_chars, budget_per_hour
 
 
 class MemoryClearBody(BaseModel):
@@ -610,6 +630,24 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
                 # message bar survives a reload while the server is up.
                 "todos": todos_for(session_id)}
 
+    @app.get("/api/sessions/{session_id}/export")
+    def export_session(session_id: str):
+        """Download the whole chat as a zip: chat.md (the transcript) + media/
+        (every generated diagram/image/simulation the chat references), with the
+        links in chat.md rewritten so it renders offline."""
+        from starlette.responses import JSONResponse
+
+        from namma_agent.config import assistant_name
+        from namma_agent.core.chat_export import build_chat_zip
+
+        meta = service.db.get_session(session_id)
+        if not meta:
+            return JSONResponse({"error": "not found"}, status_code=404)
+        turns = service.db.session_turns(session_id)
+        filename, data = build_chat_zip(turns, meta, assistant_name(service.config))
+        return Response(content=data, media_type="application/zip",
+                        headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
     @app.delete("/api/sessions/{session_id}")
     def delete_session(session_id: str):
         return {"deleted": service.db.delete_session(session_id)}
@@ -722,10 +760,11 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def add_project_memory(project_id: str, body: ScopeMemoryBody):
         eid = service.db.add_scope_memory("project", project_id, body.content)
         # The scope row is prompt context for this project's chats; the FACT also
-        # goes into Cognee so it's part of the knowledge graph everywhere.
+        # enters Engram's pipeline so it's part of the knowledge graph everywhere.
         if (body.content or "").strip():
             name = (service.db.get_project(project_id) or {}).get("name", project_id)
-            service.cognee_ingestor.ingest_text(f"Project \"{name}\": {body.content.strip()}")
+            service.engram.writer.ingest_text(
+                f"Project \"{name}\": {body.content.strip()}", source="project")
         return {"id": eid, "memory": service.db.list_scope_memory("project", project_id)}
 
     @app.delete("/api/scope_memory/{entry_id}")
@@ -1005,69 +1044,111 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """Enable/disable an entire MCP server (persists + reconnects)."""
         return service.set_mcp_server_enabled(body.name, body.enabled)
 
-    # -- Cognee memory (Settings-independent Memory tab) --------------------
+    # -- Engram memory (the Memory tab — native, always on) -----------------
 
     @app.get("/api/memory/status")
     def memory_status():
-        """Is Cognee memory connected (drives the Memory tab's availability)."""
+        """Engine status: counts, core-memory usage, pending writes, last
+        consolidation. Native memory has no offline state."""
         return service.memory_status()
 
     @app.post("/api/memory/recall")
     def memory_recall(body: MemoryRecallBody):
-        """Ask Cognee memory a question — semantic + graph recall."""
-        return service.cognee_tool("recall", {"query": body.query, "top_k": body.top_k}, timeout=180)
+        """Fused recall (BM25 + graph + episodic) with provenance + timestamps."""
+        return service.memory_recall(body.query, k=body.top_k,
+                                     include_expired=body.include_expired)
 
     @app.post("/api/memory/remember")
     def memory_remember(body: MemoryRememberBody):
-        """Store text into Cognee. permanent=True builds the graph (cognify, slower);
-        permanent=False is fast session memory (buffered for later consolidation)."""
-        return service.cognee_remember(body.text, body.permanent)
+        """Queue text into the write pipeline (extraction/resolution run in the
+        background on the user-selected model)."""
+        return service.memory_remember(body.text)
 
     @app.post("/api/memory/consolidate")
     def memory_consolidate():
-        """The 'improve' op — promote buffered session memories into the permanent
-        knowledge graph via cognify (entity extraction + linking)."""
-        return service.cognee_consolidate()
+        """The 'Improve memory' op: summarize finished sessions, merge duplicate
+        facts, refresh the host model. Returns a report card."""
+        return service.memory_consolidate()
 
     @app.post("/api/memory/forget")
     def memory_forget(body: MemoryForgetBody):
-        """Delete a dataset, or everything, from Cognee memory."""
-        args = {"everything": True} if body.everything else {"dataset": body.dataset}
-        return service.cognee_tool("forget", args, timeout=120)
+        """Invalidate (default) or hard-delete matching memory — or wipe everything."""
+        return service.memory_forget(query=body.query, item_id=body.item_id,
+                                     everything=body.everything, hard=body.hard)
 
     @app.get("/api/memory/graph")
-    def memory_graph():
-        """The knowledge graph as {nodes, edges} for the Memory tab's graph view."""
-        return service.memory_graph()
+    def memory_graph(include_expired: bool = False, as_of: str = ""):
+        """The knowledge graph as {nodes, edges}. ``as_of`` (ISO timestamp)
+        time-travels to what memory knew at that moment (the history slider)."""
+        return service.memory_graph(include_expired=include_expired, as_of=as_of)
 
-    # -- Cognee settings (Settings → Memory → Cognee) ----------------------
+    @app.get("/api/memory/items")
+    def memory_items(kind: str = "", include_expired: bool = False):
+        """The facts browser: live (or all) memory items with lifecycle fields."""
+        return service.memory_items(kind=kind, include_expired=include_expired)
 
-    @app.get("/api/cognee/config")
-    def cognee_config():
-        """Cognee status + editable model/embedding env + behaviour flags."""
-        return service.cognee_settings()
+    @app.get("/api/memory/core")
+    def memory_core():
+        """The two L1 core-memory blocks (entries + usage) for the editor."""
+        return service.memory_core()
 
-    @app.post("/api/cognee/config")
-    def cognee_config_save(body: CogneeSettingsBody):
-        """Persist Cognee model/embedding env + flags from the UI (reconnects if env changed)."""
-        return service.save_cognee_settings(body.env, body.flags)
+    @app.post("/api/memory/core")
+    def memory_core_save(body: MemoryCoreBody):
+        """Add / replace / remove a core-memory entry (screened + budget-capped)."""
+        return service.memory_core_save(body.block, body.action, text=body.text,
+                                        entry_id=body.entry_id, old_text=body.old_text)
 
-    @app.post("/api/cognee/register")
-    def cognee_register(body: CogneeRegisterBody = CogneeRegisterBody()):
-        """One-click: register + connect the cognee MCP server for the chosen track
-        (local self-hosted, or Cognee Cloud via --serve-url + key)."""
-        return service.register_cognee_server(body.mode, body.serve_url, body.api_key)
+    @app.get("/api/memory/environment")
+    def memory_environment(refresh: bool = False):
+        """The L5 host model (read-only card; refresh=true re-probes the machine)."""
+        return service.memory_environment(refresh=refresh)
 
-    @app.post("/api/cognee/reconnect")
-    def cognee_reconnect():
-        """Restart JUST the cognee MCP server (targeted — other MCP servers keep
-        running). Used by the Cognee tab's Reconnect button."""
-        ok = service._reconnect_cognee()
-        return {"ok": ok, **service.cognee_settings()}
+    # -- memory settings (the single Settings → Memory section) -------------
+
+    @app.get("/api/memory/settings")
+    def memory_settings():
+        """Live Engram knobs + status for Settings → Memory."""
+        return service.memory_settings()
+
+    @app.post("/api/memory/settings")
+    def memory_settings_save(body: MemorySettingsBody):
+        """Persist memory tuning to config.local.yaml and apply it live."""
+        return service.save_memory_settings(body.settings)
 
     @app.get("/api/comms/status")
     def comms_status():
         return service.comms_status()
+
+    @app.post("/api/comms/trust")
+    def comms_trust(body: TrustBody):
+        """Set a channel's trust level (owner/trusted/untrusted) — persisted to
+        config.local.yaml and applied to the running bridges immediately."""
+        return service.set_channel_trust(body.channel, body.level)
+
+    @app.get("/api/security/overview")
+    def security_overview():
+        """One payload for the Settings → Security tab: trust levels, sandbox,
+        secrets inventory (names only), quarantine log, audit trail."""
+        return service.security_overview()
+
+    # -- secrets vault (Phase 1d): inventory is names-only, never values ------
+
+    @app.get("/api/secrets")
+    def secrets_overview():
+        return service.secrets_overview()
+
+    @app.post("/api/secrets")
+    def secret_set(body: SecretBody):
+        return service.secret_set(body.name, body.value)
+
+    @app.delete("/api/secrets/{name}")
+    def secret_delete(name: str):
+        return service.secret_delete(name)
+
+    @app.post("/api/secrets/migrate")
+    def secrets_migrate(body: SecretsMigrateBody):
+        """Opt-in migration of secret-looking .env entries into the OS vault."""
+        return service.migrate_secrets(scrub=body.scrub)
 
     @app.post("/api/comms/start")
     def comms_start():
@@ -1076,6 +1157,38 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/comms/stop")
     def comms_stop():
         return service.stop_comms()
+
+    @app.get("/api/search")
+    def search_chats(q: str = ""):
+        """Cross-chat keyword search for the sidebar search box."""
+        return {"results": service.search_chats(q)}
+
+    @app.get("/api/status")
+    def background_status():
+        """Every background subsystem at a glance (memory writer, consolidator,
+        routines, background tasks, reminders, comms) + a 7-day usage summary."""
+        return service.background_status()
+
+    # -- proactive routines (scheduled agent runs → comms) -------------------
+
+    @app.get("/api/routines")
+    def routines_list():
+        return {"routines": service.list_routines()}
+
+    @app.post("/api/routines/toggle")
+    def routines_toggle(body: dict):
+        ok = service.set_routine_enabled(int(body.get("id", 0)),
+                                         bool(body.get("enabled", True)))
+        return {"ok": ok}
+
+    @app.delete("/api/routines/{routine_id}")
+    def routines_delete(routine_id: int):
+        return {"ok": service.delete_routine(routine_id)}
+
+    @app.post("/api/routines/{routine_id}/run")
+    def routines_run(routine_id: int):
+        content = service.run_routine_now(routine_id)
+        return {"ok": content is not None, "content": content or ""}
 
     @app.get("/api/providers")
     def providers():

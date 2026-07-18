@@ -72,13 +72,18 @@ def test_tool_call_executes_and_feeds_back():
     result = agent.process_turn("echo hi")
 
     assert calls["args"] == {"x": "hi"}
-    # The visible answer keeps the whole turn: the "On it." preamble that came with
-    # the tool call (otherwise lost) plus the closing answer.
-    assert result.content == "On it.\n\nDone — got hi."
+    # The visible answer is the FINAL answer alone: the "On it." progress line goes
+    # out as a preamble event (activity timeline / comms progress sinks), not into
+    # the chat bubble.
+    assert result.content == "Done — got hi."
     assert result.tools_used == ["echo"]
     # preamble + tool_started + tool_finished emitted
     kinds = [e for e, _ in events]
     assert "preamble" in kinds and "tool_started" in kinds and "tool_finished" in kinds
+    # The preamble event carries the progress text plus `visible` (the canonical
+    # bubble content so far) so the web UI can rewind the streamed bubble.
+    pre = [p for e, p in events if e == "preamble"][0]
+    assert pre["text"] == "On it." and pre["visible"] == ""
     # the second generate() call saw the tool result in its messages
     second_call = agent.provider.seen_messages[1]
     assert any(m.get("role") == "tool" and m.get("content") == "echoed:hi" for m in second_call)
@@ -122,7 +127,7 @@ def test_memory_tools_via_agent():
     ing = _Ing()
     reg = ToolRegistry()
     db = Database(":memory:")
-    register_memory_tools(reg, db, get_cognee_ingestor=lambda: ing)
+    register_memory_tools(reg, db, get_plugin_ingestor=lambda: ing)
     responses = [
         LLMResponse(content="Saving.", tool_calls=[
             ToolCall(id="t1", name="remember_fact", args={"key": "editor", "value": "vim"})]),
@@ -130,21 +135,21 @@ def test_memory_tools_via_agent():
     ]
     agent = Agent(ScriptedProvider(responses), reg, db, load_persona())
     agent.process_turn("remember my editor is vim")
-    # the fact flows into the Cognee ingest queue, not SQLite
+    # the fact flows into the memory ingest queue, not SQLite
     assert any("vim" in t for t in ing.texts)
     assert db.all_facts() == []
 
 
-def test_memory_prompt_steers_to_cognee():
+def test_memory_prompt_steers_to_memory_tools():
     db = Database(":memory:")
     reg = ToolRegistry()
     agent = Agent(ScriptedProvider([LLMResponse(content="hi")]), reg, db, load_persona())
     agent.process_turn("who am i")
     system = agent.provider.seen_messages[0][0]
     assert system["role"] == "system"
-    # no SQLite fact injection anymore - memory guidance points at Cognee
+    # no SQLite fact injection anymore — memory guidance points at Engram's tools
     assert "USER_FACTS" not in system["content"]
-    assert "mcp_cognee_recall" in system["content"]
+    assert "memory_search" in system["content"]
 
 
 def test_media_tool_output_surfaced_in_answer():
@@ -162,8 +167,9 @@ def test_media_tool_output_surfaced_in_answer():
     ]
     agent, db, _ = _agent(responses, registry=reg)
     result = agent.process_turn("teach me")
-    # explanation + the diagram markdown + closing line all present, in order
-    assert "Here's how gears trade speed for force." in result.content
+    # diagram markdown + closing line present, in order; the tool-round explanation
+    # is a progress line (preamble event / activity timeline), NOT part of the answer
+    assert "Here's how gears trade speed for force." not in result.content
     assert "/api/media/diagrams/abc.png" in result.content
     assert result.content.strip().endswith("What would you pick?")
     # and it persisted (reload-safe)
@@ -191,8 +197,9 @@ def test_media_streamed_inline_in_order():
     chunks = []
     result = agent.process_turn("show me", on_token=chunks.append)
 
-    # The image markdown is in the canonical/persisted answer, in order …
-    assert result.content == f"Here's the picture:\n\n{media_md}\n\nAnd that's the cycle."
+    # The image markdown is in the canonical/persisted answer — the "Here's the
+    # picture:" progress line is not (it lives in the activity timeline) …
+    assert result.content == f"{media_md}\n\nAnd that's the cycle."
     # … and it was pushed through the token stream in place (between the preamble and
     # the closing line) so the learner sees it appear where it belongs.
     streamed = "".join(chunks)

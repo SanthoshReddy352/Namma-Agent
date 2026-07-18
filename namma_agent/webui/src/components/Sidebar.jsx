@@ -1,5 +1,6 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { downloadChat, searchChats } from "../api.js";
 import Logo from "./Logo.jsx";
 
 // Gemini-style navigation rail: a slim icon rail that expands on hover, or pins
@@ -9,9 +10,22 @@ import Logo from "./Logo.jsx";
 export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDelete, onRename, onFile, onConfirm, onOpenSettings, collapsed, onToggle, name = "Namma Agent" }) {
   const [pinned, setPinned] = useState(() => localStorage.getItem("namma-sidebar-pinned") !== "false");
   const [hovered, setHovered] = useState(false);
+  // Cross-chat search: ≥2 chars swaps the Recent list for grouped results.
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState(null); // null = not searching
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const expanded = pinned || hovered;
+
+  useEffect(() => {
+    const q = query.trim();
+    if (q.length < 2) { setResults(null); return; }
+    const t = setTimeout(async () => {
+      const r = await searchChats(q);
+      setResults(r?.results || []);
+    }, 250); // debounce keystrokes
+    return () => clearTimeout(t);
+  }, [query]);
 
   function togglePin() {
     setPinned((p) => { localStorage.setItem("namma-sidebar-pinned", String(!p)); return !p; });
@@ -89,18 +103,61 @@ export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDele
           {navItem("/memory", <MemoryIcon />, "Memory", pathname.startsWith("/memory"))}
         </nav>
 
-        {/* Recent chats (only when expanded) */}
+        {/* Search + Recent chats (only when expanded) */}
         {expanded && (
           <>
-            <div className="mt-4 px-5 text-[11px] uppercase tracking-wider text-ink-faint dark:text-night-faint">Recent</div>
+            <div className="px-3 mt-3">
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-faint dark:text-night-faint"><SearchIcon /></span>
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Escape") setQuery(""); }}
+                  placeholder="Search chats…"
+                  className="w-full h-9 rounded-full pl-9 pr-8 text-[13px] bg-paper-panel dark:bg-night-panel
+                             border border-line dark:border-night-line outline-none
+                             focus:border-brand-soft placeholder:text-ink-faint dark:placeholder:text-night-faint"
+                />
+                {query && (
+                  <button onClick={() => setQuery("")} title="Clear search"
+                          className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 grid place-items-center rounded-full
+                                     text-ink-faint hover:text-ink dark:hover:text-night-ink">
+                    <XIcon />
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="mt-3 px-5 text-[11px] uppercase tracking-wider text-ink-faint dark:text-night-faint">
+              {results !== null ? "Search results" : "Recent"}
+            </div>
             <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5 mt-1">
-              {(!sessions || sessions.length === 0) && (
-                <div className="px-3 py-4 text-[13px] text-ink-faint dark:text-night-faint">No conversations yet.</div>
+              {results !== null ? (
+                <>
+                  {results.length === 0 && (
+                    <div className="px-3 py-4 text-[13px] text-ink-faint dark:text-night-faint">No chats match.</div>
+                  )}
+                  {results.map((r) => (
+                    <button key={r.session_id} onClick={() => onOpen(r.session_id)}
+                            className="w-full text-left rounded-xl px-3 py-2 hover:bg-paper-sink dark:hover:bg-night-panel transition">
+                      <div className="flex items-baseline gap-2">
+                        <span className="truncate text-[13.5px] text-ink-soft dark:text-night-ink">{r.title}</span>
+                        {r.date && <span className="ml-auto shrink-0 text-[11px] text-ink-faint dark:text-night-faint">{r.date}</span>}
+                      </div>
+                      <div className="truncate text-[12px] text-ink-faint dark:text-night-faint">{r.snippet}</div>
+                    </button>
+                  ))}
+                </>
+              ) : (
+                <>
+                  {(!sessions || sessions.length === 0) && (
+                    <div className="px-3 py-4 text-[13px] text-ink-faint dark:text-night-faint">No conversations yet.</div>
+                  )}
+                  {sessions?.map((s) => (
+                    <ChatRow key={s.id} s={s} projects={projects}
+                             onOpen={onOpen} onDelete={onDelete} onRename={onRename} onFile={onFile} onConfirm={onConfirm} />
+                  ))}
+                </>
               )}
-              {sessions?.map((s) => (
-                <ChatRow key={s.id} s={s} projects={projects}
-                         onOpen={onOpen} onDelete={onDelete} onRename={onRename} onFile={onFile} onConfirm={onConfirm} />
-              ))}
             </div>
           </>
         )}
@@ -178,6 +235,11 @@ function ChatRow({ s, projects, onOpen, onDelete, onRename, onFile, onConfirm })
                     className="w-full text-left px-3 py-2 hover:bg-paper-sink dark:hover:bg-night-soft flex items-center gap-2">
               <PencilIcon /> Rename
             </button>
+            <button onClick={() => { downloadChat(s.id); closeMenu(); }}
+                    title="Download this chat as a zip (transcript + media)"
+                    className="w-full text-left px-3 py-2 hover:bg-paper-sink dark:hover:bg-night-soft flex items-center gap-2">
+              <DownloadIcon /> Download chat
+            </button>
             <div className="relative" onMouseEnter={() => setSub(true)} onMouseLeave={() => setSub(false)}>
               <button className="w-full text-left px-3 py-2 hover:bg-paper-sink dark:hover:bg-night-soft flex items-center justify-between gap-2">
                 <span className="flex items-center gap-2"><FolderIcon size={15} /> Add to project</span>
@@ -224,4 +286,7 @@ const CapIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" {...strok
 // Memory = a small knowledge-graph mark (nodes + links).
 const MemoryIcon = () => (<svg width="20" height="20" viewBox="0 0 24 24" {...stroke}><circle cx="6" cy="7" r="2.2" /><circle cx="18" cy="8" r="2.2" /><circle cx="12" cy="17" r="2.2" /><path d="M7.8 8.4 10.4 15M16.7 9.7 13.3 15.6M8 7.4 16 8" /></svg>);
 const TrashIcon = () => (<svg width="14" height="14" viewBox="0 0 24 24" {...stroke}><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>);
+const DownloadIcon = () => (<svg width="15" height="15" viewBox="0 0 24 24" {...stroke}><path d="M21 15v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" /><path d="M7 10l5 5 5-5M12 15V3" /></svg>);
+const SearchIcon = () => (<svg width="15" height="15" viewBox="0 0 24 24" {...stroke}><circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" /></svg>);
+const XIcon = () => (<svg width="13" height="13" viewBox="0 0 24 24" {...stroke}><path d="M18 6 6 18M6 6l12 12" /></svg>);
 const GearIcon = () => (<svg width="19" height="19" viewBox="0 0 24 24" {...stroke}><circle cx="12" cy="12" r="3" /><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1Z" /></svg>);

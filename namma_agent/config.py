@@ -163,6 +163,15 @@ def configured_models(config: Optional[dict] = None) -> list[dict]:
             "type": (m.get("type") or "").strip(),
             "base_url": (m.get("base_url") or "").strip(),
             "api_key_env": (m.get("api_key_env") or "").strip(),
+            # Optional per-profile turn shaping for small-context (local) models —
+            # see the "models:" docs in config.yaml. 0/empty = inherit the global
+            # provider/conversation settings.
+            "max_tokens": int(m.get("max_tokens") or 0),
+            "timeout_s": float(m.get("timeout_s") or 0),
+            "max_history_turns": int(m.get("max_history_turns") or 0),
+            "tool_result_max_chars": int(m.get("tool_result_max_chars") or 0),
+            "tools_allow": [str(t).strip() for t in (m.get("tools_allow") or [])
+                            if str(t).strip()],
         })
     return out
 

@@ -17,6 +17,7 @@ import re
 import urllib.parse
 import urllib.request
 
+from namma_agent.core.docscan import screen_web_text
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
@@ -174,7 +175,11 @@ def _search(args: dict) -> ToolResult:
         lines.append(f"{i}. {r['title']}\n   {r['url']}")
         if r.get("snippet"):
             lines.append(f"   {r['snippet'][:200]}")
-    return ToolResult(ok=True, content="\n".join(lines), data=results)
+    # Titles/snippets are attacker-controllable (SEO) — same screening as pages.
+    content, report = screen_web_text("\n".join(lines), source="the search results")
+    return ToolResult(ok=True, content=content,
+                      data={"results": results, "flagged": report.flagged,
+                            "reasons": report.reasons} if report.flagged else results)
 
 
 def _extract(args: dict) -> ToolResult:
@@ -195,7 +200,15 @@ def _extract(args: dict) -> ToolResult:
         return ToolResult(ok=False, content="", error=f"couldn't fetch {url}: {exc}")
     if len(text) > cap:
         text = text[:cap] + "…"
-    return ToolResult(ok=True, content=text or "(page had no readable text)")
+    if not text:
+        return ToolResult(ok=True, content="(page had no readable text)")
+    # Phase 1b: screen fetched pages for prompt injection — flagged content is
+    # wrapped (never dropped) so browsing keeps working while the model and the
+    # Activity strip both see the ⚠ marker.
+    content, report = screen_web_text(text, source=url)
+    return ToolResult(ok=True, content=content,
+                      data={"flagged": True, "url": url,
+                            "reasons": report.reasons} if report.flagged else None)
 
 
 def _crawl(args: dict) -> ToolResult:
@@ -222,7 +235,10 @@ def _crawl_page(url: str, depth: int, visited: set, collected: list) -> None:
         logger.warning("[web_crawl] failed to fetch %s: %s", url, exc)
         return
     if text:
-        collected.append(f"[{url}]\n{text[:2000]}")
+        # Screen each page separately so one poisoned page is wrapped without
+        # tainting the clean ones alongside it.
+        screened, _report = screen_web_text(text[:2000], source=url)
+        collected.append(f"[{url}]\n{screened}")
     if depth > 1:
         for link in links[:5]:
             if link not in visited:

@@ -113,13 +113,20 @@ class CommsManager:
 
     def start_inbound(self, on_message: Callable[..., tuple],
                       name: Optional[str] = None,
-                      get_models: Optional[Callable[[], list]] = None) -> None:
+                      get_models: Optional[Callable[[], list]] = None,
+                      trust_for: Optional[Callable[[str], str]] = None) -> None:
         """The single gateway: start every available *pollable* inbound bridge
         (Telegram, Signal, Discord bot, Slack Socket Mode) in this one process, and
         register the *webhook-driven* bridges (Slack Events API, WhatsApp) so the
-        server can route requests to them. Idempotent."""
+        server can route requests to them. Idempotent.
+
+        ``trust_for(channel_name)`` resolves each bridge's trust level (core.trust);
+        when omitted, the built-in per-channel defaults apply."""
         if self._inbound or self._webhooks:
             return  # already started
+        if trust_for is None:
+            from namma_agent.core.trust import channel_trust
+            trust_for = channel_trust
 
         # Pollable / socket bridges run their own thread (dial out — no public URL).
         if self.telegram.available:
@@ -140,6 +147,7 @@ class CommsManager:
         if isinstance(self.whatsapp, WhatsAppQRChannel) and self.whatsapp.available:
             self._inbound.append(WhatsAppQRInbound(self.whatsapp, on_message, get_models=get_models))
         for bridge in self._inbound:
+            bridge.trust = trust_for(bridge.channel_name)
             bridge.start()
 
         # Webhook-driven bridges are fed by the FastAPI server (no thread here).
@@ -148,6 +156,8 @@ class CommsManager:
         # Cloud-API WhatsApp is webhook-driven; the QR backend (handled above) isn't.
         if not isinstance(self.whatsapp, WhatsAppQRChannel) and self.whatsapp.available:
             self._webhooks["whatsapp"] = WhatsAppInbound(self.whatsapp, on_message, get_models=get_models)
+        for chan, bridge in self._webhooks.items():
+            bridge.trust = trust_for(chan)
 
         # Greet on the interactive (pollable/socket) channels only — webhook bridges
         # aren't greeted to avoid noise/loops.
@@ -158,6 +168,14 @@ class CommsManager:
             for bridge in self._inbound:
                 bridge._say(f"{name} is online and ready.")
         logger.info("[comms] active channels: %s", ", ".join(self.channels()) or "none")
+
+    def apply_trust(self, trust_for: Callable[[str], str]) -> None:
+        """Re-resolve every running bridge's trust level (a Settings change
+        applies live — no gateway restart)."""
+        for bridge in self._inbound:
+            bridge.trust = trust_for(bridge.channel_name)
+        for chan, bridge in self._webhooks.items():
+            bridge.trust = trust_for(chan)
 
     def webhook_bridge(self, name: str) -> Optional[InboundBridge]:
         """The webhook-driven inbound bridge for a channel ('slack'/'whatsapp'), or None."""

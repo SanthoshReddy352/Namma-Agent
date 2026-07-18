@@ -1,5 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { uploadFile } from "../api.js";
+import { handsFreeSupported } from "../handsfree.js";
 
 // Textarea never grows past this (the "net safety height") — it scrolls instead.
 const MAX_H = 200;
@@ -19,7 +20,8 @@ const BANG_HINT = [{ cmd: "!<command>", desc: "Run a shell command, e.g. !df -h"
 
 // claude.ai-style composer: rounded card with attach, a textarea, a mode pill,
 // and a send button that becomes a stop button while a turn is running.
-export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocus, name = "Namma Agent" }) {
+export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocus, name = "Namma Agent",
+                                   handsfree = false, setHandsfree, handsfreeStatus = "off" }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -155,6 +157,21 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
               <MicIcon />
             </button>
           )}
+          {setHandsfree && handsFreeSupported() && (
+            <button
+              onClick={() => setHandsfree(!handsfree)}
+              title={handsfree
+                ? (handsfreeStatus === "awaiting" ? "Listening for your command…"
+                   : handsfreeStatus === "speaking" ? "Speaking the reply…"
+                   : `Hands-free is ON — say “${name}, …” (click to turn off)`)
+                : `Hands-free mode: say “${name}, …” to talk (click to turn on)`}
+              className={`h-9 w-9 grid place-items-center rounded-lg hover:bg-paper-soft dark:hover:bg-night-soft
+                ${handsfree
+                  ? (handsfreeStatus === "awaiting" ? "text-brand animate-pulse" : "text-brand")
+                  : "text-ink-soft dark:text-night-faint"}`}>
+              <HeadsetIcon />
+            </button>
+          )}
           {busy ? (
             <button title="Stop" onClick={onStop}
                     className="h-9 w-9 grid place-items-center rounded-lg bg-ink dark:bg-night-ink text-paper dark:text-night">
@@ -187,5 +204,6 @@ function ModePill({ mode, setMode }) {
 
 const PaperclipIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>);
 const MicIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" /></svg>);
+const HeadsetIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 14v-2a9 9 0 0 1 18 0v2" /><path d="M3 14a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3ZM21 14a2 2 0 0 0-2-2h-1a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3Z" /><path d="M21 17v1a3 3 0 0 1-3 3h-4" /></svg>);
 const SendIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>);
 const StopIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>);

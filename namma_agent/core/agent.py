@@ -31,16 +31,20 @@ from namma_agent.core.persona import Persona, load_persona
 from namma_agent.core.providers.base import ProviderError, USAGE_KEYS, Provider, usage_tokens
 from namma_agent.core.tools import ToolRegistry
 
-# Recall-style questions that should pull from Cognee before answering (used to gate
-# the optional proactive recall-context injection — see Agent._cognee_recall_context).
-_RECALL_HINT = re.compile(
-    r"\b(remember|recall|forget|forgot|"
-    r"who\s+am\s+i|about\s+me|my\s+name|"
-    r"what('?s| is| was| are| do| did| have)?\s+(i|my|me|we|our)\b|"
-    r"do\s+you\s+(know|remember)|did\s+i\s+(tell|mention|say)|"
-    r"have\s+i\s+(told|mentioned|said)|remind\s+me|last\s+time|earlier|before)\b",
-    re.IGNORECASE,
-)
+
+def _clip_tool_result(text: str, limit: int) -> str:
+    """Cap a tool result before it enters the model's context (``limit`` <= 0 =
+    unlimited). One uncapped document read can overflow a small local model's
+    whole context window — mid-turn the endpoint then silently truncates the
+    prompt (dropping tool definitions or earlier turns) and the model stops
+    calling tools. The marker tells the model it saw a prefix so it can re-query
+    narrower instead of assuming it read everything."""
+    if limit <= 0 or len(text) <= limit:
+        return text
+    return (text[:limit].rstrip()
+            + f"\n\n[tool result truncated: showing the first {limit} of {len(text)} "
+              "characters. Re-run the tool with a narrower query/path/range if you "
+              "need the rest.]")
 
 
 def _generate_timeout(provider: Provider) -> float:
@@ -80,6 +84,36 @@ def _generate_bounded(provider: Provider, timeout: float, **kwargs):
     if "error" in box:
         raise box["error"]
     return box["result"]
+
+# Rolling context compaction: once this many conversation rows have fallen off
+# the history window without being folded into the session's running summary,
+# a background pass updates it (one model call per ~3 exchanges, only on long
+# sessions — short chats never trigger it).
+_COMPACT_BATCH = 6
+_COMPACT_SYSTEM = (
+    "You maintain a rolling summary of the EARLIER part of a long conversation "
+    "between a user and their assistant. Merge the previous summary (if any) with "
+    "the newly evicted messages into ONE updated summary, ≤200 words, dense "
+    "bullet points. Keep: what the user wants, decisions made, facts/names/paths/"
+    "numbers established, unresolved threads, and the current state of any task. "
+    "Drop pleasantries and superseded details. Output only the summary."
+)
+
+
+# Self-verification: when a turn changed files (a destructive tool from one of
+# these write-ish toolsets succeeded) and the model is about to finalize without
+# ANY check after the write, it gets ONE nudge to verify before answering. Shell
+# and comms tools are exempt — their results already carry the proof (exit code,
+# "message sent").
+_VERIFY_CATEGORIES = {"file_ops", "documents", "authoring", "convert"}
+_VERIFY_NUDGE = (
+    "[system] You changed files this turn but never checked the result. Before "
+    "giving your final answer, VERIFY the change actually worked — re-read the "
+    "file (or the relevant part), list the directory, or run a quick check that "
+    "would fail if the change is wrong. If verification isn't possible with your "
+    "tools, say so explicitly. Then give the final answer."
+)
+
 
 # References to our media mount. The ONLY legitimate source of these is a
 # successful render_diagram / fetch_image / render_simulation tool result (the
@@ -273,6 +307,12 @@ TokenFn = Callable[[str], None]
 ApprovalFn = Callable[[str, dict], bool]
 
 
+# How much of a tool's output travels on the tool_finished event and into the
+# persisted activity steps — enough for the mini-terminal view without bloating
+# turn meta. The FULL output is always in the audit table.
+_STEP_OUTPUT_CAP = 6000
+
+
 def _record_step(steps: list[dict], event_type: str, payload: dict) -> None:
     """Fold a live turn event into the structured activity timeline — the SAME shape
     the web UI builds from the websocket stream, so the persisted steps and the live
@@ -296,6 +336,8 @@ def _record_step(steps: list[dict], event_type: str, payload: dict) -> None:
                     and st.get("state") == "running":
                 st["state"] = "ok" if payload.get("ok") else "fail"
                 st["summary"] = payload.get("summary") or ""
+                if payload.get("output"):
+                    st["output"] = payload["output"]
                 break
 
 
@@ -346,10 +388,13 @@ class Agent:
         *,
         tool_loop_limit: int = 10,
         max_history_turns: int = 12,
+        tool_allow: Optional[list[str]] = None,
+        tool_result_max_chars: int = 0,
         emit: Optional[EmitFn] = None,
         skills=None,
-        cognee_ingestor=None,
-        cognee_recall_context=False,
+        engram=None,
+        compact_history: bool = True,
+        verify_after_writes: bool = True,
     ):
         self.provider = provider
         self.registry = registry
@@ -357,16 +402,30 @@ class Agent:
         self.persona = persona or load_persona()
         self.tool_loop_limit = tool_loop_limit
         self.max_history_turns = max_history_turns
+        # Optional global tool scope (config tools.allow): when set, the model sees
+        # ONLY these tools/toolsets. Fewer tool schemas = a much smaller prompt and
+        # sharper tool selection — essential for small-context local models. Entries
+        # may be tool names or toolset (category) names; a per-model override rides
+        # the turn's provider as ``provider.tool_allow``.
+        self.tool_allow = [str(a).strip() for a in (tool_allow or []) if str(a).strip()]
+        # Cap on each tool result fed back into the model's context (0 = unlimited);
+        # per-model override: ``provider.tool_result_max_chars``.
+        self.tool_result_max_chars = int(tool_result_max_chars or 0)
         self._emit = emit or (lambda _e, _p: None)
         self.skills = skills  # optional SkillStore; injects a catalog into the prompt
-        # Optional CogneeIngestor: after each turn, opt-in async ingest of the turn
-        # into Cognee's knowledge graph (off the reply path). None for sub-agents.
-        # Cognee is THE memory — there is no SQLite facts/notes layer anymore.
-        self.cognee_ingestor = cognee_ingestor
-        # Opt-in: proactively inject Cognee recall for recall-style questions so memory
-        # is guaranteed in normal chat, even if the model skips the tool (default off →
-        # the model calls mcp_cognee_recall itself, keeping the Cognee usage visible).
-        self._cognee_recall_context_on = bool(cognee_recall_context)
+        # Engram is THE memory (docs/MEMORY_SYSTEM_DESIGN.md): core memory + host
+        # model in every prompt, fused prefetch per turn, and the always-on write
+        # pipeline after each turn. None for sub-agents/bare tests.
+        self.engram = engram
+        # Rolling context compaction: long sessions keep a running summary of the
+        # turns that fell off the history window, injected into the prompt so the
+        # model never silently loses the middle of a long conversation.
+        self.compact_history = bool(compact_history)
+        self._compacting: set[str] = set()
+        self._compact_lock = threading.Lock()
+        # One-shot "verify your file change before answering" nudge (see
+        # _VERIFY_CATEGORIES / _VERIFY_NUDGE).
+        self.verify_after_writes = bool(verify_after_writes)
 
     # -- sessions ----------------------------------------------------------
 
@@ -435,22 +494,56 @@ class Agent:
         # True in a Learning-Room MODULE thread, where teaching guards apply (e.g. a
         # promised diagram that the model didn't actually draw gets rendered).
         teaching_session = (not chat_mode) and self._is_teaching_session(session_id)
-        logger.info("[turn] mode=%s session=%s :: %s", "chat" if chat_mode else "agent",
+        # Per-channel trust (core.trust, set by the inbound bridge around the turn;
+        # web UI / tests default to owner). An untrusted sender's turn runs with
+        # destructive tools stripped AND declined, its content wrapped in a guarded
+        # delimiter in the prompt, and its memory writes quarantined (below).
+        from namma_agent.core.trust import get_message_trust, guard_untrusted
+        trust = get_message_trust()
+        untrusted = trust == "untrusted"
+        logger.info("[turn] mode=%s trust=%s session=%s :: %s",
+                    "chat" if chat_mode else "agent", trust,
                     session_id[:8], user_input[:120].replace("\n", " "))
-        emit("turn_started", {"session_id": session_id, "text": user_input, "mode": mode})
+        emit("turn_started", {"session_id": session_id, "text": user_input, "mode": mode,
+                              "trust": trust})
 
-        messages = self._build_messages(user_input, session_id, chat_mode=chat_mode)
+        # Tool defs first: the system prompt's steering blocks (Cognee / TODO) key
+        # off what THIS turn actually exposes, which an allow-list may have scoped.
+        tool_defs = [] if chat_mode else self._tool_defs_for(session_id, provider)
+        if untrusted:
+            # Same rule as sub-agents: no destructive tools without an owner to
+            # approve them. Stripped from the model's view here, and declined at
+            # the execution gate below even if the model calls one blind.
+            tool_defs = [d for d in tool_defs
+                         if not getattr(self.registry.get(d["name"]), "destructive", False)]
+
+            def approval(_name: str, _args: dict) -> bool:  # noqa: F811
+                logger.info("[turn] declined destructive tool %r for untrusted sender", _name)
+                return False
+        exposed = {d["name"] for d in tool_defs}
+        # The guarded wrapper exists only in the prompt — the transcript keeps the
+        # sender's raw text (add_turn below).
+        prompt_input = guard_untrusted(user_input) if untrusted else user_input
+        messages = self._build_messages(prompt_input, session_id, chat_mode=chat_mode,
+                                        exposed=exposed, provider=provider)
         self.db.add_turn(session_id, "user", user_input)
 
-        tool_defs = [] if chat_mode else self._tool_defs_for(session_id)
+        # Per-turn cap on tool results entering the context (the turn's model may
+        # carry its own small-context override).
+        result_limit = (int(getattr(provider, "tool_result_max_chars", 0) or 0)
+                        or self.tool_result_max_chars)
         tools_used: list[str] = []
         usage: dict = {}
         final_content = ""
-        # The visible answer is the WHOLE turn, in order: the model's explanation
-        # that accompanies each tool round (otherwise only spoken as "preamble" and
-        # lost), the media it generates (diagrams/images/sims — surfaced inline so
-        # they actually show, since the model rarely re-pastes the markdown), then
-        # the closing answer. Without this the chat showed only the final line.
+        # The visible answer is the media the turn generates (diagrams/images/sims —
+        # surfaced inline since the model rarely re-pastes the markdown) plus the
+        # closing answer. The explanation that accompanies each tool round is a
+        # PROGRESS line, not part of the answer: it's emitted as a "preamble" event
+        # — feeding the web UI's activity timeline, voice narration, and the comms
+        # progress sinks (Telegram et al. deliver it live as its own message) — but
+        # kept OUT of the chat bubble, which holds the final answer alone. Teaching
+        # (Learning-Room) turns are the exception: there the per-round explanation
+        # IS the lesson, so it stays in the visible answer.
         segments: list[str] = []
 
         def _have(url: str) -> bool:
@@ -490,6 +583,11 @@ class Agent:
             if text:
                 emit("thinking", {"session_id": session_id, "text": text})
 
+        # Self-verification bookkeeping: an unverified file write pending, and
+        # whether the one-shot nudge already fired this turn.
+        needs_verify = False
+        verify_nudged = False
+
         step = 0
         while True:
             if not unlimited and step >= self.tool_loop_limit:
@@ -516,6 +614,24 @@ class Agent:
             _accumulate_usage(usage, resp.usage)
 
             if not resp.has_tool_calls:
+                # Self-verification: about to finalize with an unverified file
+                # write → ONE nudge to check the change, then loop once more. The
+                # unverified draft stays visible as a progress line (preamble),
+                # never as the final bubble.
+                if (self.verify_after_writes and needs_verify and not verify_nudged
+                        and not teaching_session):
+                    verify_nudged = True
+                    logger.info("[turn] unverified write — nudging the model to verify")
+                    if resp.content.strip():
+                        visible_now = "\n\n".join(s for s in segments if s)
+                        emit("preamble", {"session_id": session_id,
+                                          "text": resp.content,
+                                          "visible": visible_now})
+                        if live_on_token is not None and visible_now:
+                            live_on_token("\n\n")
+                    messages.append({"role": "assistant", "content": resp.content})
+                    messages.append({"role": "user", "content": _VERIFY_NUDGE})
+                    continue
                 final_content = resp.content
                 cleaned = _mark_phantom_media(resp.content.strip())
                 if cleaned:
@@ -524,17 +640,31 @@ class Agent:
                             ",".join(tools_used) or "none")
                 break
 
-            # The model's explanation that came alongside the tool call — speak it
-            # AND keep it in the visible answer.
+            # The model's explanation that came alongside the tool call. It is
+            # spoken / delivered live via the "preamble" event; only teaching turns
+            # also keep it in the visible answer (there it IS the lesson). Everyone
+            # else sends `visible` — the canonical bubble content so far — with the
+            # event, so the web UI can rewind the just-streamed progress line out
+            # of the chat bubble (it stays in the activity timeline).
             if resp.content.strip():
-                emit("preamble", {"session_id": session_id, "text": resp.content})
-                segments.append(_mark_phantom_media(resp.content.strip()))
-                # Mirror the final assembly in the live stream: the next round's
-                # tokens (or injected media) must start a new paragraph, exactly
-                # like the "\n\n" join below — so the bubble doesn't reflow when
-                # the canonical answer lands at turn end.
-                if live_on_token is not None:
-                    live_on_token("\n\n")
+                if teaching_session:
+                    emit("preamble", {"session_id": session_id, "text": resp.content})
+                    segments.append(_mark_phantom_media(resp.content.strip()))
+                    # Mirror the final assembly in the live stream: the next round's
+                    # tokens (or injected media) must start a new paragraph, exactly
+                    # like the "\n\n" join below — so the bubble doesn't reflow when
+                    # the canonical answer lands at turn end.
+                    if live_on_token is not None:
+                        live_on_token("\n\n")
+                else:
+                    visible_now = "\n\n".join(s for s in segments if s)
+                    emit("preamble", {"session_id": session_id, "text": resp.content,
+                                      "visible": visible_now})
+                    # Whatever streams next (final tokens or injected media) must
+                    # start a fresh paragraph after the content the bubble was
+                    # rewound to — same "\n\n" join as the final assembly below.
+                    if live_on_token is not None and visible_now:
+                        live_on_token("\n\n")
 
             # Record the assistant's tool-call turn in the working message list.
             messages.append({"role": "assistant", "content": resp.content, "tool_calls": resp.tool_calls})
@@ -559,6 +689,10 @@ class Agent:
                             "session_id": session_id, "tool": tc.name,
                             "ok": False, "summary": "declined",
                         })
+                        # Declined attempts belong in the audit trail too — the
+                        # Security tab shows what was ASKED, not just what ran.
+                        self.db.log_audit(session_id, tc.name, tc.args,
+                                          "User declined the action.", False)
                         messages.append({"role": "tool", "tool_call_id": tc.id,
                                          "name": tc.name, "content": declined.as_message_content()})
                         continue
@@ -567,10 +701,19 @@ class Agent:
                 result = self.registry.execute(tc.name, tc.args)
                 logger.info("[tool] ← %s %s%s", tc.name, "ok" if result.ok else "FAIL",
                             "" if result.ok else f": {result.error[:120]}")
+                # Self-verification bookkeeping: a successful write-ish destructive
+                # tool arms the nudge; any successful tool call AFTER it (a re-read,
+                # a check) counts as verification and disarms it.
+                if result.ok and tool is not None:
+                    if tool.destructive and (tool.category or "") in _VERIFY_CATEGORIES:
+                        needs_verify = True
+                    elif not tool.destructive and needs_verify:
+                        needs_verify = False
                 self.db.log_audit(session_id, tc.name, tc.args, result.as_message_content(), result.ok)
                 emit("tool_finished", {
                     "session_id": session_id, "tool": tc.name,
                     "ok": result.ok, "summary": result.as_message_content()[:200],
+                    "output": result.as_message_content()[:_STEP_OUTPUT_CAP],
                 })
                 # Surface generated media (diagram/image/simulation) inline in the
                 # visible answer — these tools return ready-to-render markdown +
@@ -611,7 +754,7 @@ class Agent:
                     "role": "tool",
                     "tool_call_id": tc.id,
                     "name": tc.name,
-                    "content": result.as_message_content(),
+                    "content": _clip_tool_result(result.as_message_content(), result_limit),
                 })
 
         # Teaching guard: a teaching turn that drew no visual of its own. Every concept
@@ -650,9 +793,18 @@ class Agent:
         if steps:
             turn_meta = {**(turn_meta or {}), "steps": steps}
         self.db.add_turn(session_id, "assistant", final_content, tools_used, meta=turn_meta)
-        # Opt-in: grow the Cognee knowledge graph from this turn (background worker).
-        if self.cognee_ingestor is not None:
-            self.cognee_ingestor.ingest_async(user_input, final_content)
+        # Always-on learning: the turn enters Engram's write pipeline (background,
+        # salience-gated — most turns extract nothing and cost nothing durable).
+        # Untrusted senders never write memory — their salient turns are
+        # quarantined for the owner's review instead (core.trust).
+        if self.engram is not None:
+            self.engram.writer.ingest_turn(user_input, final_content,
+                                           source=f"chat:{session_id[:8]}",
+                                           trusted=not untrusted)
+        # Rolling context compaction: fold turns that just fell off the history
+        # window into the session's running summary (background, off the reply path).
+        if self.compact_history:
+            self._schedule_compaction(session_id, provider)
         emit("turn_completed", {
             "session_id": session_id, "content": final_content, "tools_used": tools_used,
         })
@@ -660,14 +812,69 @@ class Agent:
                            tools_used=tools_used, usage=usage, ttft=ttft["t"],
                            steps=steps)
 
+    # -- rolling context compaction ------------------------------------------
+
+    def _schedule_compaction(self, session_id: str,
+                             provider: Provider) -> Optional[threading.Thread]:
+        """Kick off a background summary update when enough conversation rows have
+        fallen off the history window since the last pass. Returns the worker
+        thread (tests join it) or None when there is nothing to do."""
+        window = (int(getattr(provider, "max_history_turns", 0) or 0)
+                  or self.max_history_turns)
+        try:
+            comp = self.db.get_compaction(session_id)
+            pending = self.db.evicted_turns(session_id, window,
+                                            after_id=comp["upto"])
+        except Exception:  # noqa: BLE001 — compaction must never break a turn
+            return None
+        if len(pending) < _COMPACT_BATCH:
+            return None
+        with self._compact_lock:
+            if session_id in self._compacting:
+                return None
+            self._compacting.add(session_id)
+
+        def _work() -> None:
+            try:
+                self._update_compaction(session_id, provider, comp, pending)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("[compact] rolling summary failed: %s", exc)
+            finally:
+                with self._compact_lock:
+                    self._compacting.discard(session_id)
+
+        t = threading.Thread(target=_work, name="context-compactor", daemon=True)
+        t.start()
+        return t
+
+    def _update_compaction(self, session_id: str, provider: Provider,
+                           comp: dict, pending: list[dict]) -> None:
+        """One summary update: previous summary + newly evicted turns → new
+        summary (bounded), stored with the highest turn id it covers."""
+        convo = "\n".join(f"{t['role']}: {t['content'][:600]}" for t in pending)
+        user = ""
+        if comp.get("summary"):
+            user += f"PREVIOUS SUMMARY:\n{comp['summary']}\n\n"
+        user += f"NEWLY EVICTED MESSAGES:\n{convo[:12000]}"
+        resp = provider.generate(
+            [{"role": "system", "content": _COMPACT_SYSTEM},
+             {"role": "user", "content": user}],
+            tools=None, stream=False)
+        summary = (getattr(resp, "content", "") or "").strip()
+        if summary:
+            self.db.set_compaction(session_id, summary[:4000], pending[-1]["id"])
+
     # -- helpers -----------------------------------------------------------
 
-    def _tool_defs_for(self, session_id: str) -> list[dict]:
+    def _tool_defs_for(self, session_id: str,
+                       provider: Optional[Provider] = None) -> list[dict]:
         """Scope the tools exposed to the model by context. A Learning-Room session
         sees ONLY the teaching toolset (`LEARNING_TOOLS`) — a handful of relevant tools
         instead of the full ~90. That sharpens tool selection (the model actually
         reaches for render_diagram/render_simulation instead of losing them in the
-        noise) and shrinks the prompt. Every other session gets the full registry."""
+        noise) and shrinks the prompt. Every other session gets the allow-list scope
+        when one is configured (the turn's model profile wins over the global
+        ``tools.allow``), else the full registry."""
         try:
             sess = self.db.get_session(session_id)
         except Exception:  # noqa: BLE001
@@ -675,7 +882,31 @@ class Agent:
         if sess and (sess.get("kind") or "") == "learning":
             from namma_agent.core.learning import LEARNING_TOOLS
             return self.registry.definitions(only=set(LEARNING_TOOLS))
+        allow = ([str(a).strip() for a in (getattr(provider, "tool_allow", None) or [])
+                  if str(a).strip()] or self.tool_allow)
+        if allow:
+            return self.registry.definitions(only=self._expand_tool_allow(allow))
         return self.registry.definitions()
+
+    def _expand_tool_allow(self, allow: list[str]) -> set[str]:
+        """Resolve an allow-list of tool names and/or toolset (category) names into
+        concrete tool names. Entries that match nothing are logged (typo guard),
+        never fatal."""
+        wanted = set(allow)
+        names: set[str] = set()
+        matched: set[str] = set()
+        for t in self.registry.all():
+            category = t.category or "general"
+            if t.name in wanted:
+                names.add(t.name)
+                matched.add(t.name)
+            if category in wanted:
+                names.add(t.name)
+                matched.add(category)
+        if wanted - matched:
+            logger.warning("[tools] allow-list entries match no tool or toolset: %s",
+                           ", ".join(sorted(wanted - matched)))
+        return names
 
     def _is_teaching_session(self, session_id: str) -> bool:
         """True for a Learning-Room MODULE thread (where the pedagogy contract and the
@@ -795,7 +1026,8 @@ class Agent:
             emit("tool_started", {"session_id": session_id, "tool": call.name, "args": call.args})
             result = self.registry.execute(call.name, call.args)
             emit("tool_finished", {"session_id": session_id, "tool": call.name,
-                                   "ok": result.ok, "summary": result.as_message_content()[:200]})
+                                   "ok": result.ok, "summary": result.as_message_content()[:200],
+                                   "output": result.as_message_content()[:_STEP_OUTPUT_CAP]})
             self.db.log_audit(session_id, call.name, call.args, result.as_message_content(), result.ok)
             data = getattr(result, "data", None) or {}
             if result.ok and isinstance(data, dict):
@@ -820,20 +1052,56 @@ class Agent:
             ]
         return ""
 
-    def _build_messages(self, user_input: str, session_id: str, chat_mode: bool = False) -> list[dict]:
+    def _build_messages(self, user_input: str, session_id: str, chat_mode: bool = False,
+                        exposed: Optional[set] = None,
+                        provider: Optional[Provider] = None) -> list[dict]:
         # Chat mode is pure conversation: no skills catalog (no use_skill tool) and
-        # no tool-routing/learning preamble noise. User memory is NOT injected here
-        # — Cognee is the memory, recalled via mcp_cognee_recall (steered below)
-        # and the opt-in recall_context safety net.
+        # no tool-routing/learning preamble noise. Engram's core memory + host block
+        # still ride along (identity never needs a tool call).
+        #
+        # ``exposed`` is the set of tool names THIS turn's model actually sees (an
+        # allow-list may have scoped it) — the steering blocks below only make sense
+        # for tools the model can call. Falls back to registry membership when the
+        # caller doesn't pass it.
+        def _has_tool(name: str) -> bool:
+            return name in exposed if exposed is not None else name in self.registry
         catalog = "" if chat_mode else (self.skills.catalog_text() if self.skills is not None else "")
+        # Engram L1 + L5: core memory (who the user is) and the host model (what
+        # machine this is) ride along on EVERY turn — chat mode included. That is
+        # the whole point: identity can never require a tool call.
+        memory_block = self.engram.memory_block() if self.engram is not None else ""
         system = self.persona.system_prompt(
-            skills_catalog=catalog, chat_mode=chat_mode,
+            skills_catalog=catalog, chat_mode=chat_mode, memory_block=memory_block,
         )
         scope = self._scope_block(session_id)
         if scope:
             system = f"{system}\n\n{scope}"
-        # Steer the model to use Cognee memory when it's connected (agent mode only).
-        if not chat_mode and "mcp_cognee_recall" in self.registry:
+        if self.engram is not None:
+            if not chat_mode and _has_tool("memory_search"):
+                system = (
+                    f"{system}\n\nLONG-TERM MEMORY — you have persistent memory of THIS "
+                    "user spanning every past session (facts, preferences, entities and "
+                    "their relationships, past conversations).\n"
+                    "- BEFORE answering any question about the user — their life, work, "
+                    "projects, people, or anything they've told you before — call "
+                    "`memory_search` with the question, and never claim you don't know "
+                    "something about the user without searching first.\n"
+                    "- When the user shares a durable fact, save it with `memory_save` "
+                    "(block='user' for identity/standing preferences, block='agent' for "
+                    "environment facts and lessons, default 'auto' otherwise).\n"
+                    "- When the user corrects a remembered fact, save the correction — "
+                    "the old value is kept as history automatically."
+                )
+            if not chat_mode:
+                # Automatic prefetch: fused, in-process, milliseconds — replaces the
+                # old regex-gated 12s Cognee thread. The score floor is the gate.
+                try:
+                    system += self.engram.prefetch_block(user_input)
+                except Exception:  # noqa: BLE001 — memory must never break a turn
+                    pass
+        # External-plugin steering only matters when a memory MCP server (e.g. a
+        # Cognee plugin) is attached WITHOUT the native engine (bare/legacy setups).
+        elif not chat_mode and _has_tool("mcp_cognee_recall"):
             system = (
                 f"{system}\n\nCOGNEE MEMORY — you have a persistent Cognee semantic + "
                 "knowledge-graph memory of THIS user that spans every past session.\n"
@@ -849,14 +1117,8 @@ class Agent:
                 "`mcp_cognee_remember`. Prefer Cognee for recalling stored knowledge and "
                 "the connections between people, projects, and concepts."
             )
-            # Optional airtight safety net: proactively retrieve relevant memory for
-            # recall-style questions and inject it, so the answer is grounded even if
-            # the model skips the tool call (opt-in: cognee.recall_context).
-            ctx = self._cognee_recall_context(user_input)
-            if ctx:
-                system += ctx
         # Steer the model to drive the live TODO panel for multi-step work.
-        if not chat_mode and "update_todos" in self.registry:
+        if not chat_mode and _has_tool("update_todos"):
             system = (
                 f"{system}\n\nTODO PLAN — the chat UI shows a live todo panel above the "
                 "message bar, driven ONLY by your `update_todos` calls. For any task that "
@@ -875,40 +1137,30 @@ class Agent:
                 "every finished item shows `done` — never end with stale statuses.\n"
                 "- SKIP the todo list entirely for trivial or single-step requests."
             )
+        # Rolling compaction block: once a session outgrows the history window,
+        # its running summary of the evicted part rides every prompt — the model
+        # never silently loses the middle of a long conversation.
+        if self.compact_history:
+            try:
+                comp_summary = self.db.get_compaction(session_id)["summary"]
+            except Exception:  # noqa: BLE001 — compaction must never break a turn
+                comp_summary = ""
+            if comp_summary:
+                system += (
+                    "\n\nEARLIER IN THIS CONVERSATION — the chat is longer than "
+                    "the visible message window; this running summary covers the "
+                    "part you can no longer see. Treat it as established context "
+                    "(details can be re-checked with search_conversations):\n"
+                    + comp_summary
+                )
         messages: list[dict] = [{"role": "system", "content": system}]
-        messages.extend(self.db.recent_turns(session_id, self.max_history_turns))
+        # History depth: the turn's model profile may carry a smaller window
+        # (small-context local models) — 0/unset inherits the agent default.
+        history_turns = (int(getattr(provider, "max_history_turns", 0) or 0)
+                         or self.max_history_turns)
+        messages.extend(self.db.recent_turns(session_id, history_turns))
         messages.append({"role": "user", "content": user_input})
         return messages
-
-    def _cognee_recall_context(self, user_input: str) -> str:
-        """Opt-in (``cognee.recall_context``) safety net for the "Namma remembers you
-        in a fresh chat" experience: when the user asks something about themselves /
-        the past, proactively pull the answer from Cognee and inject it — so recall is
-        guaranteed even if the model wouldn't have called the tool. Bounded by a short
-        timeout and gated to recall-style questions, so normal chat is untouched."""
-        if not self._cognee_recall_context_on or "mcp_cognee_recall" not in self.registry:
-            return ""
-        text = (user_input or "").strip()
-        if len(text) < 6 or not _RECALL_HINT.search(text):
-            return ""
-        box: dict = {}
-
-        def _run():
-            try:
-                box["r"] = self.registry.execute("mcp_cognee_recall", {"query": text})
-            except Exception:  # noqa: BLE001
-                box["r"] = None
-
-        th = threading.Thread(target=_run, name="cognee-recall-ctx", daemon=True)
-        th.start()
-        th.join(timeout=12)          # never hang the turn on a slow recall
-        res = box.get("r")
-        answer = (getattr(res, "content", "") or "").strip() if getattr(res, "ok", False) else ""
-        if not answer or answer == "(no result)":
-            return ""
-        return ("\n\nRELEVANT MEMORY — retrieved from your Cognee knowledge graph for "
-                "THIS message (it reflects what the user told you earlier; answer from "
-                f"it):\n{answer[:1500]}")
 
     def _scope_block(self, session_id: str) -> str:
         """Project / Learning-Room context appended to the system prompt for a

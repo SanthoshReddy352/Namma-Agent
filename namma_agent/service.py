@@ -32,10 +32,33 @@ TokenFn = Callable[[str], None]
 ApprovalFn = Callable[[str, dict], bool]
 SpeakFn = Callable[[str], None]
 
-# Fixed name for the cognee MCP container so a stale/orphaned one can be force-removed
-# on (re)connect — `docker run --rm` containers outlive a killed parent and would
-# otherwise hold the Kuzu file lock, breaking the next launch until an app restart.
-_COGNEE_CONTAINER = "namma_cognee"
+
+def _valid_hhmm(value: str) -> bool:
+    """True for a well-formed 24h wall-clock time like '03:30'."""
+    try:
+        hh, mm = (int(x) for x in value.split(":", 1))
+        return 0 <= hh <= 23 and 0 <= mm <= 59
+    except ValueError:
+        return False
+
+
+def _consolidation_summary(report: dict) -> str:
+    """Human line for a consolidator report: 'Improved memory: +2 facts, …'."""
+    parts = []
+    for key, label in (("sessions_summarized", "summarized {n} session(s)"),
+                       ("promoted", "+{n} fact(s) promoted from past chats"),
+                       ("merged", "merged {n} duplicate(s)"),
+                       ("archived", "archived {n} stale fact(s)"),
+                       ("events_expired", "expired {n} old event(s)"),
+                       ("insights", "{n} new insight(s)"),
+                       ("skill_drafts", "drafted {n} skill(s)"),
+                       ("skills_reinforced", "reinforced {n} fact(s) from skill use"),
+                       ("core_compacted", "compacted core memory")):
+        n = report.get(key) or 0
+        if n:
+            parts.append(label.format(n=n))
+    parts.append("refreshed the host model")
+    return "Improved memory: " + ", ".join(parts) + "."
 
 
 class NammaAgentService:
@@ -57,28 +80,45 @@ class NammaAgentService:
         # trees. Let config.yaml (security.filesystem) tune the read-only roots.
         from namma_agent.core.safety import configure_path_security
         configure_path_security(self.config.get("security"))
+        # Shell sandbox (Phase 1c): Job Object / rlimit caps + optional confined
+        # root, applied to every persistent-shell child spawned from here on.
+        from namma_agent.core.sandbox import configure_sandbox
+        configure_sandbox(self.config.get("security"))
         conv = self.config.get("conversation", {})
         db_path = (self.config.get("database") or {}).get("path", "data/namma_agent.db")
+
+        # Secrets vault (Phase 1d): OS-keyring-backed store beside the database;
+        # vault values are bridged into os.environ (only where unset) BEFORE the
+        # provider and comms channels are built, so a migrated token keeps
+        # working with zero changes anywhere else.
+        from pathlib import Path as _Path
+
+        from namma_agent.core.secrets import SecretStore, bridge_env, set_store
+        vault_dir = _Path(db_path).parent if db_path != ":memory:" else _Path("data")
+        set_store(SecretStore(str(vault_dir)))
+        bridge_env()
 
         self.db = db or Database(db_path)
         # Tools the user turned off in the Toolsets tab (config.local.yaml:
         # tools.disabled) are excluded from every turn and refused if called.
         disabled_tools = (self.config.get("tools") or {}).get("disabled") or []
         self.registry = registry or ToolRegistry(disabled=disabled_tools)
-        # Cognee is THE memory. The old SQLite facts layer, the USER.md/MEMORY.md
-        # notes and the post-turn fact extractor are gone — remembering/recalling
-        # goes through the cognee MCP server (lazily, via the ingestor getter,
-        # since the ingestor is built after the tools are registered).
+        # Engram is THE memory (docs/MEMORY_SYSTEM_DESIGN.md) — native, in-process.
+        # It's resolved lazily (getter) since it's built after the tools register.
         with self.registry.categorize("memory"):
             register_memory_tools(self.registry, self.db,
-                                  get_cognee_ingestor=lambda: getattr(self, "cognee_ingestor", None))
+                                  get_engram=lambda: getattr(self, "engram", None))
         with self.registry.categorize("memory"):
             register_project_tools(self.registry, self.db)
         with self.registry.categorize("learning"):
+            # Learning recaps flow into Engram's writer (ingest_text/ingest_learning).
             register_learning_tools(self.registry, self.db,
                                     get_comms=lambda: getattr(self, "comms", None),
                                     config=self.config,
-                                    get_cognee_ingestor=lambda: getattr(self, "cognee_ingestor", None))
+                                    get_memory_writer=lambda: (
+                                        getattr(self, "engram", None).writer
+                                        if getattr(self, "engram", None) is not None
+                                        else None))
         # Auto-discover capability tools (file/shell/system/apps/...). Skipped
         # when a registry is injected (tests provide their own minimal set).
         self.mcp = None
@@ -124,38 +164,57 @@ class NammaAgentService:
         self._speak = speak_fn
 
         self.auto_approve = bool(conv.get("auto_approve", False))
-        # Opt-in: grow the Cognee graph from normal chat (background, off the reply
-        # path). Default off so Namma is unchanged unless the user enables it.
-        from namma_agent.core.cognee_ingest import CogneeIngestor
-        cog_cfg = self.config.get("cognee") or {}
-        self.cognee_ingestor = CogneeIngestor(
-            client_getter=self._cognee_client,
-            # Cognee is the ONLY memory now, so growing the graph from chat and
-            # guaranteeing recall both default ON (turn off in Settings → Cognee).
-            enabled=bool(cog_cfg.get("auto_ingest", True)),
-            include_reply=bool(cog_cfg.get("ingest_replies", False)),
-            learning_enabled=bool(cog_cfg.get("ingest_learning", True)),
+        # Engram: the native memory engine. Its model work (fact extraction,
+        # contradiction resolution) runs on provider_for(None) — i.e. whatever
+        # model the user picked in Settings, resolved live on every call.
+        from namma_agent.core.engram import Engram
+        self.engram = Engram(
+            self.db, config=self.config,
+            provider_getter=lambda: self.provider_for(None),
+            summarize_fn=lambda limit: self._summarize_pending(limit=limit),
+            # L4 ties (design §5): reflection may draft a (disabled) skill from
+            # repeated workflows; skills the user exercises reinforce related facts.
+            skills_getter=lambda: self.skills,
+            skill_usage_fn=self._skill_usage_since_last_run,
+            # Drafted skills start disabled, persisted to config.local.yaml
+            # (skills.disabled) — a proposal survives restarts as a proposal.
+            skill_disable_fn=lambda name: self.set_skill_enabled(name, False),
         )
 
         self.agent = Agent(
             self.provider, self.registry, self.db, self.persona,
             tool_loop_limit=int(conv.get("tool_loop_limit", 0)),
             max_history_turns=conv.get("max_history_turns", 12),
+            # Small-context knobs (see config.yaml): tools.allow scopes which
+            # tools/toolsets the model sees; tool_result_max_chars caps each tool
+            # result entering the context (0 = unlimited). Model profiles can
+            # override both per brain (see _build_profile_provider).
+            tool_allow=(self.config.get("tools") or {}).get("allow") or [],
+            tool_result_max_chars=int(conv.get("tool_result_max_chars", 0) or 0),
             skills=self.skills,
-            cognee_ingestor=self.cognee_ingestor,
-            cognee_recall_context=bool(cog_cfg.get("recall_context", True)),
+            engram=self.engram,
+            # Rolling context compaction: long chats keep a running summary of
+            # evicted history in the prompt (conversation.compact_history: false
+            # turns it off).
+            compact_history=bool(conv.get("compact_history", True)),
+            # One-shot "verify your file change before answering" nudge
+            # (conversation.verify_after_writes: false turns it off).
+            verify_after_writes=bool(conv.get("verify_after_writes", True)),
         )
 
         # One-time: flow any legacy SQLite facts (e.g. what the installer wizard
-        # collected before Cognee was running) into the knowledge graph, then drop
+        # collected before Engram existed) into the memory pipeline, then drop
         # them. The `name` identity fact stays — it's the onboarding-done flag.
-        self._migrate_facts_to_cognee()
+        self._migrate_legacy_facts()
 
         # Wave 4: delegate_task + persona tools need the live agent/provider/db.
         # Skipped when a registry is injected (tests provide their own minimal set).
+        self._agent_tool_handles: dict = {}
         if registry is None:
             with self.registry.categorize("agent"):
-                register_agent_tools(self.registry, self.agent, self.provider, self.db)
+                self._agent_tool_handles = register_agent_tools(
+                    self.registry, self.agent, self.provider, self.db,
+                    get_comms=lambda: getattr(self, "comms", None)) or {}
 
         # Wave 5: messaging channels (Telegram/Discord). Outbound send is always
         # available; the Telegram *inbound* bridge spawns a background polling
@@ -175,6 +234,24 @@ class NammaAgentService:
                 and self.comms.any_available):
             self.start_comms()
 
+        # Proactive routines: scheduled agent runs delivered over comms ("morning
+        # brief", news/inbox watches). The poll thread starts LAZILY — only when
+        # an enabled routine exists (creating one is the opt-in, so there's no
+        # hidden background work before that). routines.enabled: false disables
+        # the feature entirely.
+        self.routines = None
+        routines_cfg = self.config.get("routines") or {}
+        if registry is None and routines_cfg.get("enabled", True):
+            from namma_agent.core.routines import RoutineRunner, register_routine_tools
+
+            self.routines = RoutineRunner(
+                self._routine_turn, self._deliver_routine, config=self.config,
+                interval=float(routines_cfg.get("poll_seconds", 30)))
+            with self.registry.categorize("routines"):
+                register_routine_tools(self.registry, self.routines,
+                                       config=self.config)
+            self.routines.ensure_started()
+
         # Wave 5: the reminder runner is a background polling thread, so it is
         # OPT-IN too (config scheduler.run_in_background, default off). When off,
         # reminders are still stored and listed; they just don't auto-fire.
@@ -183,6 +260,14 @@ class NammaAgentService:
         self.reminders = self._build_reminder_runner() if background_on else None
         if self.reminders is not None:
             self.reminders.start()
+
+        # Sleep-time memory consolidation (design §8): idle + daily triggers.
+        # Documented in config.yaml and controllable from Settings → Memory
+        # (memory.consolidate.background: false disables the thread; the manual
+        # "Improve memory" button always works). Never started in bare test
+        # services (injected registry).
+        if registry is None and self.engram.consolidate_background:
+            self.engram.scheduler.start()
 
         # Learning nudges ride the same opt-in switch (no hidden background work):
         # when a topic sits idle past learning.nudge_after_days, ping Telegram.
@@ -344,570 +429,369 @@ class NammaAgentService:
                 return True
             return self.mcp.connect_server(cfg, self.registry) > 0 or name in self.mcp.clients
 
-    # -- Cognee memory (the Memory tab proxies these to the cognee MCP server) ----
+    # -- Engram memory (the Memory tab + /api/memory/* run on the native engine) --
 
-    def _cognee_client(self):
-        """The connected cognee MCP client, or None. The Memory tab + its API call
-        Cognee directly through this, independent of the agent loop."""
-        clients = getattr(self.mcp, "clients", {}) if self.mcp else {}
-        return clients.get("cognee")
+    def _skill_usage_since_last_run(self) -> dict:
+        """``{skill_name: use count}`` since the last consolidation, from the audit
+        log — so each run reinforces only NEW usage, not the same history forever."""
+        last = self.engram.store.latest_consolidation() or {}
+        return self.db.skill_usage(since=last.get("at"))
 
     def memory_status(self) -> dict:
-        """Whether Cognee memory is available for the Memory tab."""
-        client = self._cognee_client()
-        if client is None:
-            return {"connected": False,
-                    "hint": "Cognee isn't connected. Add/enable the 'cognee' server in Settings → MCP."}
-        tools = [t.get("name") for t in client.list_tools()]
-        return {"connected": True, "tools": tools,
-                "pending_consolidation": self.cognee_pending()}
+        """Engine status for the Memory tab: counts, core-memory usage, write-queue
+        depth and the last consolidation report (persisted — survives restarts).
+        Native memory is always on — there is no offline state."""
+        return self.engram.status()
 
-    def cognee_tool(self, tool: str, args: dict, timeout: int = 120) -> dict:
-        """Call a cognee MCP tool for the Memory tab, with a clear error if Cognee
-        is offline (so the UI degrades gracefully instead of throwing)."""
-        client = self._cognee_client()
-        if client is None:
-            return {"ok": False, "error": "Cognee memory is not connected. Enable the "
-                    "'cognee' server in Settings → MCP, then try again."}
-        try:
-            return {"ok": True, "content": client.call_tool(tool, args or {}, timeout=timeout)}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"Cognee {tool} failed: {exc}"}
-
-    # The four memory-lifecycle ops the Memory tab exposes are remember, recall,
-    # forget and **improve** (Cognee's word for it = `cognify`). The cognee-mcp image
-    # has no standalone `improve`/`memify` tool, so we realise it the way Cognee's own
-    # lifecycle does: fast `session` remembers are buffered, then `consolidate`
-    # promotes them into the permanent knowledge graph via the cognify pipeline
-    # (entity extraction + linking) — which is exactly the "improve your memory" step.
-
-    # The session-memory buffer must survive an app restart — otherwise quick
-    # "session" remembers silently drop out of the Consolidate queue and never
-    # reach the graph. It's mirrored to a JSON sidecar next to the SQLite DB.
-
-    def _cognee_buffer_path(self):
-        from pathlib import Path
-        cfg = getattr(self, "config", None)
-        if not isinstance(cfg, dict):        # bare test service — in-memory only
-            return None
-        db_path = (cfg.get("database") or {}).get("path", "data/namma_agent.db")
-        if db_path == ":memory:":
-            return None
-        return Path(db_path).parent / "cognee_pending.json"
-
-    def _cognee_buffer(self) -> list:
-        """The pending-consolidation buffer, restored from disk on first access."""
-        buf = getattr(self, "_cognee_session", None)
-        if buf is None:
-            buf = []
-            p = self._cognee_buffer_path()
-            try:
-                if p is not None and p.exists():
-                    import json
-                    data = json.loads(p.read_text(encoding="utf-8"))
-                    if isinstance(data, list):
-                        buf = [str(x) for x in data if str(x).strip()]
-            except Exception:  # noqa: BLE001 — a corrupt sidecar never blocks memory
-                buf = []
-            self._cognee_session = buf
-        return buf
-
-    def _persist_cognee_buffer(self) -> None:
-        """Best-effort atomic write of the buffer sidecar (tmp + replace)."""
-        p = self._cognee_buffer_path()
-        if p is None:
-            return
-        try:
-            import json
-            p.parent.mkdir(parents=True, exist_ok=True)
-            tmp = p.with_name(p.name + ".tmp")
-            tmp.write_text(json.dumps(self._cognee_buffer(), ensure_ascii=False),
-                           encoding="utf-8")
-            tmp.replace(p)
-        except Exception:  # noqa: BLE001
-            pass
-
-    def cognee_pending(self) -> int:
-        """How many session memories are buffered, waiting to be consolidated."""
-        return len(self._cognee_buffer())
-
-    def cognee_remember(self, text: str, permanent: bool = True) -> dict:
-        """Store text in Cognee. ``permanent`` runs cognify (builds the graph now);
-        otherwise it's fast session memory — and the text is buffered so it can later
-        be promoted into the graph by :meth:`cognee_consolidate` (the improve op)."""
-        text = (text or "").strip()
-        if not text:
-            return {"ok": False, "error": "Nothing to remember."}
-        if permanent:
-            return self.cognee_tool("remember", {"data": text}, timeout=900)
-        res = self.cognee_tool("remember", {"data": text, "session_id": "namma_ui"}, timeout=120)
-        if res.get("ok"):
-            buf = self._cognee_buffer()
-            buf.append(text)
-            self._persist_cognee_buffer()
-            res["pending_consolidation"] = len(buf)
-        return res
-
-    def cognee_consolidate(self) -> dict:
-        """The **improve** op — promote buffered session memories into the permanent
-        knowledge graph by running cognify on each, then clear the buffer. This is
-        what visibly grows/tightens the graph in the demo."""
-        client = self._cognee_client()
-        if client is None:
-            return {"ok": False, "error": "Cognee memory is not connected."}
-        buf = list(self._cognee_buffer())
-        if not buf:
-            return {"ok": True, "consolidated": 0, "pending_consolidation": 0,
-                    "content": "Nothing pending — store a few quick facts as session "
-                               "memory first, then consolidate them into the graph."}
-        done, errors = 0, []
-        for text in buf:
-            r = self.cognee_tool("remember", {"data": text}, timeout=900)
-            if r.get("ok"):
-                done += 1
-            else:
-                errors.append(r.get("error", "?"))
-        # Drop only the items we just processed (keep anything queued meanwhile).
-        self._cognee_session = self._cognee_buffer()[len(buf):]
-        self._persist_cognee_buffer()
-        msg = f"Consolidated {done} of {len(buf)} note(s) into the knowledge graph."
-        return {"ok": done > 0, "consolidated": done, "errors": errors,
-                "pending_consolidation": self.cognee_pending(),
-                "content": msg if done else "Consolidation failed: " + "; ".join(errors[:3])}
-
-    def _cognee_serve_url(self) -> str:
-        """The Cognee Cloud instance URL if the cognee server is in cloud (serve)
-        mode, else "" (self-hosted). Read from the single `cognee` server command."""
-        servers = (self.config.get("mcp") or {}).get("servers") or []
-        srv = next((s for s in servers if isinstance(s, dict) and s.get("name") == "cognee"), None)
-        cmd = (srv or {}).get("command") or []
-        if "--serve-url" in cmd:
-            i = cmd.index("--serve-url")
-            if i + 1 < len(cmd):
-                return str(cmd[i + 1]).strip().rstrip("/")
-        return ""
-
-    def _cloud_graph(self, base: str) -> dict:
-        """Sync the knowledge graph from **Cognee Cloud** via its REST API. The
-        container's `visualize_graph_ui` can't run in serve mode (no local sqlite),
-        but the cloud exposes `GET /api/v1/datasets/{id}/graph` → {nodes, edges}.
-        Auth is the `X-Api-Key` header (NOT bearer)."""
-        import json
-        import urllib.request
-        import urllib.error
-
-        key = (self._read_cognee_env(self._cloud_env_path()).get("COGNEE_API_KEY") or "").strip()
-        if not key:
-            return {"ok": True, "nodes": [], "edges": [],
-                    "note": "Cognee Cloud API key missing — re-connect in Settings → Cognee → Backend."}
-
-        def api_get(path: str):
-            req = urllib.request.Request(base + path, headers={"X-Api-Key": key})
-            with urllib.request.urlopen(req, timeout=40) as r:
-                return json.loads(r.read().decode("utf-8", "replace"))
-
-        try:
-            datasets = api_get("/api/v1/datasets/") or []
-            ds = next((d for d in datasets if d.get("name") == "namma_agent_memory"), None) \
-                or (datasets[0] if datasets else None)
-            if not ds:
-                return {"ok": True, "nodes": [], "edges": [], "note": "graph is empty"}
-            g = api_get(f"/api/v1/datasets/{ds['id']}/graph") or {}
-        except Exception as exc:  # noqa: BLE001
-            return {"ok": False, "error": f"Cloud graph fetch failed: {exc}",
-                    "nodes": [], "edges": []}
-
-        def label_of(n: dict) -> str:
-            props = n.get("properties") or {}
-            name = str(props.get("name") or "").strip()
-            if name:
-                return name
-            lab, typ = str(n.get("label") or "").strip(), str(n.get("type") or "").strip()
-            return typ if (typ and lab.startswith(typ + "_")) else (lab or typ or "node")
-
-        nodes = [{"id": n.get("id"), "label": label_of(n),
-                  "type": n.get("type") or "Entity", "color": ""}
-                 for n in (g.get("nodes") or []) if isinstance(n, dict) and n.get("id")]
-        ids = {n["id"] for n in nodes}
-        edges = [{"source": e.get("source"), "target": e.get("target"),
-                  "relation": (e.get("label") or e.get("relation") or "").strip()}
-                 for e in (g.get("edges") or [])
-                 if isinstance(e, dict) and e.get("source") in ids and e.get("target") in ids]
-        return {"ok": True, "nodes": nodes, "edges": edges, "source": "cloud",
-                "counts": {"nodes": len(nodes), "edges": len(edges)}}
-
-    def memory_graph(self) -> dict:
-        """Return the Cognee knowledge graph as ``{nodes, edges}`` for the Memory
-        tab's Obsidian-style render. Self-hosted: parse the embedded arrays from the
-        container's ``visualize_graph_ui`` HTML. Cognee Cloud (serve mode): that tool
-        can't reach a local DB, so we sync via the cloud REST graph endpoint instead."""
-        import json
-        import re
-
-        client = self._cognee_client()
-        if client is None:
-            return {"ok": False, "error": "Cognee memory is not connected.", "nodes": [], "edges": []}
-
-        serve_url = self._cognee_serve_url()
-        if serve_url:                       # Track B — pull the graph from the cloud API
-            return self._cloud_graph(serve_url)
-
-        def _balanced(html: str, start: int):
-            """Parse the JSON array starting at ``start`` (the '['), respecting
-            nesting + strings. Returns the list, or None on failure."""
-            depth = 0; in_str = False; esc = False; quote = ""
-            for i in range(start, len(html)):
-                c = html[i]
-                if in_str:
-                    if esc:
-                        esc = False
-                    elif c == "\\":
-                        esc = True
-                    elif c == quote:
-                        in_str = False
-                elif c in ("\"", "'"):
-                    in_str = True; quote = c
-                elif c == "[":
-                    depth += 1
-                elif c == "]":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(html[start:i + 1])
-                        except Exception:  # noqa: BLE001
-                            return None
-            return None
-
-        def extract_array(html: str, var: str):
-            # The viz template can contain an empty placeholder (``nodes=[]``)
-            # BEFORE the real ``var nodes = [ … ]`` — so scan every match and take
-            # the first non-empty array (falling back to the last parsed one).
-            last = []
-            for m in re.finditer(rf"\b{var}\s*=\s*\[", html):
-                arr = _balanced(html, m.end() - 1)
-                if isinstance(arr, list):
-                    if arr:
-                        return arr
-                    last = arr
-            return last
-
-        # `errs` collects any error text the viz/info tools return. In Cognee Cloud
-        # serve mode those tools fail with "unable to open database file" (they read
-        # the container's LOCAL sqlite, which doesn't exist when the cloud owns the
-        # DB) — we detect that to degrade gracefully instead of showing an empty graph.
-        errs: list[str] = []
-
-        def _err_text(raw) -> str:
-            content = raw.get("content") if isinstance(raw, dict) else None
-            if isinstance(content, list):
-                return " ".join(c.get("text", "") for c in content
-                                if isinstance(c, dict) and c.get("type") == "text")
-            return ""
-
-        def viz(args: dict) -> str:
-            try:
-                raw = client.call_tool_raw("visualize_graph_ui", args, timeout=180)
-            except Exception as exc:  # noqa: BLE001
-                errs.append(str(exc)); return ""
-            sc = raw.get("structuredContent") if isinstance(raw, dict) else None
-            html = (sc or {}).get("html", "") if isinstance(sc, dict) else ""
-            if not html:
-                errs.append(_err_text(raw))
-            return html
-
-        # Resolve the agent-scoped dataset Cognee wrote to; the no-arg visualize
-        # falls back to the (empty) global engine in direct mode, so target the
-        # dataset explicitly and only fall back if that's empty.
-        dataset = None
-        try:
-            info = client.call_tool_raw("get_client_info_json", {}, timeout=30)
-            isc = info.get("structuredContent") if isinstance(info, dict) else None
-            if isinstance(isc, dict):
-                dataset = isc.get("default_dataset") or (isc.get("client") or {}).get("default_dataset")
-        except Exception:  # noqa: BLE001
-            dataset = None
-
-        html = viz({"dataset_name": dataset}) if dataset else ""
-        raw_nodes = extract_array(html, "nodes")
-        raw_links = extract_array(html, "links")
-        if not raw_nodes:  # fall back to the default/global view
-            html2 = viz({})
-            n2 = extract_array(html2, "nodes")
-            if n2:
-                html, raw_nodes, raw_links = html2, n2, extract_array(html2, "links")
-        if not html:
-            blob = " ".join(e for e in errs if e).lower()
-            if "unable to open database file" in blob or "error executing tool" in blob:
-                return {"ok": True, "nodes": [], "edges": [], "cloud_limited": True,
-                        "note": "The live graph view runs in self-hosted (Track A) mode. "
-                                "On Cognee Cloud, recall · remember · improve · forget all "
-                                "work here — open the Cognee Cloud dashboard for the visual graph."}
-            return {"ok": True, "nodes": [], "edges": [], "note": "graph is empty"}
-        nodes = [
-            {
-                "id": n.get("id"),
-                "label": (n.get("name") or n.get("type") or "").strip(),
-                "type": n.get("type") or "Entity",
-                "color": n.get("color") or "",
-            }
-            for n in raw_nodes if isinstance(n, dict) and n.get("id")
-        ]
-        ids = {n["id"] for n in nodes}
-        edges = [
-            {"source": l.get("source"), "target": l.get("target"),
-             "relation": (l.get("relation") or "").strip()}
-            for l in raw_links
-            if isinstance(l, dict) and l.get("source") in ids and l.get("target") in ids
-        ]
+    def memory_graph(self, include_expired: bool = False,
+                     as_of: str = "") -> dict:
+        """The knowledge graph as {nodes, edges} for the Memory tab's force layout,
+        straight from SQLite. ``as_of`` (ISO timestamp) time-travels the graph to
+        what memory knew at that moment (the history slider)."""
+        g = self.engram.store.graph(include_expired=include_expired,
+                                    as_of=(as_of or "").strip() or None)
+        ids = {n["id"] for n in g["nodes"]}
+        nodes = [{"id": n["id"], "label": n["name"], "type": n.get("type") or "thing",
+                  "color": ""} for n in g["nodes"]]
+        edges = [{"source": e["src"], "target": e["dst"],
+                  "relation": (e.get("rel") or "").replace("_", " "),
+                  "expired": bool(e.get("expired_at"))}
+                 for e in g["edges"] if e.get("src") in ids and e.get("dst") in ids]
         return {"ok": True, "nodes": nodes, "edges": edges,
                 "counts": {"nodes": len(nodes), "edges": len(edges)}}
 
-    # -- Cognee settings (Settings → Memory → Cognee) ----------------------
+    def memory_recall(self, query: str, k: int = 8, include_expired: bool = False) -> dict:
+        """Fused recall (BM25 + graph + episodic, RRF-merged) with provenance."""
+        query = (query or "").strip()
+        if not query:
+            return {"ok": False, "error": "Ask something first."}
+        results = self.engram.recall(query, k=k, include_expired=include_expired)
+        return {"ok": True, "results": results}
 
-    # Non-secret env keys exposed/editable in the Cognee settings tab. LLM_API_KEY
-    # is handled separately (write-only, masked on read).
-    _COGNEE_ENV_KEYS = [
-        "LLM_PROVIDER", "LLM_MODEL", "LLM_ENDPOINT",
-        "EMBEDDING_PROVIDER", "EMBEDDING_MODEL", "EMBEDDING_ENDPOINT",
-        "EMBEDDING_DIMENSIONS", "HUGGINGFACE_TOKENIZER",
-    ]
+    def memory_remember(self, text: str) -> dict:
+        """Explicit remember: queue the text into the write pipeline (extraction +
+        contradiction resolution run in the background on the user's model)."""
+        text = (text or "").strip()
+        if not text:
+            return {"ok": False, "error": "Nothing to remember."}
+        self.engram.writer.ingest_text(text, source="manual")
+        return {"ok": True, "queued": True, "pending": self.engram.writer.pending(),
+                "content": "Queued — extraction runs in the background; the graph "
+                           "updates in a few seconds."}
 
-    def _cognee_env_path(self):
-        from namma_agent.config import _REPO_ROOT
-        return _REPO_ROOT / ".env.cognee"
+    def memory_items(self, kind: str = "", include_expired: bool = False,
+                     limit: int = 500) -> dict:
+        """The facts browser: live (or all) memory items, newest-seen first."""
+        items = self.engram.store.list_items(kind=kind or None,
+                                             include_expired=include_expired,
+                                             limit=limit)
+        return {"ok": True, "items": items}
 
-    def _cloud_env_path(self):
-        """Secrets for the Cognee Cloud (Track B) server live in their own gitignored
-        file so the API key never lands in config.local.yaml's command array."""
-        from namma_agent.config import _REPO_ROOT
-        return _REPO_ROOT / ".env.cognee.cloud"
+    def memory_forget(self, query: str = "", item_id: str = "",
+                      everything: bool = False, hard: bool = False) -> dict:
+        """Invalidate (default) or hard-delete memory. ``everything`` wipes the
+        whole store (facts, graph, core memory) — the UI gates it behind a typed
+        confirmation."""
+        if everything:
+            done = self.engram.store.wipe()
+            done["legacy_facts"] = self.db.clear_facts()
+            return {"ok": True, "cleared": done, "content": "Memory wiped."}
+        if item_id:
+            if hard:
+                self.engram.store.hard_delete(item_id)
+            else:
+                self.engram.store.invalidate(item_id)
+            return {"ok": True, "forgot": 1}
+        query = (query or "").strip()
+        if not query:
+            return {"ok": False, "error": "Give a query, an item id, or everything=true."}
+        n = self.engram.store.forget_matching(query, hard=hard)
+        word = "Deleted" if hard else "Invalidated"
+        return {"ok": True, "forgot": n,
+                "content": f"{word} {n} matching memor{'y' if n == 1 else 'ies'}."}
 
-    def _read_cognee_env(self, path=None) -> dict:
-        p = path or self._cognee_env_path()
-        out: dict[str, str] = {}
-        if p.exists():
-            for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
-                line = raw.strip()
-                if not line or line.startswith("#") or "=" not in line:
-                    continue
-                k, _, v = line.partition("=")
-                out[k.strip()] = v.strip()
+    def memory_core(self) -> dict:
+        """The two L1 core-memory blocks with entries + usage, for the editor."""
+        core = self.engram.core
+        out: dict = {"ok": True}
+        for block in ("user", "agent"):
+            out[block] = {"entries": self.engram.store.core_entries(block),
+                          **core.usage(block)}
         return out
 
-    def _write_cognee_env(self, updates: dict, path=None) -> None:
-        """Update KEY=value lines in .env.cognee, preserving comments/other lines.
-        Does NOT touch os.environ (these vars are for the container, not Namma)."""
-        p = path or self._cognee_env_path()
-        lines = p.read_text(encoding="utf-8").splitlines() if p.exists() else []
-        for key, value in (updates or {}).items():
-            key = str(key).strip()
-            if not key:
-                continue
-            new = f"{key}={'' if value is None else value}"
-            for i, raw in enumerate(lines):
-                s = raw.strip()
-                if s and not s.startswith("#") and s.split("=", 1)[0].strip() == key:
-                    lines[i] = new
-                    break
-            else:
-                lines.append(new)
-        p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    def memory_core_save(self, block: str, action: str, text: str = "",
+                         entry_id: int = 0, old_text: str = "") -> dict:
+        """Core-memory edits from the UI. ``entry_id`` (from memory_core) addresses
+        an exact entry for replace/remove; substring ``old_text`` also works (the
+        tool-side contract)."""
+        core = self.engram.core
+        action = (action or "add").strip().lower()
+        if entry_id and action in ("replace", "remove"):
+            entry = next((e for e in self.engram.store.core_entries(block)
+                          if e["id"] == int(entry_id)), None)
+            if entry is None:
+                return {"ok": False, "error": "that entry no longer exists"}
+            old_text = entry["text"]
+        if action == "add":
+            return core.add(block, text)
+        if action == "replace":
+            return core.replace(block, old_text, text)
+        if action == "remove":
+            return core.remove(block, old_text)
+        return {"ok": False, "error": f"unknown action {action!r}"}
 
-    def cognee_settings(self) -> dict:
-        """Everything the Cognee settings tab needs: connection/server status, the
-        editable .env.cognee values (key masked), and the cognee.* behaviour flags."""
-        env = self._read_cognee_env()
-        cog = self.config.get("cognee") or {}
-        servers = (self.config.get("mcp") or {}).get("servers") or []
-        server = next((s for s in servers if isinstance(s, dict) and s.get("name") == "cognee"), None)
-        key = (env.get("LLM_API_KEY") or "").strip()
-        # Track A (self-hosted) vs Track B (Cognee Cloud) is detected from the single
-        # `cognee` server entry: a cloud entry carries `--serve-url <instance>`.
-        cmd = (server or {}).get("command") or []
-        serve_url = ""
-        if "--serve-url" in cmd:
-            i = cmd.index("--serve-url")
-            serve_url = cmd[i + 1] if i + 1 < len(cmd) else ""
-        mode = "cloud" if serve_url else "local"
-        cloud_env = self._read_cognee_env(self._cloud_env_path())
-        cloud_key = (cloud_env.get("COGNEE_API_KEY") or "").strip()
-        # The last-used instance URL, remembered even while on the self-hosted backend,
-        # so the Cloud form can pre-fill it (paste once, never again).
-        saved_serve_url = (cloud_env.get("COGNEE_INSTANCE_URL") or "").strip().rstrip("/")
+    def memory_environment(self, refresh: bool = False) -> dict:
+        """The L5 host model (read-only card in the Memory tab)."""
+        env = self.engram.environment.get(refresh=refresh)
+        return {"ok": True, "environment": env,
+                "rendered": self.engram.environment.render()}
+
+    def memory_consolidate(self) -> dict:
+        """The **Improve memory** op — one full consolidator pass (design §8):
+        summarize sessions, promote episodic→semantic, merge duplicates, decay &
+        expire, reflect into insights, compact core memory, refresh the host
+        model. Same code path the idle/daily scheduler runs."""
+        result = self.engram.consolidate(reason="manual")
+        if not result.get("ok"):
+            return result
+        return {**result, "content": _consolidation_summary(result)}
+
+    # -- memory settings (the single Settings → Memory section) ----------------
+
+    def memory_settings(self) -> dict:
+        """Everything the Settings → Memory section shows. One source of truth —
+        the live Engram objects, not a second copy of the config."""
         return {
-            "connected": self._cognee_client() is not None,
-            "server_present": server is not None,
-            "server_enabled": (bool(server.get("enabled", True)) if server else False),
-            "env": {k: env.get(k, "") for k in self._COGNEE_ENV_KEYS},
-            "llm_api_key_set": bool(key) and not key.upper().startswith("REPLACE"),
-            "auto_ingest": bool(cog.get("auto_ingest", True)),
-            "ingest_replies": bool(cog.get("ingest_replies", False)),
-            "ingest_learning": bool(cog.get("ingest_learning", True)),
-            "recall_context": bool(cog.get("recall_context", True)),
-            # Track B (Cloud) status — same Memory tab/code, only this entry differs.
-            "mode": mode,
-            "serve_url": serve_url,                       # active (only when on cloud)
-            "cloud_serve_url": serve_url or saved_serve_url,  # remembered → pre-fill the form
-            "cloud_key_set": bool(cloud_key) and not cloud_key.upper().startswith("REPLACE"),
+            "ok": True,
+            "engine": "engram",
+            "prefetch": self.engram.prefetch_enabled,
+            "k": self.engram.prefetch_k,
+            "salience_min_chars": self.engram.writer.min_chars,
+            "budget_per_hour": self.engram.writer.budget_per_hour,
+            "consolidate_background": self.engram.consolidate_background,
+            "idle_minutes": self.engram.scheduler.idle_minutes,
+            "daily_at": self.engram.scheduler.daily_at,
+            "status": self.memory_status(),
         }
 
-    def save_cognee_settings(self, env: Optional[dict] = None, flags: Optional[dict] = None) -> dict:
-        """Persist Cognee config from the UI: model/embedding env → .env.cognee,
-        behaviour flags → config.local.yaml (applied live). Reconnects the server
-        only when the container env changed (so model edits take effect)."""
+    def save_memory_settings(self, settings: Optional[dict] = None) -> dict:
+        """Persist memory tuning to config.local.yaml and apply it live."""
         from namma_agent.config import update_config
 
-        updates = {k: env[k] for k in self._COGNEE_ENV_KEYS if env and k in env and env[k] is not None}
-        if env and (env.get("LLM_API_KEY") or "").strip():
-            updates["LLM_API_KEY"] = env["LLM_API_KEY"].strip()  # only write a non-empty key
-        # Only persist values that actually differ — the UI posts the whole form, and
-        # an unchanged save must NOT trigger the ~30s container reconnect below.
-        current = self._read_cognee_env()
-        updates = {k: v for k, v in updates.items() if str(v) != current.get(k, "")}
-        if updates:
-            self._write_cognee_env(updates)
+        settings = settings or {}
+        mem: dict = {"write": {}, "recall": {}, "consolidate": {}}
+        if "prefetch" in settings:
+            mem["recall"]["prefetch"] = bool(settings["prefetch"])
+            self.engram.prefetch_enabled = bool(settings["prefetch"])
+        if "k" in settings:
+            k = max(1, min(20, int(settings["k"])))
+            mem["recall"]["k"] = k
+            self.engram.prefetch_k = k
+        if "salience_min_chars" in settings:
+            n = max(0, int(settings["salience_min_chars"]))
+            mem["write"]["salience_min_chars"] = n
+            self.engram.writer.min_chars = n
+        if "budget_per_hour" in settings:
+            n = max(1, int(settings["budget_per_hour"]))
+            mem["write"]["budget_per_hour"] = n
+            self.engram.writer.budget_per_hour = n
+        if "consolidate_background" in settings:
+            on = bool(settings["consolidate_background"])
+            mem["consolidate"]["background"] = on
+            self.engram.consolidate_background = on
+            # Applied live: flip the sleep-time thread with the toggle.
+            if on:
+                self.engram.scheduler.start()
+            else:
+                self.engram.scheduler.stop()
+        if "idle_minutes" in settings:
+            n = max(0, int(settings["idle_minutes"]))
+            mem["consolidate"]["idle_minutes"] = n
+            self.engram.scheduler.idle_minutes = float(n)
+        if "daily_at" in settings:
+            t = str(settings["daily_at"] or "").strip()
+            if t == "" or _valid_hhmm(t):
+                mem["consolidate"]["daily_at"] = t
+                self.engram.scheduler.daily_at = t
+        mem = {k: v for k, v in mem.items() if v}
+        if mem:
+            self.config = update_config({"memory": mem})
+        return self.memory_settings()
 
-        if flags:
-            cog: dict = {}
-            if "auto_ingest" in flags:
-                cog["auto_ingest"] = bool(flags["auto_ingest"])
-            if "ingest_replies" in flags:
-                cog["ingest_replies"] = bool(flags["ingest_replies"])
-            if "ingest_learning" in flags:
-                cog["ingest_learning"] = bool(flags["ingest_learning"])
-            if "recall_context" in flags:
-                cog["recall_context"] = bool(flags["recall_context"])
-            if cog:
-                self.config = update_config({"cognee": cog})
-                if getattr(self, "cognee_ingestor", None) is not None:  # apply live
-                    if "auto_ingest" in cog:
-                        self.cognee_ingestor.enabled = cog["auto_ingest"]
-                    if "ingest_replies" in cog:
-                        self.cognee_ingestor.include_reply = cog["ingest_replies"]
-                    if "ingest_learning" in cog:
-                        self.cognee_ingestor.learning_enabled = cog["ingest_learning"]
-                if "recall_context" in cog and getattr(self, "agent", None) is not None:
-                    self.agent._cognee_recall_context_on = cog["recall_context"]
+    # -- cross-chat search (the Sidebar search box) ---------------------------
 
-        if updates:   # model/embedding env changed → restart JUST cognee so the
-            self._reconnect_cognee()  # container reloads it (other servers untouched)
-        return {"ok": True, **self.cognee_settings()}
+    def search_chats(self, query: str, limit: int = 30) -> list[dict]:
+        """Keyword search across every conversation, grouped by session for the
+        UI: [{session_id, title, kind, project_id, date, snippet, matches}]."""
+        query = (query or "").strip()
+        if not query:
+            return []
+        # Natural questions → OR-query so punctuation never breaks FTS5 MATCH
+        # (same transform recall uses); BM25 still ranks multi-term hits first.
+        words = [w for w in "".join(c if c.isalnum() else " " for c in query).split()
+                 if len(w) > 1]
+        fts_q = " OR ".join(list(dict.fromkeys(words))[:12]) or query
+        hits = self.db.search_turns(fts_q, limit=limit * 3)
+        grouped: dict[str, dict] = {}
+        for h in hits:
+            sid = h["session_id"]
+            if sid in grouped:
+                grouped[sid]["matches"] += 1
+                continue
+            sess = self.db.get_session(sid)
+            if not sess:
+                continue
+            snippet = " ".join((h.get("content") or "").split())
+            grouped[sid] = {
+                "session_id": sid,
+                "title": sess.get("title") or "Untitled chat",
+                "kind": sess.get("kind") or "chat",
+                "project_id": sess.get("project_id"),
+                "date": (h.get("created_at") or "")[:10],
+                "snippet": snippet[:160] + ("…" if len(snippet) > 160 else ""),
+                "matches": 1,
+            }
+            if len(grouped) >= limit:
+                break
+        return list(grouped.values())
 
-    def _reconnect_cognee(self) -> bool:
-        """Targeted restart of the single ``cognee`` MCP server from the current
-        config — used after env edits and by the Cognee tab's Reconnect. Other MCP
-        servers keep running. Returns True when cognee is connected afterwards."""
-        servers = (self.config.get("mcp") or {}).get("servers") or []
-        entry = next((s for s in servers if isinstance(s, dict) and s.get("name") == "cognee"), None)
-        if entry is None:
+    # -- routines ------------------------------------------------------------
+
+    def _routine_turn(self, prompt: str, session_id):
+        """One scheduled routine run = one normal agent turn in the routine's own
+        persistent session (runs build on earlier ones). Destructive tools are
+        always DECLINED — a scheduled run has nobody to ask for approval."""
+        res = self.run_turn(prompt, session_id=session_id, mode="agent",
+                            approval=lambda _name, _args: False)
+        return res.content, res.session_id
+
+    def _deliver_routine(self, name: str, content: str) -> None:
+        """Routine results reach the user wherever they are: messaging channels
+        first, desktop notification as the fallback."""
+        if self.comms is not None and self.comms.any_available:
+            try:
+                self.comms.send(f"📋 {name}\n\n{content}")
+                return
+            except Exception:  # noqa: BLE001 — fall through to the desktop
+                pass
+        try:
+            from namma_agent.core.notifications import send_native_notification
+
+            send_native_notification(f"{assistant_name(self.config)} — {name}",
+                                     content[:200])
+        except Exception:  # noqa: BLE001 — delivery is best-effort
+            pass
+
+    def list_routines(self) -> list[dict]:
+        from namma_agent.core.routines import load_routines
+
+        return load_routines(self.config)
+
+    def set_routine_enabled(self, routine_id: int, enabled: bool) -> bool:
+        from namma_agent.core.routines import load_routines, save_routines
+
+        items = load_routines(self.config)
+        item = next((i for i in items if int(i.get("id", 0)) == int(routine_id)), None)
+        if item is None:
             return False
-        with self._mcp_lock:
-            if self.mcp is not None:
-                with self.registry.categorize("mcp"):
-                    self.mcp.disconnect_server("cognee", self.registry)
-            self._stop_cognee_containers()
-            if not entry.get("enabled", True):
-                return False
-            return self._apply_one_mcp_server(entry, True)
+        item["enabled"] = bool(enabled)
+        save_routines(items, self.config)
+        if enabled and self.routines is not None:
+            self.routines.ensure_started()
+        return True
 
-    def register_cognee_server(self, mode: str = "local",
-                               serve_url: str = "", api_key: str = "") -> dict:
-        """One-click: set the single `cognee` MCP server entry to the requested track
-        and (re)connect — so the user doesn't hand-write the docker command.
+    def delete_routine(self, routine_id: int) -> bool:
+        from namma_agent.core.routines import load_routines, save_routines
 
-        ``mode="local"`` (Track A) = the self-hosted container (Ollama + Kuzu/LanceDB).
-        ``mode="cloud"`` (Track B) = the SAME image in serve mode against Cognee Cloud
-        (`--serve-url <instance>` + `COGNEE_API_KEY`); the cloud owns its DB/embeddings,
-        so no local network/volume is needed. Either way the entry is named `cognee`,
-        so the Memory tab, graph, and ingestor are unchanged — only this entry differs.
-        """
-        from namma_agent.config import update_config
+        items = load_routines(self.config)
+        kept = [i for i in items if int(i.get("id", 0)) != int(routine_id)]
+        if len(kept) == len(items):
+            return False
+        save_routines(kept, self.config)
+        return True
 
-        mode = (mode or "local").strip().lower()
-        if mode == "cloud":
-            cloud_env = self._read_cognee_env(self._cloud_env_path())
-            # Remember the instance URL: fall back to the saved one so Reconnect works
-            # without re-typing, and so switching to Self-hosted and back (which rewrites
-            # the cognee entry WITHOUT --serve-url) never loses it.
-            url = (serve_url or "").strip().rstrip("/") \
-                or (cloud_env.get("COGNEE_INSTANCE_URL") or "").strip().rstrip("/")
-            if not url:
-                return {"ok": False, "error": "A Cognee Cloud instance URL is required "
-                        "(e.g. https://your-instance.cognee.ai)."}
-            if not ((api_key or "").strip() or (cloud_env.get("COGNEE_API_KEY") or "").strip()):
-                return {"ok": False, "error": "A Cognee Cloud API key is required the first "
-                        "time (get it from platform.cognee.ai)."}
-            # Persist URL (+ key if newly supplied) to the gitignored cloud env file so
-            # both survive reconnects and backend switches. The key never enters config.
-            cloud_updates = {"COGNEE_INSTANCE_URL": url}
-            if (api_key or "").strip():
-                cloud_updates["COGNEE_API_KEY"] = api_key.strip()
-            self._write_cognee_env(cloud_updates, path=self._cloud_env_path())
-            env_path = str(self._cloud_env_path()).replace("\\", "/")
-            entry = {
-                "name": "cognee",
-                # `--name` lets the client force-remove a stale container so switching
-                # backends doesn't leave a lock-holding orphan. args after the image go
-                # to cognee-mcp; `cognee.serve()` then routes ALL ops to the cloud.
-                "command": ["docker", "run", "-i", "--rm", "--name", _COGNEE_CONTAINER,
-                            "--env-file", env_path,
-                            "cognee/cognee-mcp:main", "--serve-url", url],
-                "enabled": True, "connect_timeout": 90, "call_timeout": 900,
-            }
-        else:
-            # Butter-smooth first run: if .env.cognee doesn't exist yet, seed it
-            # from the example (fully-local Ollama defaults) instead of failing.
-            p = self._cognee_env_path()
-            if not p.exists():
-                example = p.with_name(p.name + ".example")
-                if example.exists():
-                    p.write_text(example.read_text(encoding="utf-8"), encoding="utf-8")
-            env_path = str(self._cognee_env_path()).replace("\\", "/")
-            entry = {
-                "name": "cognee",
-                "command": ["docker", "run", "-i", "--rm", "--name", _COGNEE_CONTAINER,
-                            "--network", "agi_default",
-                            "--env-file", env_path, "-v", "cognee-data:/cognee-data",
-                            "cognee/cognee-mcp:main"],
-                "enabled": True, "connect_timeout": 90, "call_timeout": 900,
-            }
+    def run_routine_now(self, routine_id: int) -> Optional[str]:
+        from namma_agent.core.routines import load_routines, save_routines
 
-        servers = [dict(s) for s in ((self.config.get("mcp") or {}).get("servers") or [])
-                   if isinstance(s, dict) and s.get("name") != "cognee"]
-        servers.append(entry)   # upsert: swap the single cognee entry for the chosen track
-        with self._mcp_lock:
-            self.config = update_config({"mcp": {"servers": servers}})
-            if self.mcp is not None:
-                with self.registry.categorize("mcp"):
-                    self.mcp.disconnect_server("cognee", self.registry)
-            # Switching backends: stop ANY running cognee container first (covers legacy
-            # un-named ones the per-client cleanup can't target by name), so the new
-            # container — local or cloud — starts clean instead of hitting a held lock.
-            self._stop_cognee_containers()
-            # Targeted (re)connect of JUST the cognee entry — other MCP servers
-            # (github, …) keep running instead of being restarted with it.
-            connected = self._apply_one_mcp_server(entry, True)
-        out = {"ok": True, **self.cognee_settings()}
-        if not connected:
-            out["error"] = ("Saved, but the Cognee server didn't connect. Check Docker is "
-                            "running (and for Cloud: the instance URL + API key), then Reconnect.")
-        return out
+        if self.routines is None:
+            return None
+        import time as _time
+
+        items = load_routines(self.config)
+        item = next((i for i in items if int(i.get("id", 0)) == int(routine_id)), None)
+        if item is None:
+            return None
+        content = self.routines.run_routine(item)
+        item["last_run_ts"] = _time.time()
+        save_routines(items, self.config)
+        return content
+
+    # -- background-work observability ---------------------------------------
 
     @staticmethod
-    def _stop_cognee_containers() -> None:
-        """Force-remove every running cognee-mcp container (best-effort). Used on a
-        backend switch so a leftover Kuzu-locking container can't block the new one."""
-        import subprocess
+    def _thread_alive(obj) -> bool:
+        """True when a runner object's daemon thread is actually alive (every
+        runner here keeps it on ``_thread``)."""
+        t = getattr(obj, "_thread", None)
+        return bool(t is not None and t.is_alive())
+
+    def background_status(self) -> dict:
+        """One glance at every background subsystem — what's alive, what last
+        ran, what's queued. Powers GET /api/status and the Settings panel."""
+        from namma_agent.core.routines import load_routines
+        from namma_agent.core.sandbox import status as _sandbox_status
+
+        routines = load_routines(self.config)
+        bg_tasks = []
+        getter = self._agent_tool_handles.get("background_tasks")
+        if getter is not None:
+            try:
+                bg_tasks = getter()
+            except Exception:  # noqa: BLE001
+                bg_tasks = []
+        usage = {}
         try:
-            out = subprocess.run(
-                ["docker", "ps", "-aq", "--filter", "ancestor=cognee/cognee-mcp:main"],
-                capture_output=True, text=True, timeout=20)
-            ids = [x for x in (out.stdout or "").split() if x]
-            if ids:
-                subprocess.run(["docker", "rm", "-f", *ids], stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=30)
+            usage = self.db.usage_stats(days=7)
         except Exception:  # noqa: BLE001
             pass
+        return {
+            "memory": {
+                "pending_writes": self.engram.writer.pending(),
+                "last_consolidation": self.engram.store.latest_consolidation(),
+                "consolidator_running": self._thread_alive(self.engram.scheduler),
+                "compacting_sessions": len(getattr(self.agent, "_compacting", ())),
+                "embeddings": bool(self.engram.embedder is not None
+                                   and self.engram.embedder.available()),
+            },
+            "routines": {
+                "total": len(routines),
+                "enabled": sum(1 for r in routines if r.get("enabled", True)),
+                "runner_running": bool(self.routines is not None
+                                       and self.routines.running),
+                "items": [{"id": r.get("id"), "name": r.get("name"),
+                           "enabled": r.get("enabled", True),
+                           "last_run_ts": r.get("last_run_ts"),
+                           "schedule": r.get("schedule")} for r in routines],
+            },
+            "background_tasks": {
+                "running": sum(1 for t in bg_tasks if t.get("status") == "running"),
+                "items": bg_tasks[:20],
+            },
+            "reminders": {
+                "enabled": self.reminders is not None,
+                "running": self._thread_alive(self.reminders)
+                if self.reminders is not None else False,
+            },
+            "learning_nudger": {
+                "running": self._thread_alive(self.learning_nudger)
+                if self.learning_nudger is not None else False,
+            },
+            "comms": self.comms_status(),
+            "usage": usage,
+            # Phase 1c: shell-sandbox state (mechanism, caps, whether the last
+            # spawn actually got sandboxed) — the Security tab (1e) reads this.
+            "shell_sandbox": _sandbox_status(),
+        }
 
     # -- reminders ---------------------------------------------------------
 
@@ -977,13 +861,114 @@ class NammaAgentService:
         out = _re.sub(r"\n{3,}", "\n\n", out).strip()
         return out or content
 
+    # -- security overview (Phase 1e — the Security tab's one endpoint) -----
+
+    def security_overview(self) -> dict:
+        """Everything the trust model is doing, in one payload: per-channel
+        trust, sandbox state, secrets inventory (names only), the quarantine
+        log (memory + documents + flagged web fetches), and the recent
+        approval/audit trail annotated with each tool's destructive flag."""
+        from namma_agent.core.sandbox import status as sandbox_status
+        from namma_agent.core.trust import TRUST_LEVELS, trust_map
+
+        destructive = {t.name for t in self.registry.all() if t.destructive}
+        audit = []
+        for row in self.db.recent_audit(limit=50):
+            row["destructive"] = row["tool"] in destructive
+            audit.append(row)
+
+        quarantined_memory = [{
+            "id": item["id"],
+            "text": (item["text"] or "")[:200],
+            "kind": item.get("kind") or "fact",
+            "source": item.get("source") or "",
+            "status": item.get("screen_status") or "",
+            "at": item.get("created_at") or "",
+        } for item in self.engram.store.quarantined_items(limit=50)]
+
+        # Flagged web fetches leave their ⚠ marker in the audit summaries —
+        # surface them as their own quarantine section without a new store.
+        web_flags = [{"tool": a["tool"], "summary": a["summary"], "at": a["at"]}
+                     for a in audit if a["summary"].startswith("⚠")]
+
+        return {
+            "ok": True,
+            "trust": trust_map(self.config),
+            "trust_levels": list(TRUST_LEVELS),
+            "sandbox": sandbox_status(),
+            "secrets": {k: v for k, v in self.secrets_overview().items() if k != "ok"},
+            "quarantine": {
+                "memory": quarantined_memory,
+                "documents": self.db.flagged_documents(),
+                "web": web_flags,
+            },
+            "audit": audit,
+        }
+
+    # -- secrets vault (Phase 1d) ------------------------------------------
+
+    def secrets_overview(self) -> dict:
+        """Vault inventory for Settings/Security: backend + names ONLY."""
+        from namma_agent.core.secrets import get_store
+
+        store = get_store()
+        return {"ok": True, "backend": store.backend, "names": store.names()}
+
+    def secret_set(self, name: str, value: str) -> dict:
+        """Store/update one secret in the vault (and the live environment, so it
+        takes effect without a restart)."""
+        import os as _os
+
+        from namma_agent.core.secrets import get_store
+
+        store = get_store()
+        if not store.set(name, value):
+            return {"ok": False, "error": "invalid name or empty value",
+                    **self.secrets_overview()}
+        _os.environ[name.strip()] = value.strip()
+        return self.secrets_overview()
+
+    def secret_delete(self, name: str) -> dict:
+        from namma_agent.core.secrets import get_store
+
+        get_store().delete(name)
+        return self.secrets_overview()
+
+    def migrate_secrets(self, scrub: bool = False) -> dict:
+        """Opt-in: move secret-looking `.env` entries into the vault."""
+        from namma_agent.core.secrets import migrate_env_file
+
+        return {"ok": True, **migrate_env_file(scrub=scrub)}
+
     def comms_status(self) -> dict:
         """Gateway state for the Settings UI. ``configured`` is False when comms
-        couldn't be built at all (so the UI can hide the controls)."""
+        couldn't be built at all (so the UI can hide the controls). Always carries
+        the per-channel trust map (Phase 1a) so the Messaging tab can render the
+        trust pickers even before the gateway starts."""
+        from namma_agent.core.trust import TRUST_LEVELS, trust_map
+
+        trust = {"trust": trust_map(self.config), "trust_levels": list(TRUST_LEVELS)}
         if self.comms is None:
             return {"configured": False, "running": False, "available": [],
-                    "polling": [], "webhooks": []}
-        return {"configured": True, **self.comms.status()}
+                    "polling": [], "webhooks": [], **trust}
+        return {"configured": True, **self.comms.status(), **trust}
+
+    def set_channel_trust(self, channel: str, level: str) -> dict:
+        """Persist a per-channel trust level (config.local.yaml: comms.trust) and
+        apply it to the running bridges immediately."""
+        from namma_agent.config import update_config
+        from namma_agent.core.trust import channel_trust, normalize_trust, trust_map
+
+        channel = (channel or "").strip().lower()
+        level = normalize_trust(level)
+        if channel not in trust_map(self.config):
+            return {"ok": False, "error": f"unknown channel {channel!r}"}
+        if not level:
+            return {"ok": False, "error": "level must be owner, trusted, or untrusted"}
+        self.config = update_config({"comms": {"trust": {channel: level}}})
+        if self.comms is not None:
+            self.comms.apply_trust(lambda ch: channel_trust(ch, self.config))
+        return {"ok": True, **self.comms_status()}
 
     def start_comms(self) -> dict:
         """Start (or restart) the inbound comms gateway. Rebuilds channels from the
@@ -995,8 +980,11 @@ class NammaAgentService:
         if not self.comms.any_available:
             return {**self.comms_status(),
                     "error": "No channels are configured. Add a token in Settings → Messaging first."}
+        from namma_agent.core.trust import channel_trust
+
         self.comms.start_inbound(self._channel_turn, name=self.persona.name,
-                                 get_models=self.configured_models)
+                                 get_models=self.configured_models,
+                                 trust_for=lambda ch: channel_trust(ch, self.config))
         return self.comms_status()
 
     def stop_comms(self) -> dict:
@@ -1077,11 +1065,15 @@ class NammaAgentService:
         logger.info("[shutdown] cleaning up and exiting…")
 
         def _cleanup_and_exit():
+            from namma_agent.core.shell_session import close_all as _close_shells
+
             for fn in (
                 lambda: self.reminders and self.reminders.stop(),
                 lambda: self.learning_nudger and self.learning_nudger.stop(),
+                lambda: self.engram.scheduler.stop(),
                 lambda: self.comms and self.comms.stop(),
                 self._close_browser,
+                _close_shells,
             ):
                 try:
                     fn()
@@ -1098,35 +1090,34 @@ class NammaAgentService:
         if getattr(browser, "_controller", None) is not None:
             browser._controller.close()
 
-    def _migrate_facts_to_cognee(self) -> None:
-        """Move legacy SQLite facts into Cognee (background cognify) and delete
-        them — Cognee is the only memory now. No-op when Cognee isn't connected
-        (the facts stay put and migrate on a later boot)."""
+    def _migrate_legacy_facts(self) -> None:
+        """Move legacy SQLite facts into Engram's write pipeline and delete them
+        (no connectivity precondition — the pipeline is always available)."""
         try:
             facts = self.db.all_facts()
         except Exception:  # noqa: BLE001
             return
         pending = [f for f in facts if (f.get("key") or "") != "name"]
-        if not pending or self._cognee_client() is None:
+        if not pending:
             return
         for f in pending:
-            self.cognee_ingestor.ingest_text(
-                f"User {str(f['key']).replace('_', ' ')}: {f['value']}")
+            self.engram.writer.ingest_text(
+                f"User {str(f['key']).replace('_', ' ')}: {f['value']}",
+                source="import:legacy-facts")
             self.db.delete_fact(f["key"])
         from namma_agent.core.logger import logger
-        logger.info("[memory] migrated %d legacy fact(s) into Cognee", len(pending))
+        logger.info("[memory] migrated %d legacy fact(s) into Engram", len(pending))
 
     # -- memory cleanup ----------------------------------------------------
 
     def clear_memory(self, scope: str = "all") -> dict:
-        """Wipe stored data. scope: memory (the Cognee knowledge graph) |
+        """Wipe stored data. scope: memory (Engram: facts, graph, core memory) |
         conversations (chat transcripts + summaries) | all. Legacy scopes
-        ('facts'/'notes') map onto the Cognee wipe."""
+        ('facts'/'notes'/'cognee') map onto the memory wipe."""
         scope = (scope or "all").lower()
         done: dict = {}
         if scope in ("memory", "cognee", "facts", "notes", "all"):
-            r = self.cognee_tool("forget", {"everything": True}, timeout=120)
-            done["cognee"] = "cleared" if r.get("ok") else (r.get("error") or "failed")
+            done["engram"] = self.engram.store.wipe()
             # Also drop legacy local leftovers so a wipe really is a wipe.
             done["legacy_facts"] = self.db.clear_facts()
         if scope in ("conversations", "sessions", "all"):
@@ -1411,15 +1402,17 @@ class NammaAgentService:
 
     def complete_onboarding(self, name: str = "", facts: Optional[dict] = None) -> dict:
         # The name row is only the "onboarding done" flag for the welcome card —
-        # the MEMORY of who the user is goes into Cognee (background cognify).
+        # the MEMORY of who the user is goes through Engram's write pipeline.
         name = (name or "").strip()
         if name:
             self.db.save_fact("name", name, category="identity")
-            self.cognee_ingestor.ingest_text(f"The user's name is {name}.")
+            self.engram.writer.ingest_text(f"The user's name is {name}.",
+                                           source="onboarding")
         for key, value in (facts or {}).items():
             key, value = str(key).strip(), str(value).strip()
             if key and value:
-                self.cognee_ingestor.ingest_text(f"User {key.replace('_', ' ')}: {value}")
+                self.engram.writer.ingest_text(
+                    f"User {key.replace('_', ' ')}: {value}", source="onboarding")
         return self.onboarding_status()
 
     # -- persona authoring -------------------------------------------------
@@ -1620,7 +1613,9 @@ class NammaAgentService:
         """Build a single Provider for a model profile. The connection (type /
         base_url / api_key_env) comes from the profile's named provider ref, or —
         for older self-contained rows — its own inline fields. Tuning
-        (max_tokens/temperature/timeout) is inherited from the default provider."""
+        (max_tokens/timeout) is inherited from the default provider unless the
+        profile overrides it — a small-context local model (LM Studio/Ollama)
+        needs a lower output cap and a longer timeout than a cloud brain."""
         from namma_agent.core.providers.registry import build_provider
         base = dict(self.config.get("provider") or {})
         conn = self._providers.get(prof.get("provider") or "", {})
@@ -1630,11 +1625,19 @@ class NammaAgentService:
             "base_url": prof.get("base_url") or conn.get("base_url") or "",
             "api_key_env": (prof.get("api_key_env") or conn.get("api_key_env")
                             or base.get("api_key_env")),
-            "max_tokens": base.get("max_tokens", 8192),
+            "max_tokens": prof.get("max_tokens") or base.get("max_tokens", 8192),
             "temperature": base.get("temperature", 0.3),
-            "timeout_s": base.get("timeout_s", 60),
+            "timeout_s": prof.get("timeout_s") or base.get("timeout_s", 60),
         }
-        return build_provider(spec)
+        prov = build_provider(spec)
+        # Per-profile turn shaping the agent reads off the turn's provider: a
+        # scoped toolset, a shorter history window, and a tool-result cap — so ONE
+        # small local model can run lite while cloud profiles stay full-fat.
+        # 0/empty = inherit the global (config) settings.
+        prov.tool_allow = list(prof.get("tools_allow") or [])
+        prov.max_history_turns = int(prof.get("max_history_turns") or 0)
+        prov.tool_result_max_chars = int(prof.get("tool_result_max_chars") or 0)
+        return prov
 
     def run_turn(
         self,
@@ -1655,6 +1658,8 @@ class NammaAgentService:
             get_current_session, set_artifact_recorder, set_askpass, set_event_sink,
         )
 
+        # Any turn resets the memory consolidator's idle clock.
+        self.engram.note_activity()
         emit = fanout(self.narration.handle_event, sink)
         # The per-turn emit is passed straight into process_turn (below) so
         # concurrent turns never clobber each other's event routing. Spoken

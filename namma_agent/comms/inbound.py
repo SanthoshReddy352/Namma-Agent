@@ -30,6 +30,10 @@ class InboundBridge:
         # Returns the configured model profiles (for the /model picker). Optional so
         # callers/tests that don't switch models still work.
         self._get_models = get_models or (lambda: [])
+        # Trust level of this channel's sender (core.trust): owner | trusted |
+        # untrusted. Assigned by CommsManager.start_inbound from config; the
+        # bridge sets it as the turn-local level around every turn it runs.
+        self.trust = "owner"
         self._session_id: Optional[str] = None
         self._mode = "agent"
         self._model_id: Optional[str] = None        # chosen brain (None = default)
@@ -219,8 +223,12 @@ class InboundBridge:
         agent's intermediate 'preamble' lines are delivered live, as their own
         messages, rather than bundled into the final reply (see service._channel_turn)."""
         from namma_agent.core.interactive import reset_progress_sink, set_progress_sink
+        from namma_agent.core.trust import reset_message_trust, set_message_trust
 
         token = set_progress_sink(self._progress_send)
+        # The channel's trust level rides the turn as a contextvar (same thread),
+        # so the agent loop + memory pipeline see it without a signature change.
+        trust_token = set_message_trust(self.trust)
         try:
             reply, self._session_id = self._on_message(
                 text, self._session_id, self._mode, self.askpass, self._model_id)
@@ -228,6 +236,7 @@ class InboundBridge:
             logger.warning("[%s] turn failed: %s", self.channel_name, exc)
             reply = "Sorry — something went wrong handling that."
         finally:
+            reset_message_trust(trust_token)
             reset_progress_sink(token)
         return reply or "(no response)"
 

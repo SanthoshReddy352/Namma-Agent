@@ -1,11 +1,15 @@
-# Cognee Memory
+# Cognee Memory (HISTORICAL)
 
-**[Cognee](https://www.cognee.ai)** — an open-source AI memory engine — is Namma
-Agent's long-term memory. Everything the assistant remembers about you lives in
-Cognee's **semantic + knowledge-graph** store; the local SQLite file only keeps
-chat *transcripts* and app state (projects, learning plans), not memory. Without
-Cognee connected the assistant still works, but it won't remember you across
-sessions.
+> **⚠ Superseded (2026-07-16).** Cognee is **no longer Namma Agent's memory**.
+> The native in-process engine **Engram** replaced it — see
+> [`MEMORY_SYSTEM_DESIGN.md`](MEMORY_SYSTEM_DESIGN.md). A Cognee MCP server can
+> still be attached as an optional *plugin* under Settings → MCP → Servers
+> (tools appear as `mcp_cognee_*`), but nothing below is required or wired into
+> Settings anymore. This document is kept for the hackathon record.
+
+**[Cognee](https://www.cognee.ai)** — an open-source AI memory engine — *was* Namma
+Agent's long-term memory. Everything the assistant remembered about you lived in
+Cognee's **semantic + knowledge-graph** store.
 
 > Built for the WeMakeDevs × Cognee hackathon. Full design & status live in
 > [`Cognee_Implementation.md`](../Cognee_Implementation.md).

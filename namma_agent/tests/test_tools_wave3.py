@@ -135,7 +135,9 @@ def test_screenshot_success(reg, monkeypatch, tmp_path):
 def test_read_text_needs_tesseract(reg, monkeypatch, tmp_path):
     img = tmp_path / "a.png"
     img.write_bytes(b"x")
-    monkeypatch.setattr(vis.shutil, "which", lambda name: None)
+    # OCR discovery goes through environment.find_binary (PATH + install dirs).
+    from namma_agent.core.engram import environment as envmod
+    monkeypatch.setattr(envmod, "find_binary", lambda name, env=None: None)
     r = reg.execute("read_text_from_image", {"path": str(img)})
     assert not r.ok and "tesseract" in r.error
 

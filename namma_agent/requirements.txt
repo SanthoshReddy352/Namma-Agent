@@ -45,11 +45,10 @@ python-multipart         # document upload endpoint (multipart/form-data)
 markdown                 # convert_document: richer md → html fallback (optional)
 neonize                  # comms: QR-linked personal WhatsApp (NAMMA_WHATSAPP_MODE=qr; unofficial/ToS risk — see docs/COMMS.md). Cloud-API WhatsApp needs none of this.
 
-# ── COGNEE ENHANCED MEMORY (optional — NO pip deps) ────────────────
-# Cognee semantic + knowledge-graph memory runs FULLY CONTAINERIZED and is reached
-# through the built-in MCP client (Namma launches cognee/cognee-mcp via `docker run`).
-# It therefore adds NOTHING to this file — the only prerequisite is Docker.
-# Setup: scripts/setup_cognee.ps1 (or .sh). Guide: docs/COGNEE.md.
+# ── MEMORY (Engram — native, NO pip deps) ──────────────────────────
+# Long-term memory is in-process Python + SQLite (namma_agent/core/engram/).
+# No Docker, no vector DB, nothing to install. Design: docs/MEMORY_SYSTEM_DESIGN.md.
+# External memory MCP servers (e.g. Cognee) remain attachable as optional plugins.
 
 # ── DEV ────────────────────────────────────────────────────────────
 pytest

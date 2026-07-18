@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { applyUpdate, checkUpdate, clearMemory, deletePersona, exportPack, fetchCogneeConfig, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchModels, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listSkills, listTools, memoryForget, packDownloadUrl, reconnectCognee, registerCogneeServer, reloadMcp, savePersona, saveCogneeConfig, saveConfiguredModels, saveConfiguredProviders, saveSettings, setPersona, startComms, stopComms, toggleMcpServer, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
+import { applyUpdate, checkUpdate, clearMemory, deletePersona, deleteRoutine, exportPack, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchMemorySettings, fetchModels, fetchStatus, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listRoutines, listSkills, listTools, packDownloadUrl, reloadMcp, runRoutine, savePersona, saveConfiguredModels, saveConfiguredProviders, saveMemorySettings, saveSettings, setChannelTrust, setPersona, startComms, stopComms, fetchSecurityOverview, migrateSecrets, toggleMcpServer, toggleRoutine, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
 import { COMPLETION_PRESETS, SOUND_EVENTS, completionPreset, previewPreset, setCompletionPreset, setSoundEventEnabled, setSoundVolume, setSoundsEnabled, soundEventEnabled, soundVolume, soundsEnabled } from "../sounds.js";
 import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
 
@@ -37,10 +37,10 @@ function deepMerge(a, b) {
 const TAB_GROUPS = [
   { label: "General", tabs: ["Behavior", "Persona", "Appearance", "Notifications"] },
   { label: "Intelligence", tabs: ["Providers", "Models"] },
-  { label: "Capabilities", tabs: ["Skills", "Toolsets", "Packs", "Browser"] },
+  { label: "Capabilities", tabs: ["Skills", "Toolsets", "Routines", "Packs", "Browser"] },
   { label: "Channels", tabs: ["Messaging"] },
-  { label: "MCP", tabs: ["Config", "Servers", "Cognee"] },
-  { label: "System", tabs: ["Memory", "About"] },
+  { label: "MCP", tabs: ["Config", "Servers"] },
+  { label: "System", tabs: ["Memory", "Security", "Status", "About"] },
 ];
 const TABS = TAB_GROUPS.flatMap((g) => g.tabs);
 
@@ -59,8 +59,10 @@ const TAB_ICONS = {
   Messaging: "M4 5h16v11H8l-4 4z",
   Config: "M10.3 4.3l-.7 2.1-2.1.8-2-1-1.5 1.5 1 2-.8 2.1-2.1.7v2.1l2.1.7.8 2.1-1 2 1.5 1.5 2-1 2.1.8.7 2.1h2.1l.7-2.1 2.1-.8 2 1 1.5-1.5-1-2 .8-2.1 2.1-.7v-2.1l-2.1-.7-.8-2.1 1-2-1.5-1.5-2 1-2.1-.8-.7-2.1zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z",
   Servers: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
-  Cognee: "M12 3a3 3 0 013 3 3 3 0 01.8 5.9A3 3 0 0115 18a3 3 0 01-6 0 3 3 0 01-.8-6.1A3 3 0 019 6a3 3 0 013-3zM12 8v3m0 0l-2.5 1.5M12 11l2.5 1.5",
   Memory: "M4 7a8 4 0 0016 0 8 4 0 00-16 0v10a8 4 0 0016 0M4 12a8 4 0 0016 0",
+  Security: "M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6zM9 12l2 2 4-4",
+  Routines: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3.5 2",
+  Status: "M3 12h4l2.5-7 5 14 2.5-7h4",
   About: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v5M12 7.5h.01",
 };
 function TabIcon({ name }) {
@@ -212,6 +214,177 @@ function AboutTab() {
   );
 }
 
+// ── Routines: standing scheduled agent runs (created by asking the assistant) ──
+function scheduleLabel(s) {
+  if (!s) return "?";
+  if (s.kind === "interval") return `every ${s.every_minutes} min`;
+  if (s.kind === "weekly") {
+    const days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+    return `${days[s.weekday] ?? "?"} at ${s.at}`;
+  }
+  return `daily at ${s.at}`;
+}
+const agoTs = (ts) => {
+  if (!ts) return "never";
+  const mins = Math.max(0, Math.round((Date.now() / 1000 - ts) / 60));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  if (mins < 48 * 60) return `${Math.round(mins / 60)} h ago`;
+  return `${Math.round(mins / 1440)} d ago`;
+};
+
+function RoutinesTab() {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState(0);        // id being run
+  const [confirmId, setConfirmId] = useState(0);
+  const [ranMsg, setRanMsg] = useState("");
+
+  const load = () => listRoutines().then((r) => setItems(r?.routines || []));
+  useEffect(() => { load(); }, []);
+
+  const doToggle = async (it) => { await toggleRoutine(it.id, !it.enabled); load(); };
+  const doDelete = async (id) => { setConfirmId(0); await deleteRoutine(id); load(); };
+  const doRun = async (it) => {
+    setBusy(it.id); setRanMsg("");
+    const r = await runRoutine(it.id);
+    setBusy(0);
+    setRanMsg(r?.ok ? `“${it.name}” ran — result delivered to your channels.`
+                    : `“${it.name}” failed to run.`);
+    load();
+  };
+
+  return (
+    <>
+      <Section title="Routines"
+               hint="Standing scheduled tasks: each run is a full agent task whose result is messaged to you (Telegram/Signal/… or a desktop notification). Create one by asking in chat — e.g. “every morning at 8, brief me on my calendar and the top AI news”.">
+        {items === null && <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>}
+        {items?.length === 0 && (
+          <div className="text-[13px] text-ink-soft dark:text-night-faint">
+            No routines yet. Ask the assistant to create one — it handles the schedule for you.
+          </div>
+        )}
+        {(items || []).map((it) => (
+          <div key={it.id}
+               className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5 flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[13.5px] font-medium text-ink dark:text-night-ink truncate">{it.name}</span>
+                <span className="text-[11.5px] rounded-full border border-line dark:border-night-line px-2 py-0.5 text-ink-faint dark:text-night-faint shrink-0">{scheduleLabel(it.schedule)}</span>
+              </div>
+              <div className="text-[12px] text-ink-faint dark:text-night-faint truncate">
+                {it.prompt} · last run {agoTs(it.last_run_ts)}
+              </div>
+            </div>
+            <button onClick={() => doRun(it)} disabled={busy === it.id}
+                    className="shrink-0 px-2.5 py-1 rounded-lg border border-line dark:border-night-line text-[12.5px] hover:border-brand/60 disabled:opacity-50">
+              {busy === it.id ? "Running…" : "Run now"}
+            </button>
+            {confirmId === it.id ? (
+              <button onClick={() => doDelete(it.id)}
+                      className="shrink-0 px-2.5 py-1 rounded-lg text-[12.5px] text-white" style={{ background: "#dc2626" }}>
+                Sure?
+              </button>
+            ) : (
+              <button onClick={() => setConfirmId(it.id)}
+                      className="shrink-0 px-2.5 py-1 rounded-lg border text-[12.5px] hover:bg-[#dc2626]/10"
+                      style={{ borderColor: "#dc262666", color: "#dc2626" }}>
+                Delete
+              </button>
+            )}
+            <Toggle label="" checked={!!it.enabled} onChange={() => doToggle(it)} />
+          </div>
+        ))}
+        {ranMsg && <div className="text-[12.5px] text-ink-soft dark:text-night-faint">{ranMsg}</div>}
+      </Section>
+      <Section title="How results reach you"
+               hint="Runs deliver over your configured messaging channels (Settings → Messaging); with none configured, you get a desktop notification. Destructive tools are always declined during scheduled runs." />
+    </>
+  );
+}
+
+// ── Status: every background subsystem at a glance ────────────────────────────
+const agoIso = (iso) => {
+  if (!iso) return "never";
+  const t = Date.parse(iso);
+  return Number.isNaN(t) ? "never" : agoTs(t / 1000);
+};
+const fmtTokens = (n) =>
+  n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n || 0);
+
+function StatusRow({ label, on, detail }) {
+  return (
+    <div className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5 flex items-center gap-3">
+      <span className={`h-2 w-2 rounded-full shrink-0 ${on ? "bg-emerald-500" : "bg-line dark:bg-night-line"}`} />
+      <span className="text-[13.5px] font-medium text-ink dark:text-night-ink w-44 shrink-0">{label}</span>
+      <span className="text-[12.5px] text-ink-soft dark:text-night-faint truncate">{detail}</span>
+    </div>
+  );
+}
+
+function StatusTab() {
+  const [st, setSt] = useState(null);
+  useEffect(() => {
+    let live = true;
+    const load = () => fetchStatus().then((r) => { if (live && r) setSt(r); });
+    load();
+    const t = setInterval(load, 5000);
+    return () => { live = false; clearInterval(t); };
+  }, []);
+
+  if (!st) return <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>;
+  const mem = st.memory || {}, rout = st.routines || {}, bg = st.background_tasks || {};
+  const cons = mem.last_consolidation;
+  const usage = st.usage || {}; const total = usage.total || {};
+  return (
+    <>
+      <Section title="Background activity"
+               hint="Live view of everything running behind the scenes — refreshes every few seconds.">
+        <StatusRow label="Memory writer" on={(mem.pending_writes || 0) > 0}
+                   detail={mem.pending_writes ? `${mem.pending_writes} turn(s) queued for extraction` : "idle — all turns processed"} />
+        <StatusRow label="Consolidator" on={!!mem.consolidator_running}
+                   detail={(mem.consolidator_running ? "scheduled (idle + daily) · " : "scheduler off · ")
+                           + (cons ? `last improved ${agoIso(cons.at)} (${cons.reason})` : "never run yet")} />
+        <StatusRow label="Context compaction" on={(mem.compacting_sessions || 0) > 0}
+                   detail={mem.compacting_sessions ? `summarizing ${mem.compacting_sessions} long chat(s)` : "idle"} />
+        <StatusRow label="Vector recall" on={!!mem.embeddings}
+                   detail={mem.embeddings ? "embeddings configured — semantic channel on" : "off — BM25 keyword recall only (configure memory.embeddings)"} />
+        <StatusRow label="Routines" on={!!rout.runner_running}
+                   detail={rout.total ? `${rout.enabled}/${rout.total} enabled · runner ${rout.runner_running ? "running" : "stopped"}` : "none created yet"} />
+        <StatusRow label="Background tasks" on={(bg.running || 0) > 0}
+                   detail={bg.running ? `${bg.running} running` : (bg.items?.length ? `none running · ${bg.items.length} finished kept` : "none started")} />
+        <StatusRow label="Reminders" on={!!st.reminders?.running}
+                   detail={st.reminders?.enabled ? (st.reminders.running ? "polling" : "enabled, thread stopped") : "off (scheduler.run_in_background)"} />
+        <StatusRow label="Learning nudges" on={!!st.learning_nudger?.running}
+                   detail={st.learning_nudger?.running ? "watching idle topics" : "off"} />
+        <StatusRow label="Comms gateway" on={!!st.comms?.running}
+                   detail={st.comms?.configured ? (st.comms.running ? "listening for messages" : "configured, stopped") : "no channels configured"} />
+      </Section>
+
+      <Section title="Token usage"
+               hint="Summed from the per-turn stats under each reply (cache reads shown separately — they cost far less).">
+        <div className="flex flex-wrap gap-2.5">
+          {[["Total", total.tokens], ["Cached reads", total.cached], ["Turns", total.turns]].map(([label, v]) => (
+            <div key={label} className="rounded-xl border border-line dark:border-night-line px-4 py-2.5 min-w-[110px]">
+              <div className="text-[11.5px] text-ink-faint dark:text-night-faint">{label}</div>
+              <div className="text-[17px] font-semibold text-ink dark:text-night-ink">{fmtTokens(v || 0)}</div>
+            </div>
+          ))}
+        </div>
+        {(usage.days || []).length > 0 && (
+          <div className="rounded-xl border border-line dark:border-night-line overflow-hidden">
+            {(usage.days || []).map((d) => (
+              <div key={d.date} className="flex items-center justify-between px-3.5 py-1.5 text-[12.5px] odd:bg-paper-soft dark:odd:bg-night-soft">
+                <span className="text-ink-soft dark:text-night-faint">{d.date}</span>
+                <span className="text-ink dark:text-night-ink">{fmtTokens(d.tokens)} tokens · {fmtTokens(d.cached)} cached · {d.turns} turns</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
 export default function Settings({ onClose, theme, onThemeToggle, themeName, onThemeNameChange, onMemoryCleared, onModelsChanged, onAssistantNameChanged }) {
   const [tab, setTab] = useState("Behavior");
   const [data, setData] = useState(null);
@@ -309,6 +482,7 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                 {tab === "Messaging" && (
                   <>
                     <GatewayControl />
+                    <TrustControl />
                     <Section title="Telegram" hint="Chat with Namma Agent from your phone (outbound + inbound). Stored in .env.">
                       <Field label="Bot token"><Input type="password" placeholder={data.env_set?.NAMMA_TELEGRAM_TOKEN ? "•••••• (set)" : "not set"} value={env.NAMMA_TELEGRAM_TOKEN ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_TELEGRAM_TOKEN: v }))} /></Field>
                       <Field label="Chat id"><Input placeholder={data.env_set?.NAMMA_TELEGRAM_CHAT_ID ? "(set)" : "not set"} value={env.NAMMA_TELEGRAM_CHAT_ID ?? ""} onChange={(v) => setEnv((e) => ({ ...e, NAMMA_TELEGRAM_CHAT_ID: v }))} /></Field>
@@ -337,8 +511,6 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
 
                 {tab === "Servers" && <McpServersTab />}
 
-                {tab === "Cognee" && <CogneeTab />}
-
                 {tab === "Skills" && <SkillsTab />}
 
                 {tab === "Toolsets" && <ToolsetsTab />}
@@ -357,18 +529,13 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                   </>
                 )}
 
-                {tab === "Memory" && (
-                  <Section title="Memory"
-                           hint="All remembered knowledge lives in the Cognee knowledge graph; chats are kept as transcripts. Erasing cannot be undone.">
-                    <div className="flex flex-wrap gap-2">
-                      {[["memory", "Clear Cognee memory"], ["conversations", "Clear chats"], ["all", "Clear everything"]].map(([s, label]) => (
-                        <button key={s} onClick={() => wipe(s)}
-                                className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-brand-wash dark:hover:bg-night-soft">{label}</button>
-                      ))}
-                    </div>
-                    {cleared && <div className="mt-2 text-brand-deep text-[13px]">Cleared {cleared}.</div>}
-                  </Section>
-                )}
+                {tab === "Memory" && <MemorySettingsTab wipe={wipe} cleared={cleared} />}
+
+                {tab === "Security" && <SecurityTab />}
+
+                {tab === "Routines" && <RoutinesTab />}
+
+                {tab === "Status" && <StatusTab />}
 
                 {tab === "About" && <AboutTab />}
               </>
@@ -452,6 +619,219 @@ function GatewayControl() {
         Tip: after adding or changing a token, click <b>Save</b> below, then <b>Start</b> (or Stop &amp; Start) so the gateway picks it up.
       </div>
     </Section>
+  );
+}
+
+// Per-channel trust levels (the trust model's first visible surface). A message's
+// channel decides what its sender may do: `owner` runs full turns; `untrusted`
+// turns get destructive tools stripped + declined, the message wrapped in a
+// data-not-instructions guard, and memory writes quarantined for review.
+const TRUST_HINTS = {
+  owner: "full access — this channel is you",
+  trusted: "normal turns, labeled in the audit trail",
+  untrusted: "no destructive tools, guarded prompt, memory writes quarantined",
+};
+
+function TrustControl() {
+  const [status, setStatus] = useState(null);
+  const [busy, setBusy] = useState("");
+
+  useEffect(() => { fetchCommsStatus().then((s) => s && setStatus(s)); }, []);
+  if (!status || !status.trust) return null;
+
+  const levels = status.trust_levels || ["owner", "trusted", "untrusted"];
+  const channels = Object.keys(status.trust);
+
+  async function change(channel, level) {
+    setBusy(channel);
+    const s = await setChannelTrust(channel, level);
+    if (s && s.trust) setStatus(s);
+    setBusy("");
+  }
+
+  return (
+    <Section title="Trust levels"
+             hint="Who can do what, per channel. Messages from an untrusted channel run with destructive tools disabled, are marked as data (not instructions) to the model, and never write long-term memory — would-be writes are quarantined for your review.">
+      <div className="rounded-xl border border-line dark:border-night-line divide-y divide-line dark:divide-night-line overflow-hidden">
+        {channels.map((ch) => (
+          <div key={ch} className="px-3.5 py-2.5 flex items-center gap-3">
+            <div className="min-w-0">
+              <div className="text-[13.5px] text-ink dark:text-night-ink capitalize">{ch}</div>
+              <div className="text-[11.5px] text-ink-faint dark:text-night-faint">{TRUST_HINTS[status.trust[ch]] || ""}</div>
+            </div>
+            <div className={"ml-auto shrink-0 " + (busy === ch ? "opacity-50 pointer-events-none" : "")}>
+              <Select value={status.trust[ch]} onChange={(v) => change(ch, v)} options={levels} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+// ── Security tab (Phase 1e) — the whole trust model on one screen ──
+const SecChip = ({ tone = "gray", children }) => {
+  const tones = {
+    green: "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300",
+    amber: "bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300",
+    red: "bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300",
+    gray: "bg-paper-soft text-ink-faint dark:bg-night-soft dark:text-night-faint",
+  };
+  return <span className={`inline-block px-1.5 py-0.5 rounded text-[11px] font-medium ${tones[tone]}`}>{children}</span>;
+};
+
+const SecCard = ({ children }) => (
+  <div className="rounded-xl border border-line dark:border-night-line divide-y divide-line dark:divide-night-line overflow-hidden">{children}</div>
+);
+
+const SecEmpty = ({ children }) => (
+  <div className="px-3.5 py-3 text-[12.5px] text-ink-faint dark:text-night-faint">{children}</div>
+);
+
+function SecurityTab() {
+  const [data, setData] = useState(null);
+  const [migrating, setMigrating] = useState(false);
+  const [migrateNote, setMigrateNote] = useState("");
+
+  const refresh = () => fetchSecurityOverview().then((d) => d && d.ok && setData(d));
+  useEffect(() => { refresh(); }, []);
+
+  if (!data) return <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>;
+
+  const q = data.quarantine || {};
+  const quarantineCount = (q.memory?.length || 0) + (q.documents?.length || 0) + (q.web?.length || 0);
+  const sandbox = data.sandbox || {};
+  const trustTone = { owner: "green", trusted: "amber", untrusted: "red" };
+
+  async function migrate() {
+    setMigrating(true); setMigrateNote("");
+    const r = await migrateSecrets(false);
+    setMigrateNote(r?.migrated?.length
+      ? `Moved ${r.migrated.length} secret(s) into the ${r.backend} vault.`
+      : (r?.error || "Nothing to migrate — no secret-looking entries in .env."));
+    setMigrating(false);
+    refresh();
+  }
+
+  const fmtTime = (iso) => (iso || "").replace("T", " ").slice(0, 16);
+
+  return (
+    <>
+      <Section title="How trust works here"
+               hint="Plain language, no fine print — this is the model everything below enforces.">
+        <div className="text-[13px] leading-relaxed text-ink-soft dark:text-night-ink space-y-1.5">
+          <p>• Messages are trusted by <b>where they come from</b>. Your own channels run at full capability; messages from an <b>untrusted</b> channel can't run destructive tools, are marked as data (not instructions) to the AI, and can't write memory — attempts are quarantined below.</p>
+          <p>• Everything the AI fetches from the web is <b>screened for prompt injection</b>; suspicious pages are delivered wrapped in a warning, never silently.</p>
+          <p>• Shell commands run inside an <b>OS sandbox</b> with resource caps, and destructive tools always need your approval (declines are recorded).</p>
+          <p>• Tokens and API keys live in the <b>OS vault</b>, and known secret values are masked everywhere the AI (or the log) could repeat them.</p>
+        </div>
+      </Section>
+
+      <Section title="Per-channel trust" hint="Change levels in Settings → Messaging.">
+        <SecCard>
+          {Object.entries(data.trust || {}).map(([ch, lvl]) => (
+            <div key={ch} className="px-3.5 py-2 flex items-center gap-3">
+              <span className="text-[13px] capitalize text-ink dark:text-night-ink">{ch}</span>
+              <span className="ml-auto"><SecChip tone={trustTone[lvl] || "gray"}>{lvl}</SecChip></span>
+            </div>
+          ))}
+        </SecCard>
+      </Section>
+
+      <Section title="Shell sandbox">
+        <SecCard>
+          <div className="px-3.5 py-2.5 flex items-center gap-2.5">
+            <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${sandbox.active ? "bg-emerald-500" : sandbox.enabled ? "bg-amber-400" : "bg-line dark:bg-night-line"}`} />
+            <span className="text-[13px] text-ink dark:text-night-ink">
+              {sandbox.enabled
+                ? (sandbox.active === false ? "Enabled, but the OS refused — running uncapped" : "Enabled")
+                : "Disabled in config"}
+            </span>
+            <span className="ml-auto text-[12px] text-ink-faint dark:text-night-faint">
+              {sandbox.mechanism === "job-object" ? "Windows Job Object" : "POSIX rlimits"}
+              {sandbox.memory_mb ? ` · ${(sandbox.memory_mb / 1024).toFixed(0)} GB cap` : ""}
+              {sandbox.max_processes ? ` · ${sandbox.max_processes} procs` : ""}
+            </span>
+          </div>
+        </SecCard>
+      </Section>
+
+      <Section title="Secrets vault"
+               hint="Names only — values never leave the OS store. Known secret values are masked in tool output and logs.">
+        <SecCard>
+          <div className="px-3.5 py-2 flex items-center gap-3">
+            <span className="text-[13px] text-ink dark:text-night-ink">Backend</span>
+            <span className="ml-auto"><SecChip tone="green">{data.secrets?.backend}</SecChip></span>
+          </div>
+          {(data.secrets?.names || []).map((n) => (
+            <div key={n} className="px-3.5 py-2 text-[12.5px] font-mono text-ink-soft dark:text-night-ink">{n}</div>
+          ))}
+          {!(data.secrets?.names || []).length && <SecEmpty>The vault is empty.</SecEmpty>}
+        </SecCard>
+        <div className="flex items-center gap-3">
+          <button onClick={migrate} disabled={migrating}
+                  className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-paper-soft dark:hover:bg-night-soft disabled:opacity-40 text-[13px]">
+            {migrating ? "Moving…" : "Move .env tokens into the vault"}
+          </button>
+          {migrateNote && <span className="text-[12px] text-ink-faint dark:text-night-faint">{migrateNote}</span>}
+        </div>
+      </Section>
+
+      <Section title={`Quarantine log${quarantineCount ? ` (${quarantineCount})` : ""}`}
+               hint="Content that was caught and held: memory writes from unverified senders, injection-flagged documents, and suspicious web pages.">
+        <SecCard>
+          {(q.memory || []).map((m) => (
+            <div key={m.id} className="px-3.5 py-2.5 space-y-1">
+              <div className="flex items-center gap-2">
+                <SecChip tone={m.status === "untrusted" ? "red" : "amber"}>
+                  {m.status === "untrusted" ? "untrusted sender" : "injection-flagged"}
+                </SecChip>
+                <span className="text-[11.5px] text-ink-faint dark:text-night-faint">memory · {fmtTime(m.at)}</span>
+              </div>
+              <div className="text-[12.5px] text-ink-soft dark:text-night-ink">{m.text}</div>
+            </div>
+          ))}
+          {(q.documents || []).map((d) => (
+            <div key={d.id} className="px-3.5 py-2.5 space-y-1">
+              <div className="flex items-center gap-2">
+                <SecChip tone="amber">flagged document</SecChip>
+                <span className="text-[11.5px] text-ink-faint dark:text-night-faint">
+                  {d.project ? `project “${d.project}” · ` : ""}{fmtTime(d.at)}
+                </span>
+              </div>
+              <div className="text-[12.5px] text-ink-soft dark:text-night-ink">{d.name}</div>
+              {(d.reasons || []).length > 0 &&
+                <div className="text-[11.5px] text-ink-faint dark:text-night-faint">{d.reasons.join(" · ")}</div>}
+            </div>
+          ))}
+          {(q.web || []).map((w, i) => (
+            <div key={i} className="px-3.5 py-2.5 space-y-1">
+              <div className="flex items-center gap-2">
+                <SecChip tone="amber">suspicious web page</SecChip>
+                <span className="text-[11.5px] text-ink-faint dark:text-night-faint">{w.tool} · {fmtTime(w.at)}</span>
+              </div>
+              <div className="text-[12.5px] text-ink-soft dark:text-night-ink">{w.summary}</div>
+            </div>
+          ))}
+          {!quarantineCount && <SecEmpty>Nothing in quarantine — no attacks caught yet.</SecEmpty>}
+        </SecCard>
+      </Section>
+
+      <Section title="Recent tool activity (audit trail)"
+               hint="The newest 50 tool runs, including destructive actions you approved or declined.">
+        <SecCard>
+          {(data.audit || []).slice(0, 50).map((a) => (
+            <div key={a.id} className="px-3.5 py-2 flex items-center gap-2.5">
+              <span className={`h-2 w-2 rounded-full shrink-0 ${a.ok ? "bg-emerald-500" : "bg-red-400"}`} />
+              <span className="text-[12.5px] font-mono text-ink dark:text-night-ink">{a.tool}</span>
+              {a.destructive && <SecChip tone={a.ok ? "amber" : "red"}>{a.ok ? "approved" : "declined"}</SecChip>}
+              <span className="ml-auto text-[11.5px] text-ink-faint dark:text-night-faint shrink-0">{fmtTime(a.at)}</span>
+            </div>
+          ))}
+          {!(data.audit || []).length && <SecEmpty>No tool activity recorded yet.</SecEmpty>}
+        </SecCard>
+      </Section>
+    </>
   );
 }
 
@@ -1508,254 +1888,128 @@ function McpServersTab() {
   );
 }
 
-// The "MCP → Cognee" tab: configure the whole Cognee memory integration from the
-// UI — connection/server, models & embeddings (.env.cognee), behaviour flags
-// (config), and a danger zone. No file editing needed.
-const COGNEE_PRESETS = {
-  "Hybrid (Groq + local Ollama)": {
-    LLM_PROVIDER: "custom", LLM_MODEL: "groq/llama-3.3-70b-versatile",
-    LLM_ENDPOINT: "https://api.groq.com/openai/v1",
-    EMBEDDING_PROVIDER: "ollama", EMBEDDING_MODEL: "nomic-embed-text",
-    EMBEDDING_ENDPOINT: "http://namma-cognee-ollama:11434/api/embed",
-    EMBEDDING_DIMENSIONS: "768", HUGGINGFACE_TOKENIZER: "nomic-ai/nomic-embed-text-v1.5",
-  },
-  "Fully local (Ollama)": {
-    LLM_PROVIDER: "ollama", LLM_MODEL: "qwen2.5:7b",
-    LLM_ENDPOINT: "http://namma-cognee-ollama:11434/v1",
-    EMBEDDING_PROVIDER: "ollama", EMBEDDING_MODEL: "nomic-embed-text",
-    EMBEDDING_ENDPOINT: "http://namma-cognee-ollama:11434/api/embed",
-    EMBEDDING_DIMENSIONS: "768", HUGGINGFACE_TOKENIZER: "nomic-ai/nomic-embed-text-v1.5",
-  },
-  "OpenAI": {
-    LLM_PROVIDER: "openai", LLM_MODEL: "openai/gpt-4o-mini", LLM_ENDPOINT: "",
-    EMBEDDING_PROVIDER: "openai", EMBEDDING_MODEL: "openai/text-embedding-3-small",
-    EMBEDDING_ENDPOINT: "", EMBEDDING_DIMENSIONS: "1536", HUGGINGFACE_TOKENIZER: "",
-  },
-};
-const LLM_PROVIDERS = ["custom", "openai", "ollama", "anthropic", "gemini", "mistral", "azure", "bedrock", "llama_cpp"];
-const EMB_PROVIDERS = ["ollama", "openai", "fastembed", "custom"];
+// The single "Memory" settings section — Engram, the native memory engine
+// (docs/MEMORY_SYSTEM_DESIGN.md). ONE source of truth: every knob reads/writes
+// the LIVE engine via /api/memory/settings (persisted to config.local.yaml).
+// There is no separate memory backend to configure — external memory MCP
+// servers are ordinary plugins under MCP → Servers.
+function MemorySettingsTab({ wipe, cleared }) {
+  const [cfg, setCfg] = useState(null);
+  const [msg, setMsg] = useState(null);
+  const [draft, setDraft] = useState({});   // numeric fields being typed
 
-function CogneeTab() {
-  const [cfg, setCfg] = useState(null);   // server snapshot
-  const [env, setEnvState] = useState({});
-  const [key, setKey] = useState("");     // new LLM_API_KEY (write-only)
-  const [flags, setFlags] = useState({ auto_ingest: false, ingest_replies: false, ingest_learning: true, recall_context: false });
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState(null);       // {ok, text} — models & embeddings save
-  const [topMsg, setTopMsg] = useState(null); // {ok, text} — connection / backend actions
-  const [dzMsg, setDzMsg] = useState(null);   // {ok, text} — danger zone
-  const [confirm, setConfirm] = useState(false);
-  const [track, setTrack] = useState("local");   // which backend the user is choosing
-  const [serveUrl, setServeUrl] = useState("");   // cloud instance URL
-  const [cloudKey, setCloudKey] = useState("");   // new cloud API key (write-only)
-
-  const load = () => fetchCogneeConfig().then((r) => {
-    if (!r) return;
-    setCfg(r); setEnvState(r.env || {});
-    setFlags({ auto_ingest: !!r.auto_ingest, ingest_replies: !!r.ingest_replies, ingest_learning: r.ingest_learning !== false, recall_context: !!r.recall_context });
-    // Pre-fill the instance URL from the REMEMBERED value (cloud_serve_url), which is
-    // kept even while on self-hosted — so you paste it once and never again.
-    setTrack(r.mode || "local"); setServeUrl(r.cloud_serve_url || r.serve_url || "");
-  });
+  const load = () => fetchMemorySettings().then((r) => { if (r) { setCfg(r); setDraft({}); } });
   useEffect(() => { load(); }, []);
 
-  const setE = (k, v) => setEnvState((e) => ({ ...e, [k]: v }));
-  const applyPreset = (name) => setEnvState((e) => ({ ...e, ...COGNEE_PRESETS[name] }));
-
-  async function saveModels() {
-    setBusy(true); setMsg(null);
-    const out = { ...env };
-    if (key.trim()) out.LLM_API_KEY = key.trim();
-    const r = await saveCogneeConfig(out, {});
-    setBusy(false);
-    if (r?.ok) { setCfg(r); setEnvState(r.env || env); setKey(""); setMsg({ ok: true, text: "Saved — reconnected with the new models." }); }
+  async function apply(patch) {
+    setMsg(null);
+    const r = await saveMemorySettings(patch);
+    if (r?.ok) { setCfg(r); setMsg({ ok: true, text: "Saved — applied live." }); }
     else setMsg({ ok: false, text: r?.error || "Couldn't save." });
   }
 
-  async function flipFlag(k, v) {
-    setFlags((f) => ({ ...f, [k]: v }));
-    const r = await saveCogneeConfig({}, { [k]: v });   // flag-only = instant, no reconnect
-    if (r?.ok) setCfg(r);
-  }
-
-  async function reconnect() {
-    setBusy(true); setTopMsg({ ok: true, text: "Reconnecting the Cognee server — starting its container can take ~30s…" });
-    const r = await reconnectCognee();
-    setBusy(false);
-    if (r) { setCfg(r); setEnvState(r.env || env); }
-    setTopMsg(r?.ok ? { ok: true, text: "Cognee reconnected." }
-                    : { ok: false, text: "Couldn't reconnect — is Docker running? Check the command in Settings → MCP → Config." });
-  }
-  async function registerServer(body = { mode: "local" }) {
-    setBusy(true);
-    setTopMsg({ ok: true, text: body.mode === "cloud"
-      ? "Connecting to Cognee Cloud — this can take ~30s…"
-      : "Starting the self-hosted Cognee container — this can take ~30s…" });
-    const r = await registerCogneeServer(body);
-    setBusy(false);
-    if (r?.ok) {
-      setCfg(r); setServeUrl(r.cloud_serve_url || r.serve_url || ""); setCloudKey(""); setTrack(r.mode || "local");
-      // ok:true = the entry was saved; a trailing `error` means it saved but didn't connect.
-      if (r.error) setTopMsg({ ok: false, text: r.error });
-      else setTopMsg({ ok: true, text: r.mode === "cloud" ? "Switched to Cognee Cloud — connected." : "Self-hosted Cognee connected." });
-    }
-    else setTopMsg({ ok: false, text: r?.error || "Couldn't register the server." });
-  }
-  async function registerCloud() {
-    if (!serveUrl.trim()) { setTopMsg({ ok: false, text: "Enter your Cognee Cloud instance URL." }); return; }
-    await registerServer({ mode: "cloud", serve_url: serveUrl.trim(), api_key: cloudKey.trim() });
-  }
-  async function toggleServer() {
-    if (!cfg || busy) return;
-    const turningOn = !cfg.server_enabled;
-    setBusy(true);
-    setTopMsg({ ok: true, text: turningOn ? "Turning the Cognee server on — starting its container can take ~30s…" : "Turning the Cognee server off…" });
-    const r = await toggleMcpServer("cognee", turningOn);
-    await load();
-    setBusy(false);
-    setTopMsg(r?.ok ? { ok: true, text: turningOn ? "Cognee server is on." : "Cognee server is off." }
-                    : { ok: false, text: r?.error || "Couldn't toggle the server." });
-  }
-  async function forgetAll() {
-    setConfirm(false); setBusy(true); setDzMsg(null);
-    const r = await memoryForget({ everything: true });
-    setBusy(false);
-    setDzMsg(r?.ok ? { ok: true, text: "Cognee memory cleared." } : { ok: false, text: r?.error || "Couldn't clear." });
-  }
+  const numField = (key, label, hint, min = 0) => (
+    <Field label={label}>
+      <div className="flex items-center gap-2">
+        <Input value={draft[key] ?? String(cfg[key])}
+               onChange={(v) => setDraft((d) => ({ ...d, [key]: v }))} />
+        {draft[key] != null && String(cfg[key]) !== draft[key] && (
+          <button className={_btn + " text-[12.5px] shrink-0"}
+                  onClick={() => {
+                    const n = parseInt(draft[key], 10);
+                    if (!Number.isNaN(n) && n >= min) apply({ [key]: n });
+                  }}>Apply</button>
+        )}
+      </div>
+      <div className="text-[11.5px] text-ink-faint dark:text-night-faint mt-1">{hint}</div>
+    </Field>
+  );
 
   if (!cfg) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
+  const st = cfg.status || {};
 
   return (
     <div className="space-y-6">
-      {/* Connection / server */}
-      <Section title="Cognee memory" hint="Semantic + knowledge-graph memory via the Cognee MCP server. Configure it all here — no file editing.">
+      <Section title="Memory engine"
+               hint="Engram — native, in-process, always on. Facts live in your local database; all memory model work (extraction, contradiction handling) runs on the model you picked in Settings → Models.">
         <div className={`${_box} flex items-center gap-3 flex-wrap`}>
-          <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${cfg.connected ? "bg-emerald-500" : "bg-amber-500"}`} />
-          <span className="text-[13.5px] font-medium">{cfg.connected ? "Connected" : "Not connected"}</span>
+          <span className="h-2.5 w-2.5 rounded-full shrink-0 bg-emerald-500" />
+          <span className="text-[13.5px] font-medium">Active</span>
           <span className="text-[12px] text-ink-faint dark:text-night-faint">
-            {cfg.server_present
-              ? `${cfg.mode === "cloud" ? "Cognee Cloud" : "self-hosted"} · ${cfg.server_enabled ? "server enabled" : "server disabled"}`
-              : "server not registered"}
+            {st.items ?? 0} facts · {st.entities ?? 0} entities · {st.relations ?? 0} links
+            {st.pending_writes > 0 && ` · ${st.pending_writes} writing…`}
           </span>
-          <div className="ml-auto flex items-center gap-2">
-            {!cfg.server_present ? (
-              <button onClick={() => registerServer()} disabled={busy} className={_btn}>{busy ? "…" : "Register Cognee server"}</button>
-            ) : (
-              <>
-                <button type="button" disabled={busy} title={cfg.server_enabled ? "Turn the Cognee server off" : "Turn the Cognee server on"}
-                        onClick={toggleServer}
-                        className={`h-6 w-11 rounded-full transition relative shrink-0 disabled:opacity-50 ${cfg.server_enabled ? "bg-brand" : "bg-line dark:bg-night-line"}`}>
-                  <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white transition ${cfg.server_enabled ? "left-[22px]" : "left-0.5"}`} />
-                </button>
-                <button onClick={reconnect} disabled={busy} className={_btnGhost + " text-[13px] disabled:opacity-50"}>{busy ? "…" : "↻ Reconnect"}</button>
-              </>
+          <span className="ml-auto text-[12px] text-ink-faint dark:text-night-faint">
+            core memory: user {st.core_user?.pct ?? 0}% · agent {st.core_agent?.pct ?? 0}%
+          </span>
+        </div>
+        <div className="text-[12px] text-ink-faint dark:text-night-faint">
+          Browse, edit, and visualize everything in the <b>Memory</b> tab of the sidebar.
+        </div>
+      </Section>
+
+      <Section title="Learning & recall"
+               hint="How memory grows from chat and flows back into every turn. Changes apply live.">
+        <Toggle label="Recall prefetch — automatically inject relevant memories into each turn"
+                checked={!!cfg.prefetch} onChange={(v) => apply({ prefetch: v })} />
+        {numField("k", "Prefetched memories per turn",
+                  "How many top-scoring memories ride along with each message (1–20).", 1)}
+        {numField("salience_min_chars", "Salience threshold (characters)",
+                  "Messages shorter than this are never considered for memory extraction.")}
+        {numField("budget_per_hour", "Write budget (model calls / hour)",
+                  "Hard cap on background memory-pipeline model calls, so learning can never run away with your quota.", 1)}
+        {msg && <div className={`text-[12.5px] ${msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>{msg.text}</div>}
+      </Section>
+
+      <Section title="Self-improvement"
+               hint="Sleep-time consolidation: summarize finished chats, promote missed facts, merge duplicates, let stale facts fade, reflect into insights, compact core memory. The Memory tab's “Improve now” always works regardless.">
+        <Toggle label="Consolidate in the background — when idle and once daily"
+                checked={!!cfg.consolidate_background}
+                onChange={(v) => apply({ consolidate_background: v })} />
+        {numField("idle_minutes", "Idle trigger (minutes)",
+                  "Run after this much inactivity (0 = never on idle; repeats at most every 6 hours).")}
+        <Field label="Daily at (HH:MM)">
+          <div className="flex items-center gap-2">
+            <Input value={draft.daily_at ?? String(cfg.daily_at ?? "")}
+                   onChange={(v) => setDraft((d) => ({ ...d, daily_at: v }))}
+                   placeholder="03:30 — empty disables the daily run" />
+            {draft.daily_at != null && String(cfg.daily_at ?? "") !== draft.daily_at && (
+              <button className={_btn + " text-[12.5px] shrink-0"}
+                      onClick={() => {
+                        const t = draft.daily_at.trim();
+                        if (t === "" || /^([01]?\d|2[0-3]):[0-5]\d$/.test(t)) apply({ daily_at: t });
+                      }}>Apply</button>
             )}
           </div>
-        </div>
-        {topMsg && <div className={`text-[12.5px] ${topMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-brand-deep dark:text-amber-400"}`}>{topMsg.text}</div>}
-        {!cfg.server_present && (
+          <div className="text-[11.5px] text-ink-faint dark:text-night-faint mt-1">
+            Local wall-clock time for the nightly pass (fires only while the app is running).
+          </div>
+        </Field>
+        {cfg.status?.last_consolidation?.at && (
           <div className="text-[12px] text-ink-faint dark:text-night-faint">
-            Needs Docker + the one-time setup (<span className="font-mono">scripts/setup_cognee.ps1</span>). See <span className="font-mono">docs/COGNEE.md</span>.
+            Last run: {new Date(cfg.status.last_consolidation.at).toLocaleString()}
+            {cfg.status.last_consolidation.reason && ` (${cfg.status.last_consolidation.reason})`}
           </div>
         )}
       </Section>
 
-      {/* Backend / track — Self-hosted (Track A) vs Cognee Cloud (Track B). Same
-          Memory tab + code either way; only this server entry differs. */}
-      <Section title="Backend" hint="Run Cognee yourself (open-source, on this machine) or against managed Cognee Cloud. The Memory tab works identically either way.">
-        <div className="flex gap-2">
-          {[["local", "Self-hosted", "Open-source · Ollama + Kuzu/LanceDB on this machine"],
-            ["cloud", "Cognee Cloud", "Managed · zero local infra"]].map(([m, label, sub]) => (
-            <button key={m} onClick={() => setTrack(m)}
-                    className={`flex-1 ${_box} text-left ${track === m ? "ring-2 ring-emerald-500/60" : ""}`}>
-              <div className="text-[13.5px] font-medium flex items-center gap-2">
-                {label}
-                {cfg.mode === m && cfg.server_present && <span className="text-[11px] text-emerald-600 dark:text-emerald-400">● active</span>}
-              </div>
-              <div className="text-[11.5px] text-ink-faint dark:text-night-faint">{sub}</div>
-            </button>
+      <Section title="External memory plugins"
+               hint="Optional extra backends (Cognee, Mem0, Zep …) attach as ordinary MCP servers — additive, never load-bearing. Native memory keeps working with or without them.">
+        <div className="text-[13px] text-ink-soft dark:text-night-faint">
+          Add or enable a memory server under <b>MCP → Servers</b>; its tools appear to the
+          model as <span className="font-mono text-[12px]">mcp_&lt;server&gt;_*</span>.
+        </div>
+      </Section>
+
+      <Section title="Data"
+               hint="Memory = facts, graph and core memory. Chats are the raw transcripts. Erasing cannot be undone.">
+        <div className="flex flex-wrap gap-2">
+          {[["memory", "Clear memory"], ["conversations", "Clear chats"], ["all", "Clear everything"]].map(([s, label]) => (
+            <button key={s} onClick={() => wipe(s)}
+                    className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line hover:bg-brand-wash dark:hover:bg-night-soft">{label}</button>
           ))}
         </div>
-
-        {track === "cloud" && (
-          <div className="space-y-2 mt-1">
-            <Field label="Instance URL"><Input value={serveUrl} onChange={setServeUrl}
-                   placeholder="https://your-instance.cognee.ai" /></Field>
-            <Field label={`API key${cfg.cloud_key_set ? " (saved — leave blank to keep)" : ""}`}>
-              <Input type="password" value={cloudKey} onChange={setCloudKey}
-                     placeholder={cfg.cloud_key_set ? "•••••• (set) — type to replace" : "from platform.cognee.ai"} />
-            </Field>
-            <div className="flex items-center gap-2">
-              <button onClick={registerCloud} disabled={busy} className={_btn}>
-                {busy ? "…" : (cfg.mode === "cloud" ? "Update cloud connection" : "Connect to Cognee Cloud")}
-              </button>
-              <span className="text-[11.5px] text-ink-faint dark:text-night-faint">Sign up at platform.cognee.ai (dev code <span className="font-mono">COGNEE-35</span>).</span>
-            </div>
-          </div>
-        )}
-        {track === "local" && cfg.mode === "cloud" && (
-          <div className="flex items-center gap-2 mt-1">
-            <button onClick={() => registerServer({ mode: "local" })} disabled={busy} className={_btn}>
-              {busy ? "…" : "Switch to self-hosted"}
-            </button>
-            <span className="text-[11.5px] text-ink-faint dark:text-night-faint">Uses the local <span className="font-mono">.env.cognee</span> + container.</span>
-          </div>
-        )}
-      </Section>
-
-      {/* Behavior */}
-      <Section title="Behaviour" hint="How Cognee is used during normal chat.">
-        <Toggle label="Auto-ingest chats — grow the knowledge graph from every turn (background)"
-                checked={flags.auto_ingest} onChange={(v) => flipFlag("auto_ingest", v)} />
-        <Toggle label="Also ingest the assistant's replies (not just your messages)"
-                checked={flags.ingest_replies} onChange={(v) => flipFlag("ingest_replies", v)} />
-        <Toggle label="Grow the graph from the Learning Room — push each completed module's recap into Cognee"
-                checked={flags.ingest_learning} onChange={(v) => flipFlag("ingest_learning", v)} />
-        <Toggle label="Recall in chat — auto-pull from Cognee on 'what do you know about me?' questions (else the model calls recall itself)"
-                checked={flags.recall_context} onChange={(v) => flipFlag("recall_context", v)} />
-      </Section>
-
-      {/* Models & embeddings */}
-      <Section title="Models & embeddings" hint="The LLM that extracts the graph + the embedding model for semantic search. Changing these reconnects the server (~20s).">
-        <div className="flex flex-wrap gap-2 mb-1">
-          {Object.keys(COGNEE_PRESETS).map((p) => (
-            <button key={p} onClick={() => applyPreset(p)} className={_btnGhost + " text-[12.5px]"}>{p}</button>
-          ))}
-        </div>
-        <div className="text-[11.5px] uppercase tracking-wide text-ink-faint dark:text-night-faint pt-1">Extraction LLM</div>
-        <Field label="Provider"><Select value={env.LLM_PROVIDER || "custom"} onChange={(v) => setE("LLM_PROVIDER", v)} options={LLM_PROVIDERS} /></Field>
-        <Field label="Model"><Input value={env.LLM_MODEL || ""} onChange={(v) => setE("LLM_MODEL", v)} placeholder="e.g. groq/llama-3.3-70b-versatile" /></Field>
-        <Field label="Endpoint"><Input value={env.LLM_ENDPOINT || ""} onChange={(v) => setE("LLM_ENDPOINT", v)} placeholder="e.g. https://api.groq.com/openai/v1" /></Field>
-        <Field label="API key"><Input type="password" value={key} onChange={setKey}
-               placeholder={cfg.llm_api_key_set ? "•••••• (set) — type to replace" : "paste the LLM API key"} /></Field>
-
-        <div className="text-[11.5px] uppercase tracking-wide text-ink-faint dark:text-night-faint pt-2">Embeddings</div>
-        <Field label="Provider"><Select value={env.EMBEDDING_PROVIDER || "ollama"} onChange={(v) => setE("EMBEDDING_PROVIDER", v)} options={EMB_PROVIDERS} /></Field>
-        <Field label="Model"><Input value={env.EMBEDDING_MODEL || ""} onChange={(v) => setE("EMBEDDING_MODEL", v)} placeholder="e.g. nomic-embed-text" /></Field>
-        <Field label="Endpoint"><Input value={env.EMBEDDING_ENDPOINT || ""} onChange={(v) => setE("EMBEDDING_ENDPOINT", v)} placeholder="e.g. http://namma-cognee-ollama:11434/api/embed" /></Field>
-        <Field label="Dimensions"><Input value={env.EMBEDDING_DIMENSIONS || ""} onChange={(v) => setE("EMBEDDING_DIMENSIONS", v)} placeholder="e.g. 768" /></Field>
-        <Field label="HF tokenizer"><Input value={env.HUGGINGFACE_TOKENIZER || ""} onChange={(v) => setE("HUGGINGFACE_TOKENIZER", v)} placeholder="nomic-ai/nomic-embed-text-v1.5" /></Field>
-
-        <div className="flex items-center gap-3 pt-1">
-          <button onClick={saveModels} disabled={busy} className={_btn}>{busy ? "Saving…" : "Save & reconnect"}</button>
-          {msg && <span className={`text-[12.5px] ${msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-brand-deep dark:text-amber-400"}`}>{msg.text}</span>}
-        </div>
-      </Section>
-
-      {/* Danger zone */}
-      <Section title="Danger zone" hint="Clear all stored Cognee memory (graph + vectors + metadata). Cannot be undone.">
-        {!confirm ? (
-          <button onClick={() => setConfirm(true)} disabled={busy || !cfg.connected}
-                  className="px-3 py-1.5 rounded-lg border text-[13px] disabled:opacity-50"
-                  style={{ borderColor: "#dc262666", color: "#dc2626" }}>Forget everything</button>
-        ) : (
-          <div className="flex items-center gap-2">
-            <span className="text-[13px] text-ink-soft dark:text-night-faint">Delete all Cognee memory?</span>
-            <button onClick={forgetAll} className="px-3 py-1.5 rounded-lg text-white text-[13px]" style={{ background: "#dc2626" }}>Yes, forget</button>
-            <button onClick={() => setConfirm(false)} className={_btnGhost + " text-[13px]"}>Cancel</button>
-          </div>
-        )}
-        {dzMsg && <div className={`text-[12.5px] ${dzMsg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-brand-deep dark:text-amber-400"}`}>{dzMsg.text}</div>}
+        {cleared && <div className="mt-2 text-brand-deep text-[13px]">Cleared {cleared}.</div>}
       </Section>
     </div>
   );

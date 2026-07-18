@@ -14,6 +14,37 @@ and a few background bridges. The whole application is the Python package
 [`namma_agent/`](../namma_agent). The assistant's display name is configurable — see
 [Configuration](#11-configuration--the-assistant-name).
 
+> **July 2026 update.** Since this document's diagrams were rendered, the memory
+> layer was replaced by **Engram** (native in-process memory —
+> [MEMORY_SYSTEM_DESIGN.md](MEMORY_SYSTEM_DESIGN.md) is the canonical doc) and a
+> wave of agent-loop upgrades landed. The prose below is still accurate for the
+> core loop/server/UI; the newer subsystems in brief:
+>
+> - **Rolling context compaction** (`core/agent.py`, `sessions.compact_*`) — long
+>   chats keep an LLM-maintained summary of turns evicted from the history window,
+>   injected into every prompt so the middle of a conversation is never lost.
+> - **Self-verification nudge** (`core/agent.py`) — a turn that wrote files and
+>   tries to answer without any check afterwards gets one `[system]` nudge to
+>   verify first (`conversation.verify_after_writes`).
+> - **Proactive routines** (`core/routines.py`, `data/routines.json`) — standing
+>   scheduled agent runs ("morning brief") delivered over comms channels or a
+>   desktop notification; managed by chat tools, `/api/routines*`, and
+>   Settings → Routines. Scheduled runs always decline destructive tools.
+> - **Background tasks + scoped sub-agents** (`core/builtins.py`) —
+>   `background_task` runs a sub-agent on a detached thread (comms ping on
+>   completion; results persist to `data/background_tasks.json` across restarts);
+>   sub-agents never see destructive tools.
+> - **Embeddings-backed recall** (`core/engram/embeddings.py`) — optional
+>   `memory.embeddings` endpoint adds a vector channel to fused recall; without
+>   it, recall stays FTS5/BM25-only exactly as described in §13.9.
+> - **Observability** — `GET /api/status` + Settings → Status show every
+>   background subsystem (memory writer, consolidator, compactor, routines,
+>   background tasks, reminders, comms) plus a cumulative token-usage view
+>   (`Database.usage_stats`).
+> - **Hands-free voice** (`webui/src/handsfree.js`) — wake-word listening via the
+>   browser's Web Speech API; **cross-chat search** — `GET /api/search` + the
+>   sidebar search box.
+
 ---
 
 ## 1. Design philosophy

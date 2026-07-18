@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 // ── Friendly tool labels (Hermes-style: "Searched …", "Ran …", "Opened …") ──────
 // Map a tool name + its args to a short human phrase. Unknown tools fall back to a
@@ -18,9 +18,12 @@ const VERBS = {
   calendar_agenda: "Checked the calendar", calendar_create_event: "Created an event",
   recall_facts: "Recalled memory", remember_fact: "Saved a memory", read_memory: "Read memory",
   recall_sessions: "Searched past chats",
-  // Cognee semantic/graph memory (MCP) — clean labels for the demo.
-  mcp_cognee_recall: "Recalled from Cognee memory", mcp_cognee_remember: "Saved to Cognee memory",
-  mcp_cognee_forget: "Forgot from Cognee memory",
+  // Engram — the native memory engine.
+  memory_search: "Searched memory", memory_save: "Saved to memory",
+  memory_forget: "Forgot a memory", search_conversations: "Searched past chats",
+  // External memory plugin (only if a Cognee MCP server is attached).
+  mcp_cognee_recall: "Recalled from plugin memory", mcp_cognee_remember: "Saved to plugin memory",
+  mcp_cognee_forget: "Forgot from plugin memory",
   use_skill: "Used a skill", list_skills: "Listed skills",
   delegate_task: "Delegated a subtask",
   add_task: "Added a task", list_tasks: "Listed tasks", complete_task: "Completed a task",
@@ -106,6 +109,45 @@ function ThinkingBlock({ text }) {
   );
 }
 
+// Mini terminal — a shell step rendered as a collapsible terminal panel: the command
+// as the header line, merged stdout/stderr in a dark monospace body. Auto-opens and
+// follows the tail while the command streams; the user can pin it open/closed.
+function TerminalBlock({ item }) {
+  const [userOpen, setUserOpen] = useState(null); // null = auto (open while running)
+  const running = item.state === "running";
+  const open = userOpen === null ? running : userOpen;
+  const cmd = (item.args && (item.args.command || item.args.cmd)) || "";
+  const out = item.output || "";
+  const declined = item.state === "fail" && item.summary === "declined";
+  const bodyRef = useRef(null);
+  useEffect(() => {
+    // Follow the live tail (like a real terminal) while output streams in.
+    if (running && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
+  }, [out, running]);
+  return (
+    <li className="rounded-xl overflow-hidden border border-line dark:border-night-line bg-zinc-900">
+      <button type="button" onClick={() => setUserOpen(!open)}
+              title={open ? "Collapse the terminal output" : "Show the terminal output"}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800 transition">
+        <span className="shrink-0"><StatusIcon state={item.state} /></span>
+        <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-zinc-100">
+          <span className="text-emerald-400 select-none">$ </span>{cmd}
+        </code>
+        {declined && (
+          <span className="shrink-0 text-[11px] font-medium text-amber-400">declined</span>
+        )}
+        <Chevron open={open} />
+      </button>
+      {open && (out || running) && (
+        <pre ref={bodyRef}
+             className="max-h-[240px] overflow-y-auto px-3 pb-2.5 pt-1 border-t border-zinc-700/60 font-mono text-[11.5px] leading-relaxed text-zinc-300 whitespace-pre-wrap break-words">
+          {out || (running ? "…" : "")}
+        </pre>
+      )}
+    </li>
+  );
+}
+
 // Inline tool-approval prompt (Hermes-style): shows what the assistant wants to run,
 // right where it happens in the activity stream, with Approve / Deny actions. Used
 // only in the LIVE timeline — persisted activity records the outcome as a tool step.
@@ -178,6 +220,9 @@ export function StepList({ items, onApprove }) {
               <span>“{it.text}”</span>
             </li>
           );
+        }
+        if (it.tool === "run_shell") {
+          return <TerminalBlock key={i} item={it} />;
         }
         const declined = it.state === "fail" && it.summary === "declined";
         return (

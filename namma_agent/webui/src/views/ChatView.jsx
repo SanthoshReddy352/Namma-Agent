@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
-import { clearMemory, learningModuleSession, switchLearningModel, switchProjectModel } from "../api.js";
+import { clearMemory, downloadChat, learningModuleSession, switchLearningModel, switchProjectModel } from "../api.js";
 import Logo from "../components/Logo.jsx";
 import Message from "../components/Message.jsx";
 import QuizCard from "../components/QuizCard.jsx";
@@ -21,7 +21,8 @@ const HELP_TEXT = `Commands you can type:
 export default function ChatView() {
   const {
     connected, messages, timeline, status, todos, mode, setMode, config, assistantName,
-    voiceOn, setVoiceOn, send, stop, newChat, refreshSessions, showLocal,
+    voiceOn, setVoiceOn, handsfree, setHandsfree, handsfreeStatus,
+    send, stop, newChat, refreshSessions, showLocal,
     chatContext, suggestion, sendToSession, openChat,
     configuredModels, currentModel, selectModel, switchModelNewSession, chatHasTurns, confirmAction,
     currentSessionId, setActiveModel, respondApproval,
@@ -172,6 +173,14 @@ export default function ChatView() {
           )}
         </div>
         <div className="flex items-center gap-3">
+          {chatHasTurns && currentSessionId?.() && (
+            <button
+              onClick={() => downloadChat(currentSessionId())}
+              title="Download chat — a zip with the transcript (chat.md) and this chat's media"
+              className="grid place-items-center h-7 w-7 rounded-lg text-ink-faint dark:text-night-faint hover:text-ink dark:hover:text-night-ink transition">
+              <DownloadIcon />
+            </button>
+          )}
           <button
             onClick={() => setVoiceOn((v) => !v)}
             title={voiceOn ? "Voice on — reads replies aloud (browser TTS). Click to mute." : "Voice off. Click to read replies aloud (browser TTS)."}
@@ -192,7 +201,8 @@ export default function ChatView() {
                 {mode === "chat" ? "Let's talk." : "Ask me to do something — I'll show my work."}
               </p>
             </div>
-            <Composer onSend={handleSend} onStop={stop} busy={busy} mode={mode} setMode={setMode} autoFocus name={assistantName} />
+            <Composer onSend={handleSend} onStop={stop} busy={busy} mode={mode} setMode={setMode} autoFocus name={assistantName}
+                      handsfree={handsfree} setHandsfree={setHandsfree} handsfreeStatus={handsfreeStatus} />
           </div>
         </div>
       ) : (
@@ -244,7 +254,8 @@ export default function ChatView() {
           <footer className="px-4 md:px-6 pb-4">
             <div className="max-w-3xl mx-auto">
               <TodoPanel todos={todos} />
-              <Composer onSend={handleSend} onStop={stop} busy={busy} mode={mode} setMode={setMode} name={assistantName} />
+              <Composer onSend={handleSend} onStop={stop} busy={busy} mode={mode} setMode={setMode} name={assistantName}
+                        handsfree={handsfree} setHandsfree={setHandsfree} handsfreeStatus={handsfreeStatus} />
               <div className="text-center text-[11px] text-ink-faint dark:text-night-faint mt-1.5">
                 {assistantName} can make mistakes. Verify important actions.
               </div>
@@ -359,5 +370,6 @@ function Breadcrumb({ crumbs = [], navigate }) {
   );
 }
 
+const DownloadIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3" /><path d="M7 10l5 5 5-5M12 15V3" /></svg>);
 const SpeakerOnIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z" /><path d="M15.5 8.5a5 5 0 0 1 0 7M19 5a9 9 0 0 1 0 14" /></svg>);
 const SpeakerOffIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M11 5 6 9H2v6h4l5 4V5Z" /><line x1="22" y1="9" x2="16" y2="15" /><line x1="16" y1="9" x2="22" y2="15" /></svg>);

@@ -80,10 +80,15 @@ def _read_text(args: dict) -> ToolResult:
     img = os.path.expanduser(path)
     if not os.path.isfile(img):
         return ToolResult(ok=False, content="", error=f"not a file: {path}")
-    if not shutil.which("tesseract"):
+    # find_binary looks beyond PATH (common install dirs), so a tesseract that
+    # lives in e.g. C:\Program Files\Tesseract-OCR is found and used, not
+    # declared missing.
+    from namma_agent.core.engram.environment import find_binary
+    tesseract = find_binary("tesseract")
+    if not tesseract:
         return ToolResult(ok=False, content="", error="OCR needs tesseract (install tesseract-ocr)")
     try:
-        proc = subprocess.run(["tesseract", img, "stdout"], capture_output=True, text=True,
+        proc = subprocess.run([tesseract, img, "stdout"], capture_output=True, text=True,
                               encoding="utf-8", errors="replace", timeout=30)
     except subprocess.TimeoutExpired:
         return ToolResult(ok=False, content="", error="OCR timed out")

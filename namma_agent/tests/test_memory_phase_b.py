@@ -90,7 +90,7 @@ def test_summarize_session_tool():
     assert db.get_session_summary(sid) == "User chatted about gardening."
 
 
-# ── Cognee-backed memory tools ──────────────────────────────────────────────
+# ── plugin-backed memory tool fallbacks ──────────────────────────────────────────────
 
 class _StubIngestor:
     def __init__(self):
@@ -100,33 +100,33 @@ class _StubIngestor:
         self.texts.append(text)
 
 
-def test_remember_fact_routes_to_cognee():
+def test_remember_fact_routes_to_plugin_ingestor():
     db = Database(":memory:")
     ing = _StubIngestor()
     reg = ToolRegistry()
-    register_memory_tools(reg, db, get_cognee_ingestor=lambda: ing)
+    register_memory_tools(reg, db, get_plugin_ingestor=lambda: ing)
     out = reg.execute("remember_fact", {"key": "preferred_editor", "value": "vim"})
     assert out.ok and ing.texts and "vim" in ing.texts[0]
     # no SQLite fact is written anymore
     assert db.all_facts() == []
 
 
-def test_remember_fact_without_cognee_errors():
+def test_remember_fact_without_memory_engine_errors():
     db = Database(":memory:")
     reg = ToolRegistry()
-    register_memory_tools(reg, db)
+    register_memory_tools(reg, db)  # no engram, no plugin
     out = reg.execute("remember_fact", {"key": "a", "value": "b"})
-    assert not out.ok and "cognee" in (out.error or "").lower()
+    assert not out.ok and "memory engine" in (out.error or "").lower()
 
 
-def test_recall_facts_delegates_to_cognee_tool():
+def test_recall_facts_falls_back_to_memory_plugin():
     db = Database(":memory:")
     reg = ToolRegistry()
     register_memory_tools(reg, db)
-    # not connected → clear error
+    # no engine at all → clear error
     out = reg.execute("recall_facts", {"query": "who am I"})
-    assert not out.ok and "cognee" in (out.error or "").lower()
-    # with a fake mcp_cognee_recall present, the call is delegated
+    assert not out.ok and "memory engine" in (out.error or "").lower()
+    # with a memory plugin attached (and no Engram), the call is delegated to it
     from namma_agent.core.tools import ToolResult
     reg.register("mcp_cognee_recall", "recall", {"type": "object", "properties": {}},
                  lambda a: ToolResult(ok=True, content=f"answer to {a.get('query')}"))

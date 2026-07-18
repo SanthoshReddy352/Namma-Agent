@@ -74,44 +74,188 @@ _RESEARCH_TOOLS = (
 
 
 def register_memory_tools(registry: ToolRegistry, db: Database,
-                          get_cognee_ingestor=None) -> None:
-    """Register memory tools. **Cognee is THE memory**: everything the assistant
-    remembers or recalls about the user flows through the cognee MCP server
-    (``mcp_cognee_remember`` / ``mcp_cognee_recall`` / ``mcp_cognee_forget``).
-    The old SQLite key/value facts layer and the USER.md/MEMORY.md notes layer
-    were removed in favour of the knowledge graph.
+                          get_plugin_ingestor=None, get_engram=None) -> None:
+    """Register memory tools. **Engram is THE memory** (docs/MEMORY_SYSTEM_DESIGN.md):
+    the native in-process engine — bounded core memory in every prompt, bi-temporal
+    facts + entity graph, fused millisecond recall. ``memory_save`` /
+    ``memory_search`` / ``memory_forget`` are the primary surface;
+    ``remember_fact`` / ``recall_facts`` stay as thin aliases. An external memory
+    MCP server (e.g. a Cognee plugin) can still be attached — ``get_plugin_ingestor``
+    resolves a duck-typed ``ingest_text`` sink used only when Engram is absent.
 
     What still lives on ``db`` is the *transcript* store — verbatim chat history
     and session summaries (``search_conversations`` / ``recall_sessions``). That
     is a log of what was said, not memory of what it means.
     """
 
+    def _engram():
+        return get_engram() if get_engram else None
+
     def _queue_ingest(text: str) -> bool:
-        """Queue text for background cognify (never blocks the turn). False when
-        the Cognee ingestor isn't wired."""
-        ingestor = get_cognee_ingestor() if get_cognee_ingestor else None
+        """Queue text into the memory write pipeline (never blocks the turn).
+        Engram first; an external plugin ingestor is a fallback."""
+        eng = _engram()
+        if eng is not None:
+            eng.writer.ingest_text(text)
+            return True
+        ingestor = get_plugin_ingestor() if get_plugin_ingestor else None
         if ingestor is None:
             return False
         ingestor.ingest_text(text)
         return True
 
+    def memory_save(args: dict) -> ToolResult:
+        """Core-memory curation + semantic write-through (the primary save tool)."""
+        eng = _engram()
+        if eng is None:
+            return ToolResult(ok=False, content="", error="memory engine not available")
+        action = (args.get("action") or "add").strip().lower()
+        block = (args.get("block") or "auto").strip().lower()
+        text = (args.get("text") or "").strip()
+        old = (args.get("old_text") or "").strip()
+        # An untrusted-channel sender (core.trust) never writes memory — not even
+        # via an explicit save the model was talked into. Quarantine for review.
+        from namma_agent.core.trust import get_message_trust
+        if get_message_trust() == "untrusted":
+            eng.writer.quarantine(text or old, source="memory_save")
+            return ToolResult(ok=True, content=(
+                "This message came from an unverified sender, so nothing was saved — "
+                "the text was quarantined for the owner's review."))
+        if action in ("replace", "remove") and not old:
+            return ToolResult(ok=False, content="", error="'old_text' is required for "
+                                                          f"action={action}")
+        if action == "remove":
+            r = eng.core.remove(block if block != "auto" else "user", old)
+            return (ToolResult(ok=True, content=f"Removed from core memory ({r['pct']}% full).")
+                    if r.get("ok") else ToolResult(ok=False, content="", error=r.get("error")))
+        if not text:
+            return ToolResult(ok=False, content="", error="'text' is required")
+        if block == "auto":
+            # Not identity-grade → straight to the semantic pipeline (extraction,
+            # dedup, contradiction handling happen there, in the background).
+            eng.writer.ingest_text(text)
+            return ToolResult(ok=True, content="Remembering (queued into long-term memory).")
+        r = (eng.core.replace(block, old, text) if action == "replace"
+             else eng.core.add(block, text))
+        if not r.get("ok"):
+            return ToolResult(ok=False, content="", error=r.get("error"))
+        # Core entries are also durable facts — stored directly (not through the
+        # background pipeline) so an explicit save is recallable immediately and
+        # survives even when no model is reachable.
+        eng.store.add_item(text, kind="preference", importance=0.9, source="core")
+        note = f" ({r.get('note')})" if r.get("note") else ""
+        return ToolResult(ok=True, content=f"Saved to core memory — '{r['block']}' now "
+                                           f"{r['pct']}% full{note}.")
+
+    registry.register(
+        name="memory_save",
+        description=("Save to long-term memory. block='user' (identity, standing "
+                     "preferences) or 'agent' (environment facts, lessons learned) pins "
+                     "it into the small ALWAYS-VISIBLE core memory; block='auto' "
+                     "(default) stores a regular durable fact. action=replace/remove "
+                     "edits an existing core entry matched by old_text substring."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "the fact/preference to remember"},
+                "block": {"type": "string", "enum": ["auto", "user", "agent"],
+                          "description": "where it lives (default auto)"},
+                "action": {"type": "string", "enum": ["add", "replace", "remove"],
+                           "description": "core-memory edit action (default add)"},
+                "old_text": {"type": "string",
+                             "description": "substring of the core entry to replace/remove"},
+            },
+            "required": ["text"],
+        },
+        handler=memory_save,
+    )
+
+    def memory_search(args: dict) -> ToolResult:
+        eng = _engram()
+        query = (args.get("query") or "").strip()
+        if not query:
+            return ToolResult(ok=False, content="", error="'query' is required")
+        if eng is None:
+            # Engram missing (bare test service) — fall back to a memory plugin.
+            if "mcp_cognee_recall" in registry:
+                return registry.execute("mcp_cognee_recall", {"query": query})
+            return ToolResult(ok=False, content="", error="memory engine not available")
+        hits = eng.recall(query, k=int(args.get("k", 8)),
+                          include_expired=bool(args.get("include_expired", False)))
+        if not hits:
+            return ToolResult(ok=True, content="No stored memory matches.")
+        lines = []
+        for h in hits:
+            date = (h.get("created_at") or "")[:10]
+            expired = " (superseded)" if h.get("expired") else ""
+            lines.append(f"- [{h.get('kind', 'fact')}{' · ' + date if date else ''}]"
+                         f"{expired} {h['text']}")
+        return ToolResult(ok=True, content="\n".join(lines), data={"matches": len(hits)})
+
+    registry.register(
+        name="memory_search",
+        description=("Search long-term memory (facts, preferences, entity relations, "
+                     "past-session traces) with one fused query. Use BEFORE answering "
+                     "anything about the user, their life, work, people, or past "
+                     "conversations. include_expired=true also shows superseded facts "
+                     "(history of what changed)."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "what to look for"},
+                "k": {"type": "integer", "description": "max results (default 8)"},
+                "include_expired": {"type": "boolean",
+                                    "description": "include superseded facts (default false)"},
+            },
+            "required": ["query"],
+        },
+        handler=memory_search,
+    )
+
+    def memory_forget(args: dict) -> ToolResult:
+        eng = _engram()
+        if eng is None:
+            return ToolResult(ok=False, content="", error="memory engine not available")
+        query = (args.get("query") or "").strip()
+        if not query:
+            return ToolResult(ok=False, content="", error="'query' is required")
+        n = eng.store.forget_matching(query, hard=bool(args.get("hard", False)))
+        if n == 0:
+            return ToolResult(ok=True, content="Nothing in memory matches that.")
+        verb = "Deleted" if args.get("hard") else "Invalidated"
+        return ToolResult(ok=True, content=f"{verb} {n} memory item(s) matching {query!r}.")
+
+    registry.register(
+        name="memory_forget",
+        description=("Forget stored memory matching a query. Default marks facts as "
+                     "no-longer-true (history kept); hard=true erases them entirely."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "what to forget"},
+                "hard": {"type": "boolean", "description": "erase instead of invalidate"},
+            },
+            "required": ["query"],
+        },
+        handler=memory_forget,
+        destructive=True,
+    )
+
     def remember_fact(args: dict) -> ToolResult:
-        """Kept under its old name so existing prompts/habits still work, but the
-        fact now goes into the Cognee knowledge graph (queued, background)."""
+        """Alias kept under its old name so existing prompts/habits still work."""
         key = (args.get("key") or "").strip()
         value = (args.get("value") or "").strip()
         if not key or not value:
             return ToolResult(ok=False, content="", error="both 'key' and 'value' are required")
         if not _queue_ingest(f"User {key.replace('_', ' ')}: {value}"):
             return ToolResult(ok=False, content="",
-                              error="Cognee memory is not available — enable the 'cognee' "
-                                    "server in Settings → MCP → Cognee.")
-        return ToolResult(ok=True, content=f"Remembering in the knowledge graph: {key} = {value}")
+                              error="memory engine not available")
+        return ToolResult(ok=True, content=f"Remembering: {key} = {value}")
 
     registry.register(
         name="remember_fact",
-        description=("Save a durable fact about the user into Cognee, the knowledge-graph "
-                     "memory (background). For richer context prefer mcp_cognee_remember."),
+        description=("Save a durable fact about the user into long-term memory "
+                     "(background). Alias of memory_save with block=auto."),
         parameters={
             "type": "object",
             "properties": {
@@ -125,21 +269,13 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
     )
 
     def recall_facts(args: dict) -> ToolResult:
-        """Kept under its old name; recall is now Cognee's semantic + graph search."""
-        query = (args.get("query") or "").strip()
-        if not query:
-            return ToolResult(ok=False, content="",
-                              error="'query' is required (Cognee recall is semantic — ask a question)")
-        if "mcp_cognee_recall" not in registry:
-            return ToolResult(ok=False, content="",
-                              error="Cognee memory is not connected — enable the 'cognee' "
-                                    "server in Settings → MCP → Cognee.")
-        return registry.execute("mcp_cognee_recall", {"query": query})
+        """Alias kept under its old name; recall is Engram's fused search now."""
+        return memory_search({"query": args.get("query"), "k": 8})
 
     registry.register(
         name="recall_facts",
-        description=("Recall what is known about the user from Cognee, the knowledge-graph "
-                     "memory (semantic + relationship search; same as mcp_cognee_recall)."),
+        description=("Recall what is known about the user from long-term memory "
+                     "(alias of memory_search)."),
         parameters={
             "type": "object",
             "properties": {
@@ -200,19 +336,21 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
         scope = (args.get("scope") or "all").lower()
         done: dict = {}
         if scope in ("memory", "cognee", "facts", "all"):
+            eng = _engram()
+            if eng is not None:
+                done["memory"] = eng.store.wipe()
             if "mcp_cognee_forget" in registry:
                 r = registry.execute("mcp_cognee_forget", {"everything": True})
                 done["cognee"] = "cleared" if r.ok else f"failed: {r.error or r.content}"
-            else:
-                done["cognee"] = "not connected (nothing to clear)"
         if scope in ("conversations", "sessions", "all"):
             done["conversations"] = db.clear_conversations()
         return ToolResult(ok=True, content=f"Cleared memory (scope={scope}): {done}", data=done)
 
     registry.register(
         name="clear_memory",
-        description=("Erase stored memory. scope: 'memory' (the Cognee knowledge graph), "
-                     "'conversations' (chat history + summaries), or 'all'."),
+        description=("Erase stored memory. scope: 'memory' (long-term memory: facts, "
+                     "graph, core memory), 'conversations' (chat history + summaries), "
+                     "or 'all'."),
         parameters={
             "type": "object",
             "properties": {
@@ -228,8 +366,8 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
     # topic), durable details are saved to that scope's dedicated memory, resolved
     # from the turn-local session id. No-op outside a scoped session. The scope
     # row is what gets injected verbatim into the scope's system prompt (fast,
-    # deterministic); the same note is ALSO queued into Cognee so it becomes part
-    # of the knowledge graph and is recallable from any chat.
+    # deterministic); the same note is ALSO queued into the memory pipeline so it
+    # becomes part of the knowledge graph and is recallable from any chat.
     def _scoped_note(args: dict, scope_type: str, label: str) -> ToolResult:
         from namma_agent.core.interactive import get_current_session
 
@@ -244,7 +382,7 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
             scope_id = sess.get("project_id")
             if not scope_id:
                 return ToolResult(ok=False, content="",
-                                  error="This chat is not in a project; use mcp_cognee_remember instead.")
+                                  error="This chat is not in a project; use memory_save instead.")
             scope_name = (db.get_project(scope_id) or {}).get("name", "")
         else:
             from namma_agent.core.learning import topic_for_session  # lazy (Wave 3)
@@ -261,7 +399,7 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
         name="remember_project_note",
         description=("Save a durable detail to the CURRENT project's dedicated memory so it is "
                      "never forgotten (a decision, requirement, name, preference, or fact about "
-                     "the project). Also grows the Cognee knowledge graph. Only meaningful "
+                     "the project). Also grows the long-term memory graph. Only meaningful "
                      "inside a project chat."),
         parameters={
             "type": "object",
@@ -370,7 +508,7 @@ def register_project_tools(registry: ToolRegistry, db: Database) -> None:
 
 def register_learning_tools(registry: ToolRegistry, db: Database,
                             get_comms=None, config: dict | None = None,
-                            get_cognee_ingestor=None) -> None:
+                            get_memory_writer=None) -> None:
     """Learning-Room teacher tools: plan the path, mark progress, quiz, score the
     learner, save topic memory, and (from a normal chat) suggest the Learning Room.
     Scope is resolved from the turn-local session via the learning topic it belongs
@@ -378,8 +516,9 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
 
     ``get_comms`` lazily resolves the CommsManager (it's built after the registry)
     so module-completion progress can be pushed to Telegram when configured.
-    ``get_cognee_ingestor`` lazily resolves the CogneeIngestor so a completed
-    module's recap also grows the Cognee knowledge graph (no-op unless connected)."""
+    ``get_memory_writer`` lazily resolves Engram's writer (``ingest_text`` /
+    ``ingest_learning``) so a completed module's recap also grows the knowledge
+    graph (no-op when memory isn't wired)."""
     from namma_agent.core.interactive import emit_event, get_current_session
 
     def _topic():
@@ -467,11 +606,11 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
         return ToolResult(ok=True, content=f"Module '{mid}' marked complete.{tail}")
 
     def _ingest_learning_recap(topic: dict, module: Optional[dict], recap: str) -> None:
-        """Grow the Cognee knowledge graph from what the learner just studied. The
-        recap (concepts + the running example) is queued for background cognify so a
-        completed module shows up as entities/relationships in the Memory graph.
-        Best-effort: silently no-ops when Cognee isn't wired or connected."""
-        ingestor = get_cognee_ingestor() if get_cognee_ingestor else None
+        """Grow the knowledge graph from what the learner just studied. The recap
+        (concepts + the running example) is queued into Engram's background write
+        pipeline so a completed module shows up as entities/relationships in the
+        Memory graph. Best-effort: silently no-ops when memory isn't wired."""
+        ingestor = get_memory_writer() if get_memory_writer else None
         if ingestor is None:
             return
         text = (f"Learning topic \"{topic.get('title', '')}\" — completed module "
@@ -590,7 +729,7 @@ def register_learning_tools(registry: ToolRegistry, db: Database,
         db.add_scope_memory("learning", topic["id"], note)
         # Also grow the knowledge graph so the learner's goal/background is
         # recallable from ANY chat, not just this topic's threads.
-        ingestor = get_cognee_ingestor() if get_cognee_ingestor else None
+        ingestor = get_memory_writer() if get_memory_writer else None
         if ingestor is not None:
             ingestor.ingest_text(f"Learning topic \"{topic.get('title', '')}\": {note}")
         return ToolResult(ok=True, content="Saved to this topic's memory.")
@@ -815,39 +954,184 @@ def register_skill_tools(registry: ToolRegistry, store) -> None:
     )
 
 
-def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
-    """Register delegate_task + persona tools. Needs the live agent/provider/db.
+def register_agent_tools(registry: ToolRegistry, agent, provider, db,
+                         get_comms=None, bg_store_path=None) -> dict:
+    """Register delegate_task + background-task + persona tools. Needs the live
+    agent/provider/db. Returns handles for the service's status surface
+    (``{"background_tasks": callable}``).
 
-    ``delegate_task`` runs a bounded sub-agent over a read-only research toolset
-    (a fresh registry that excludes itself, so delegation can't recurse).
+    ``delegate_task`` runs a bounded sub-agent; ``background_task`` runs the same
+    kind of sub-agent on a detached thread (the conversation continues; a comms
+    ping fires when it finishes). Both use a fresh registry that excludes the
+    delegation tools themselves (no recursion) and **never contains destructive
+    tools** — a sub-agent has no approval channel, so it must not be able to
+    change state unsupervised. An optional ``toolsets`` arg widens the default
+    read-only research set to other (non-destructive) toolsets.
     """
+    import threading as _threading
+    import time as _time
+    import uuid as _uuid
+
     from namma_agent.core.agent import Agent  # local import avoids an import cycle
 
-    def delegate_task(args: dict) -> ToolResult:
-        task = (args.get("task") or "").strip()
-        if not task:
-            return ToolResult(ok=False, content="", error="'task' is required")
+    _EXCLUDE_FROM_SUBAGENT = {"delegate_task", "background_task",
+                              "check_background_task"}
+    #: Background task registry: id → {name, task, status, result, ...}.
+    #: Mirrored to a JSON store so finished results survive a restart; a task
+    #: that was still running when the process died shows as "interrupted".
+    _bg_tasks: dict[str, dict] = {}
+    _bg_lock = _threading.Lock()
+    _BG_KEEP = 50  # newest entries kept in the store
+
+    from namma_agent.tools import _jsonstore
+    _bg_path = (bg_store_path if bg_store_path is not None
+                else _jsonstore.store_path("background_tasks",
+                                           "background_tasks.json"))
+
+    def _bg_public(entry: dict) -> dict:
+        return {k: v for k, v in entry.items() if not k.startswith("_")}
+
+    def _bg_save() -> None:
+        with _bg_lock:
+            entries = sorted((_bg_public(e) for e in _bg_tasks.values()),
+                             key=lambda e: e.get("started_at") or 0)[-_BG_KEEP:]
+        try:
+            _jsonstore.save(_bg_path, entries)
+        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
+            from namma_agent.core.logger import logger
+            logger.debug("[bg-task] store save failed: %s", exc)
+
+    # Boot: restore past tasks; anything the previous process left "running"
+    # can't be resumed (its thread died with the process) — mark it clearly.
+    _interrupted = False
+    for _entry in _jsonstore.load(_bg_path):
+        if _entry.get("id"):
+            if _entry.get("status") == "running":
+                _entry["status"] = "interrupted"
+                _entry["error"] = "the app restarted while this task was running"
+                _interrupted = True
+            _bg_tasks[_entry["id"]] = _entry
+    if _interrupted:
+        _bg_save()
+
+    def _sub_registry(toolsets: Optional[list] = None) -> ToolRegistry:
+        """The tool surface a sub-agent sees: requested (non-destructive) toolsets
+        or, by default / as a fallback, the read-only research set."""
         sub_registry = ToolRegistry()
-        for name in _RESEARCH_TOOLS:
-            tool = registry.get(name)
-            if tool is not None:
-                sub_registry.add(tool)
+        wanted = {str(t).strip() for t in (toolsets or []) if str(t).strip()}
+        if wanted:
+            for tool in registry.all():
+                if (tool.name in _EXCLUDE_FROM_SUBAGENT or tool.destructive
+                        or not tool.enabled):
+                    continue
+                if tool.name in wanted or (tool.category or "general") in wanted:
+                    sub_registry.add(tool)
+        if len(sub_registry) == 0:
+            for name in _RESEARCH_TOOLS:
+                tool = registry.get(name)
+                if tool is not None:
+                    sub_registry.add(tool)
+        return sub_registry
+
+    def _run_subagent(task: str, toolsets: Optional[list] = None):
         # Inherit the main agent's tool-step budget so an unlimited config
         # (tool_loop_limit <= 0) lets deep research run to completion instead of
         # being capped at a hidden sub-agent limit.
-        sub = Agent(provider, sub_registry, db, persona=agent.persona,
+        sub = Agent(provider, _sub_registry(toolsets), db, persona=agent.persona,
                     tool_loop_limit=agent.tool_loop_limit, max_history_turns=4)
         instruction = (
             "You are a focused sub-task/research agent. Use your tools to actually "
             "complete the task below, then report concise findings (with source URLs "
             "where relevant). Do not ask follow-up questions.\n\nTASK: " + task
         )
+        return sub.process_turn(instruction, session_id=sub.new_session())
+
+    def delegate_task(args: dict) -> ToolResult:
+        task = (args.get("task") or "").strip()
+        if not task:
+            return ToolResult(ok=False, content="", error="'task' is required")
         try:
-            result = sub.process_turn(instruction, session_id=sub.new_session())
+            result = _run_subagent(task, args.get("toolsets"))
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, content="", error=f"delegation failed: {exc}")
         return ToolResult(ok=True, content=result.content or "(no findings)",
                           data={"tools_used": result.tools_used})
+
+    def background_task(args: dict) -> ToolResult:
+        task = (args.get("task") or "").strip()
+        if not task:
+            return ToolResult(ok=False, content="", error="'task' is required")
+        name = (args.get("name") or task).strip()[:60]
+        task_id = _uuid.uuid4().hex[:8]
+        entry = {"id": task_id, "name": name, "task": task, "status": "running",
+                 "result": "", "error": "", "started_at": _time.time(),
+                 "finished_at": None}
+        with _bg_lock:
+            _bg_tasks[task_id] = entry
+        _bg_save()
+
+        def _work() -> None:
+            try:
+                res = _run_subagent(task, args.get("toolsets"))
+                entry["result"] = res.content or "(no findings)"
+                entry["status"] = "done"
+            except Exception as exc:  # noqa: BLE001
+                entry["error"] = str(exc)
+                entry["status"] = "failed"
+            entry["finished_at"] = _time.time()
+            _bg_save()
+            # Ping the user over comms when a channel is configured — the whole
+            # point of a background task is not having to sit and wait for it.
+            try:
+                comms = get_comms() if get_comms else None
+                if comms is not None and getattr(comms, "any_available", False):
+                    if entry["status"] == "done":
+                        comms.send(f"✅ Background task “{name}” finished:\n\n"
+                                   f"{entry['result'][:800]}")
+                    else:
+                        comms.send(f"❌ Background task “{name}” failed: "
+                                   f"{entry['error'][:200]}")
+            except Exception:  # noqa: BLE001 — notification is best-effort
+                pass
+
+        thread = _threading.Thread(target=_work, name=f"bg-task-{task_id}",
+                                   daemon=True)
+        entry["_thread"] = thread
+        thread.start()
+        return ToolResult(
+            ok=True,
+            content=(f"Started background task {task_id} (“{name}”). The "
+                     f"conversation continues meanwhile — check on it with "
+                     f"check_background_task."),
+            data={"id": task_id})
+
+    def check_background_task(args: dict) -> ToolResult:
+        task_id = (args.get("id") or "").strip()
+        with _bg_lock:
+            entries = dict(_bg_tasks)
+        if task_id:
+            entry = entries.get(task_id)
+            if entry is None:
+                return ToolResult(ok=False, content="",
+                                  error=f"no background task {task_id!r}")
+            if entry["status"] == "running":
+                return ToolResult(ok=True, content=f"Task {task_id} (“{entry['name']}”) "
+                                                   "is still running.",
+                                  data={"status": "running"})
+            if entry["status"] in ("failed", "interrupted"):
+                return ToolResult(ok=True, content=f"Task {task_id} {entry['status']}: "
+                                                   f"{entry['error']}",
+                                  data={"status": entry["status"]})
+            return ToolResult(ok=True, content=entry["result"],
+                              data={"status": "done"})
+        if not entries:
+            return ToolResult(ok=True, content="No background tasks have been started.")
+        lines = [f"- {e['id']} “{e['name']}” — {e['status']}"
+                 for e in entries.values()]
+        return ToolResult(ok=True, content="Background tasks:\n" + "\n".join(lines),
+                          data={"tasks": [{k: v for k, v in e.items()
+                                           if not k.startswith("_")}
+                                          for e in entries.values()]})
 
     def _summarize_turns(turns: list[dict]) -> str:
         convo = "\n".join(f"{t['role']}: {t['content']}" for t in turns
@@ -932,14 +1216,54 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
     registry.register(
         name="delegate_task",
         description=("Hand a self-contained research or multi-step sub-task to a focused "
-                     "sub-agent and get its findings back. Use for web research, multi-source "
-                     "lookups, or anything worth isolating from the main conversation."),
+                     "sub-agent and get its findings back (blocks until done). Use for web "
+                     "research, multi-source lookups, or anything worth isolating from the "
+                     "main conversation. For long tasks prefer background_task."),
         parameters={
             "type": "object",
-            "properties": {"task": {"type": "string", "description": "the sub-task to complete, stated fully"}},
+            "properties": {
+                "task": {"type": "string", "description": "the sub-task to complete, stated fully"},
+                "toolsets": {"type": "array", "items": {"type": "string"},
+                             "description": ("optional toolset/tool names to expose to the "
+                                             "sub-agent instead of the default research set "
+                                             "(destructive tools are always excluded)")},
+            },
             "required": ["task"],
         },
         handler=delegate_task,
+    )
+
+    registry.register(
+        name="background_task",
+        description=("Run a self-contained sub-task on a background sub-agent and return "
+                     "IMMEDIATELY with a task id — the conversation continues while it works. "
+                     "The user is pinged over their messaging channel when it finishes; "
+                     "results are fetched with check_background_task. Use for long research "
+                     "or anything the user shouldn't have to wait for."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "task": {"type": "string", "description": "the sub-task to complete, stated fully"},
+                "name": {"type": "string", "description": "short human label for the task"},
+                "toolsets": {"type": "array", "items": {"type": "string"},
+                             "description": ("optional toolset/tool names to expose to the "
+                                             "sub-agent instead of the default research set "
+                                             "(destructive tools are always excluded)")},
+            },
+            "required": ["task"],
+        },
+        handler=background_task,
+    )
+
+    registry.register(
+        name="check_background_task",
+        description=("Check background tasks started with background_task: with an id, "
+                     "return that task's status/result; without, list all tasks."),
+        parameters={
+            "type": "object",
+            "properties": {"id": {"type": "string", "description": "task id (omit to list all)"}},
+        },
+        handler=check_background_task,
     )
 
     registry.register(
@@ -1008,3 +1332,11 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db) -> None:
 
     # Expose summarization for the service's auto-summary-on-new-session hook.
     registry._summarize_turns = _summarize_turns  # type: ignore[attr-defined]
+
+    def _bg_listing() -> list[dict]:
+        with _bg_lock:
+            return sorted((_bg_public(e) for e in _bg_tasks.values()),
+                          key=lambda e: e.get("started_at") or 0, reverse=True)
+
+    # Handles for the service's background-status surface (/api/status).
+    return {"background_tasks": _bg_listing}

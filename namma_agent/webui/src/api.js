@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { playSound } from "./sounds.js";
 import { notify } from "./notify.js";
+import { createHandsFree, handsFreeSupported } from "./handsfree.js";
 
 function wsURL() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
@@ -42,6 +43,8 @@ export const fetchConfiguredProviders = () => j("/api/configured_providers");
 export const saveConfiguredProviders = (providers) =>
   j("/api/configured_providers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providers }) });
 export const listSessions = () => j("/api/sessions");
+// Cross-chat keyword search (the sidebar search box): [{session_id, title, snippet, ...}]
+export const searchChats = (q) => j(`/api/search?q=${encodeURIComponent(q)}`);
 export const loadSession = (id) => j(`/api/sessions/${id}`);
 export const deleteSession = (id) => j(`/api/sessions/${id}`, { method: "DELETE" });
 export const shutdownApi = () => j("/api/shutdown", { method: "POST" });
@@ -50,6 +53,24 @@ export const shutdownApi = () => j("/api/shutdown", { method: "POST" });
 export const fetchCommsStatus = () => j("/api/comms/status");
 export const startComms = () => j("/api/comms/start", { method: "POST" });
 export const stopComms = () => j("/api/comms/stop", { method: "POST" });
+// Per-channel trust level (owner/trusted/untrusted) — persisted + applied live.
+export const setChannelTrust = (channel, level) =>
+  j("/api/comms/trust", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channel, level }) });
+// The Security tab's one payload: trust, sandbox, secrets (names), quarantine, audit.
+export const fetchSecurityOverview = () => j("/api/security/overview");
+// Opt-in: move secret-looking .env entries into the OS vault.
+export const migrateSecrets = (scrub = false) =>
+  j("/api/secrets/migrate", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scrub }) });
+
+// ── Background-work status + routines ────────────────────────────────────────
+// One glance at every background subsystem (memory writer, consolidator,
+// routines, background tasks, reminders, comms) + a 7-day token-usage summary.
+export const fetchStatus = () => j("/api/status");
+export const listRoutines = () => j("/api/routines");
+export const toggleRoutine = (id, enabled) =>
+  j("/api/routines/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, enabled }) });
+export const deleteRoutine = (id) => j(`/api/routines/${id}`, { method: "DELETE" });
+export const runRoutine = (id) => j(`/api/routines/${id}/run`, { method: "POST" });
 
 // ── Version + self-update ─────────────────────────────────────────────────────
 export const fetchVersion = () => j("/api/version");
@@ -88,6 +109,17 @@ export const switchProjectModel = (sessionId, model) =>
   jpost("/api/projects/switch_model", { session_id: sessionId, model });
 export const deleteScopeMemory = (entryId) => j(`/api/scope_memory/${entryId}`, { method: "DELETE" });
 export const renameSession = (id, title) => jpatch(`/api/sessions/${id}`, { title });
+// Download the whole chat (transcript + generated media) as a zip. A plain
+// navigation, not fetch — the browser streams it straight to a file, and the
+// server's Content-Disposition names it after the chat.
+export function downloadChat(id) {
+  const a = document.createElement("a");
+  a.href = `/api/sessions/${encodeURIComponent(id)}/export`;
+  a.download = "";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
 export const fileChat = (id, projectId) => jpost(`/api/sessions/${id}/project`, { project_id: projectId });
 
 // ── Learning Room ───────────────────────────────────────────────────────────
@@ -161,20 +193,25 @@ export const fetchMcp = () => j("/api/mcp");
 export const reloadMcp = () => jpost("/api/mcp/reload");
 export const toggleMcpServer = (name, enabled) => jpost("/api/mcp/server/toggle", { name, enabled });
 
-// ── Cognee memory (Memory tab) ───────────────────────────────────────────────
+// ── Engram memory (Memory tab — native engine, always on) ────────────────────
 export const memoryStatus = () => j("/api/memory/status");
-export const memoryRecall = (query, topK = 8) => jpost("/api/memory/recall", { query, top_k: topK });
-export const memoryRemember = (text, permanent = true) => jpost("/api/memory/remember", { text, permanent });
+export const memoryRecall = (query, topK = 8, includeExpired = false) =>
+  jpost("/api/memory/recall", { query, top_k: topK, include_expired: includeExpired });
+export const memoryRemember = (text) => jpost("/api/memory/remember", { text });
 export const memoryConsolidate = () => jpost("/api/memory/consolidate", {});
 export const memoryForget = (opts = {}) => jpost("/api/memory/forget", opts);
-export const memoryGraph = () => j("/api/memory/graph");
+export const memoryGraph = (includeExpired = false, asOf = "") =>
+  j(`/api/memory/graph?include_expired=${includeExpired}&as_of=${encodeURIComponent(asOf)}`);
+export const memoryItems = (kind = "", includeExpired = false) =>
+  j(`/api/memory/items?kind=${encodeURIComponent(kind)}&include_expired=${includeExpired}`);
+export const memoryCore = () => j("/api/memory/core");
+export const saveMemoryCore = (body) => jpost("/api/memory/core", body);
+export const memoryEnvironment = (refresh = false) =>
+  j(`/api/memory/environment?refresh=${refresh}`);
 
-// ── Cognee settings (Settings → Memory → Cognee) ─────────────────────────────
-export const fetchCogneeConfig = () => j("/api/cognee/config");
-export const saveCogneeConfig = (env, flags) => jpost("/api/cognee/config", { env, flags });
-export const registerCogneeServer = (body = {}) => jpost("/api/cognee/register", body);
-// Targeted restart of just the cognee server (other MCP servers keep running).
-export const reconnectCognee = () => jpost("/api/cognee/reconnect", {});
+// ── Memory settings (the single Settings → Memory section) ───────────────────
+export const fetchMemorySettings = () => j("/api/memory/settings");
+export const saveMemorySettings = (settings) => jpost("/api/memory/settings", { settings });
 
 let _id = 0;
 const nextId = () => `m${++_id}`;
@@ -231,6 +268,15 @@ export function useNammaAgent() {
   const [shuttingDown, setShuttingDown] = useState(false);
   const [learningSignal, setLearningSignal] = useState(null); // {topic_id, at} — dashboard refresh
   const [voiceOn, setVoiceOn] = useState(false); // browser TTS auto-speak
+  // Hands-free mode: wake-word listening + spoken replies (see handsfree.js).
+  // NOT restored from localStorage on load — starting the mic needs a user
+  // gesture; the toggle in the composer is that gesture.
+  const [handsfree, setHandsfreeState] = useState(false);
+  const [handsfreeStatus, setHandsfreeStatus] = useState("off"); // listening|awaiting|speaking|denied
+  const handsfreeRef = useRef(false);
+  handsfreeRef.current = handsfree;
+  const hfRef = useRef(null);            // the controller
+  const assistantNameRef = useRef(localStorage.getItem("namma-assistant-name") || "Namma Agent");
   const [configuredModels, setConfiguredModels] = useState([]); // switchable brains
   const configuredModelsRef = useRef([]);
   configuredModelsRef.current = configuredModels;
@@ -350,7 +396,20 @@ export function useNammaAgent() {
         patch(key, (cur) => ({ ...appendToken(cur, msg.text, null), status: "thinking" }));
         break;
       case "preamble":
-        patch(key, (cur) => ({ timeline: foldStep(cur.timeline, { kind: "preamble", text: msg.text }) }));
+        patch(key, (cur) => {
+          // The progress line belongs to the Activity timeline, not the chat
+          // bubble. When the agent sends `visible` (the canonical bubble content
+          // so far — media only), rewind the streamed bubble to it so the
+          // just-typed mini update collapses into the timeline and the bubble
+          // ends the turn holding the final answer alone. (Teaching turns omit
+          // `visible` — their explanations stay in the answer.)
+          const next = { timeline: foldStep(cur.timeline, { kind: "preamble", text: msg.text }) };
+          if (cur.streamId && msg.visible !== undefined) {
+            next.messages = cur.messages.map((x) =>
+              (x.id === cur.streamId ? { ...x, content: msg.visible } : x));
+          }
+          return next;
+        });
         break;
       case "thinking":
         // Reasoning deltas — accumulate into a single running "Thinking" entry.
@@ -360,12 +419,28 @@ export function useNammaAgent() {
         patch(key, (cur) => ({ timeline: [...cur.timeline, { kind: "tool", tool: msg.tool, args: msg.args, state: "running" }] }));
         playSound("tool");
         break;
+      case "tool_output":
+        // Live output chunk (the mini-terminal view) — append to the running step.
+        patch(key, (cur) => {
+          const copy = [...cur.timeline];
+          for (let i = copy.length - 1; i >= 0; i--) {
+            if (copy[i].kind === "tool" && copy[i].tool === msg.tool && copy[i].state === "running") {
+              copy[i] = { ...copy[i], output: (copy[i].output || "") + (msg.text || "") };
+              break;
+            }
+          }
+          return { timeline: copy };
+        });
+        break;
       case "tool_finished":
         patch(key, (cur) => {
           const copy = [...cur.timeline];
           for (let i = copy.length - 1; i >= 0; i--) {
             if (copy[i].kind === "tool" && copy[i].tool === msg.tool && copy[i].state === "running") {
-              copy[i] = { ...copy[i], state: msg.ok ? "ok" : "fail", summary: msg.summary };
+              // The finished event carries the authoritative output (it replaces the
+              // streamed chunks — same text, plus anything held back mid-stream).
+              copy[i] = { ...copy[i], state: msg.ok ? "ok" : "fail", summary: msg.summary,
+                          output: msg.output || copy[i].output };
               break;
             }
           }
@@ -415,7 +490,13 @@ export function useNammaAgent() {
             timeline: [], streamId: null, status: "idle",
           };
         });
-        if (voiceRef.current && msg.content && key === currentRef.current) browserSpeak(msg.content);
+        hfRef.current?.setBusy(false);
+        if (handsfreeRef.current && msg.content && key === currentRef.current) {
+          // Hands-free reads the reply aloud with the mic paused (no feedback loop).
+          hfRef.current?.speakReply(toPlainText(msg.content));
+        } else if (voiceRef.current && msg.content && key === currentRef.current) {
+          browserSpeak(msg.content);
+        }
         playSound("complete");
         // Desktop notification: the viewed chat finishing = "Response ready"; any
         // *other* chat finishing = a backgrounded task.
@@ -467,8 +548,10 @@ export function useNammaAgent() {
         break;
       case "stopped":
         if (key) patch(key, () => ({ status: "idle", streamId: null }));
+        hfRef.current?.setBusy(false);
         break;
       case "error":
+        hfRef.current?.setBusy(false);
         patch(key || currentRef.current, (cur) => ({
           messages: [...cur.messages, { id: nextId(), role: "error", content: msg.message }],
           streamId: null, status: "idle",
@@ -489,6 +572,7 @@ export function useNammaAgent() {
     // we drop the saved chat rather than reopening it.
     (async () => {
       const cfg = await fetchConfig();
+      if (cfg?.assistant_name) assistantNameRef.current = cfg.assistant_name; // the wake word
       const boot = cfg?.server_id;
       const prevBoot = localStorage.getItem(SERVER_ID_KEY);
       if (boot && boot !== prevBoot) {
@@ -529,11 +613,39 @@ export function useNammaAgent() {
       || configuredModelsRef.current[0]?.id || null;
     const userMsg = { id: nextId(), role: "user", content: clean || "(sent attachment)", attachments, at: now() };
     patch(key, (cur) => ({ messages: [...cur.messages, userMsg], timeline: [], streamId: null, status: "thinking", suggestion: null }));
+    hfRef.current?.setBusy(true); // hands-free ignores chatter while the turn runs
     playSound("sent");
     wsRef.current.send(JSON.stringify({
       type: "user_input", text: payloadText, session_id: sessionId, client_ref: clientRef, mode: modeRef.current, model,
     }));
   }, [patch]);
+
+  // Hands-free toggle: create the controller lazily (the click IS the user
+  // gesture the mic needs), route commands into the normal send path.
+  const sendHandsfreeRef = useRef(null);
+  sendHandsfreeRef.current = send;
+  const setHandsfree = useCallback((on) => {
+    if (on && !handsFreeSupported()) return;
+    if (on) {
+      if (!hfRef.current) {
+        hfRef.current = createHandsFree({
+          wakeWord: () => assistantNameRef.current,
+          onCommand: (text) => sendHandsfreeRef.current?.(text),
+          onState: (s) => {
+            setHandsfreeStatus(s);
+            if (s === "denied") { handsfreeRef.current = false; setHandsfreeState(false); }
+          },
+        });
+      }
+      hfRef.current.start();
+      setHandsfreeState(true);
+    } else {
+      hfRef.current?.stop();
+      setHandsfreeState(false);
+    }
+  }, []);
+  // Stop listening when the tab unmounts (WS teardown already runs on unmount).
+  useEffect(() => () => hfRef.current?.stop(), []);
 
   // Run a turn in a specific session WITHOUT switching the viewed chat — used by
   // the Learning Room to build/modify a topic's path in its overview thread while
@@ -696,6 +808,7 @@ export function useNammaAgent() {
     chatContext: cur.context || null, suggestion: cur.suggestion || null, learningSignal,
     passwordReq, mode, setMode, sessions, shuttingDown,
     voiceOn, setVoiceOn,
+    handsfree, setHandsfree, handsfreeStatus,
     configuredModels, currentModel: cur.model || activeModel || configuredModels[0]?.id || "",
     activeModel, setActiveModel: setActive, selectModel, switchModelNewSession, reloadConfiguredModels,
     chatHasTurns: (cur.messages || []).some((m) => m.role === "user"),
