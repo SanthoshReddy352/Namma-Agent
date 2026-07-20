@@ -37,6 +37,10 @@ on PATH for the `.AppImage` (otherwise it leaves the raw binary).
 
 ## Requirement on the end user's machine
 
-The installer still needs **Python 3.10+** *for the app's own environment* (it
-auto-installs it if missing). The frozen installer itself bundles its own Python, so
-its UI always opens.
+- **Windows:** none. The installer is **self-contained** — it bundles a relocatable
+  CPython with every dependency pre-installed (`stage_runtime` in `build.py`) and
+  copies it into place, so the app runs with no system Python, no pip, and no network
+  at install time. This is what lets `--cli` pass winget's offline sandbox validation.
+- **macOS / Linux:** the installer still needs **Python 3.10+** *for the app's own
+  environment* (it auto-installs it if missing) and builds a `.venv` on first install.
+  The frozen installer itself bundles its own Python, so its UI always opens.

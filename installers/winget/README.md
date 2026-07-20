@@ -33,6 +33,12 @@ Notes:
 - The **silent switch is `--cli`** — the installer app's unattended mode
   (`installer/__main__.py`), same flow as the GUI without a window. Moderation
   requires a working silent install; this is it.
+- **The Windows installer is self-contained.** `installers/native/build.py`
+  bundles a relocatable CPython with every dependency pre-installed
+  (`stage_runtime`), so `--cli` install is a pure offline **copy + register** — no
+  system Python, no pip, no network. This is what lets it pass winget's unattended
+  sandbox validation (an earlier bootstrap-from-source installer failed it, since
+  the sandbox has no Python/Node and blocked on the toolchain step).
 - The installer registers **"Namma Agent"** in Add/Remove Programs
   (`installer/core.py:register_windows_app`), which winget uses to detect the
   installed version — keep `AppsAndFeaturesEntries.DisplayName` in sync if that

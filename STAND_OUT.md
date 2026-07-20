@@ -278,12 +278,31 @@ great on Windows" is an underserved niche we already live in. Small items, big f
       macOS honestly unsupported), `GET/POST /api/autostart`, Settings →
       Behavior toggle (applies instantly, no Save). Tests: `test_autostart.py`
       (5, incl. a REAL HKCU round-trip under a test-only value name).
-- [x] `winget` package manifest — landed 2026-07-19: `installers/winget/`
-      generator (`generate.py`) emits the 3-file schema-1.6 set with the real
-      release-asset SHA-256; silent switch is the installer's existing `--cli`
-      mode; Add/Remove DisplayName matched. README covers validate → local
-      install test → winget-pkgs PR. Tests: `test_winget.py` (2).
-      **Post-release step: run the generator + submit the PR once a release is out.**
+- [~] `winget` package manifest — generator landed 2026-07-19; **self-contained
+      installer landed 2026-07-20** (the fix for winget validation):
+  - Manifest generator (`installers/winget/generate.py`) emits the 3-file
+    schema-1.6 set with the real release-asset SHA-256; silent switch is the
+    installer's `--cli` mode; Add/Remove DisplayName matched. Tests: `test_winget.py` (2).
+  - PR [microsoft/winget-pkgs#404738](https://github.com/microsoft/winget-pkgs/pull/404738)
+    submitted 2026-07-20 (CLA signed) but **failed unattended validation**
+    (`Validation-Unattended-Failed`): the old installer bootstrapped a
+    Python/Node toolchain from source at install time, which winget's clean
+    offline sandbox can't run — it blocked on the toolchain step.
+  - **Fix (self-contained installer):** on Windows, `installers/native/build.py`
+    (`stage_runtime`) now bundles a relocatable CPython (python-build-standalone
+    3.12.7) with every dependency pre-installed; `installer/core.py`
+    (`bundled_runtime` + `_bootstrap_offline` + `copy_runtime`) takes an OFFLINE
+    path — copy source + runtime + register, no system Python/pip/network.
+    macOS/Linux keep the venv-bootstrap path. Tests: `test_installer.py` (+4, 34 total).
+  - **Verified locally 2026-07-20:** built `NammaAgentInstaller-2.3.0.exe`
+    (232 MB self-contained); `--cli` install with Python stripped from PATH
+    exited 0 in ~124 s via the offline path (no venv/pip), registered
+    'Namma Agent' in Add/Remove; the relocated runtime booted the app
+    (`/api/health` → 200). Full suite 814 passed.
+  - **Remaining (needs a publish):** the live v2.3.0 release asset is still the
+    OLD bootstrapper. Publish the new self-contained exe as a release asset
+    (recommend a 2.3.1 bump + CI release), regenerate the manifest against it,
+    then update/replace PR #404738.
 - [x] WSL awareness (Engram G8) — landed 2026-07-19: `detect_wsl()` (UTF-16
       parsing, graceful None), distros + default in the HOST prompt block,
       path assist translates `/mnt/<drive>/…` → `<Drive>:\…` and passes
