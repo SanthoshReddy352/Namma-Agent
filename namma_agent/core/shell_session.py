@@ -330,8 +330,12 @@ class PersistentShell:
                     self._kill()
                     return _result(int(m.group(1)), m.group(2))
                 _finalize(pending)
+                # A sourced `exit N` takes the whole POSIX shell with it — the
+                # shell's own exit status IS the command's. Report it instead
+                # of a blanket -1 (died still marks the session for respawn).
+                code = self._proc.poll() if self._proc is not None else None
                 self._kill()
-                return _result(-1, "", died=True)
+                return _result(code if code is not None else -1, "", died=True)
             pending += chunk
             m = sent_re.search(pending)
             if m:

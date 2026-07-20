@@ -89,8 +89,10 @@ def configure_sandbox(security_cfg: Optional[dict] = None) -> SandboxConfig:
 # next call — so drift outside the root can't go unnoticed.
 
 _WIN_PATH_RE = re.compile(r"(?:[A-Za-z]:[\\/]|\\\\)[^\s\"'|<>&;]*")
-# POSIX absolute paths; `(?<![:\w-])` + `(?!/)` keep URL `//host/...` runs out.
-_POSIX_PATH_RE = re.compile(r"(?<![:\w-])/(?!/)[^\s\"'|<>&;]*")
+# POSIX absolute paths. The lookbehind keeps URL runs out: a slash preceded by
+# `:` (scheme), `/` (the 2nd slash of `https://` — the bug that flagged
+# /example.com inside URLs), or a word char (mid-token) never starts a path.
+_POSIX_PATH_RE = re.compile(r"(?<![:\w/-])/(?!/)[^\s\"'|<>&;]*")
 
 
 def confine_root() -> str:
