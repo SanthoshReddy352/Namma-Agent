@@ -25,6 +25,7 @@ import os
 import platform
 import shutil
 import string
+import subprocess
 import time
 from pathlib import Path
 from typing import Optional
@@ -123,8 +124,51 @@ def find_binary(name: str, env: Optional[dict] = None) -> Optional[str]:
     return discover_tools((name,)).get(name)
 
 
+def detect_wsl(_run=None) -> Optional[dict]:
+    """WSL distros on this Windows host: ``{"distros": [...], "default": name}``.
+
+    Phase 5 (Engram G8): the agent should know WSL exists so it can translate
+    ``/mnt/c/...`` ↔ ``C:\\...`` instead of treating a WSL path as an invented
+    POSIX guess. Returns None off Windows, when ``wsl.exe`` is absent, or when
+    no distro is registered. ``wsl.exe`` prints UTF-16-LE — decoded with a
+    UTF-8 fallback for builds that don't.
+    """
+    if platform.system() != "Windows" or not shutil.which("wsl"):
+        return None
+    run = _run or (lambda: subprocess.run(
+        ["wsl.exe", "-l", "-v"], capture_output=True, timeout=8,
+        creationflags=0x08000000))  # CREATE_NO_WINDOW
+    try:
+        out = run()
+        raw = out.stdout or b""
+    except Exception:  # noqa: BLE001 — WSL present but broken: no model, no crash
+        return None
+    text = raw.decode("utf-16-le", errors="ignore")
+    if sum(c.isalpha() for c in text) < 4:  # wasn't UTF-16 after all
+        text = raw.decode("utf-8", errors="ignore")
+    text = text.replace("\x00", "").replace("\ufeff", "")
+    distros: list[str] = []
+    default: Optional[str] = None
+    for line in text.splitlines()[1:]:  # first line is the NAME/STATE header
+        line = line.strip()
+        if not line:
+            continue
+        is_default = line.startswith("*")
+        fields = line.lstrip("*").split()
+        if not fields:
+            continue
+        name = fields[0]
+        distros.append(name)
+        if is_default:
+            default = name
+    if not distros:
+        return None
+    return {"distros": distros, "default": default or distros[0]}
+
+
 def probe(apps_count: Optional[int] = None) -> dict:
-    """Collect the host model. Cheap (no subprocesses) and cross-platform."""
+    """Collect the host model. Cheap and cross-platform (the only subprocess is
+    a short ``wsl.exe -l`` probe on Windows hosts that have WSL installed)."""
     home = Path.home()
     system = platform.system()
     env: dict = {
@@ -159,6 +203,10 @@ def probe(apps_count: Optional[int] = None) -> dict:
         except OSError:
             pass
     env["drives"] = drives
+    if system == "Windows":
+        wsl = detect_wsl()
+        if wsl:
+            env["wsl"] = wsl
     env["folders"] = {name: str(home / name) for name in _KEY_FOLDERS
                       if (home / name).is_dir()}
     env["tools"] = discover_tools()
@@ -248,6 +296,16 @@ class EnvironmentMemory:
             f"Path style: {e['path_style']}. Shell: {e['shell']}. Temp: {e['temp']}",
             f"Drives: {drives}",
         ]
+        wsl = e.get("wsl")
+        if wsl:
+            names = " · ".join(
+                n + (" (default)" if n == wsl.get("default") else "")
+                for n in wsl.get("distros", []))
+            lines.append(
+                f"WSL distros: {names}. Inside WSL, Windows drives are mounted at "
+                "/mnt/<drive> (C:\\Users ↔ /mnt/c/Users); from Windows, WSL files "
+                "live at \\\\wsl$\\<distro>\\. Use `wsl -d <distro> <cmd>` to run "
+                "Linux commands.")
         if folders:
             lines.append(f"Key folders: {folders}")
         tools = e.get("tools") or {}
@@ -292,6 +350,18 @@ class EnvironmentMemory:
         if platform.system() == "Windows":
             # POSIX-style guesses on a Windows host: /tmp, /home/<u>, /c/...
             low = p.replace("\\", "/").lower()
+            # WSL paths are REAL locations on a Windows host, not guesses:
+            # \\wsl$\<distro>\... passes through untouched (UNC — no drive
+            # check), and /mnt/<drive>/... translates to the Windows drive
+            # so file tools operate on the same bytes WSL sees.
+            if low.startswith(("//wsl$", "//wsl.localhost")) or \
+                    p.replace("/", "\\").lower().startswith(("\\\\wsl$", "\\\\wsl.localhost")):
+                return os.path.normpath(p.replace("/", "\\")), None
+            if len(low) >= 6 and low.startswith("/mnt/") and low[5].isalpha() \
+                    and (len(low) == 6 or low[6] == "/"):
+                drive_letter = low[5].upper()
+                rest = p.replace("\\", "/").split("/")[3:]
+                p = os.path.join(f"{drive_letter}:\\", *rest)
             if low.startswith("/tmp"):
                 p = os.path.join(e["temp"], *p.replace("\\", "/").split("/")[2:])
             elif low.startswith(("/home/", "/root")):

@@ -25,6 +25,7 @@ import platform
 import queue
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -103,6 +104,44 @@ class ShellResult:
     died: bool = False  # the shell process ended during this command
 
 
+def _shell_env() -> dict:
+    """Environment for spawned shells, with a sanitized PATH.
+
+    Two problems with inheriting PATH verbatim:
+
+    * **Stray virtualenvs shadow python.** A leftover ``venv\\Scripts`` (or
+      ``venv/bin``) entry from some *other* product on the user PATH — the
+      observed case: an old Hermes install at
+      ``AppData\\Local\\hermes\\hermes-agent\\venv\\Scripts`` — makes ``python``
+      resolve to that abandoned interpreter in every agent shell. Any entry
+      that looks like another venv's binary dir is dropped.
+    * **`python` should mean Namma's interpreter.** The running interpreter's
+      directory is prepended, so ``python``/``pip`` in the agent's terminal
+      operate on the same environment the agent itself runs in.
+    """
+    env = os.environ.copy()
+    exe_dir = os.path.dirname(sys.executable or "")
+    exe_key = exe_dir.replace("\\", "/").rstrip("/").lower()
+
+    def _is_stray_venv(entry: str) -> bool:
+        key = entry.replace("\\", "/").rstrip("/").lower()
+        if not key or key == exe_key:
+            return False
+        return key.endswith(("/venv/scripts", "/venv/bin",
+                             "/.venv/scripts", "/.venv/bin"))
+
+    parts = [p for p in env.get("PATH", "").split(os.pathsep) if p]
+    kept = [p for p in parts if not _is_stray_venv(p)]
+    if len(kept) != len(parts):
+        dropped = [p for p in parts if _is_stray_venv(p)]
+        logger.info("[shell] dropped stray venv PATH entries: %s", "; ".join(dropped))
+    if exe_dir:
+        kept = [exe_dir] + [p for p in kept
+                            if p.replace("\\", "/").rstrip("/").lower() != exe_key]
+    env["PATH"] = os.pathsep.join(kept)
+    return env
+
+
 def _find_shell() -> list[str]:
     if IS_WINDOWS:
         exe = shutil.which("pwsh") or shutil.which("powershell") or "powershell"
@@ -144,7 +183,8 @@ class PersistentShell:
         from namma_agent.core import sandbox as _sandboxmod
 
         kwargs: dict = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, cwd=self.cwd)
+                            stderr=subprocess.STDOUT, cwd=self.cwd,
+                            env=_shell_env())
         if IS_WINDOWS:
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         else:

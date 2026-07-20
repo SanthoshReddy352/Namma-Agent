@@ -30,6 +30,12 @@
       "cwd": "landing"
     },
     {
+      "name": "docs",
+      "runtimeExecutable": ".venv/Scripts/python.exe",
+      "runtimeArgs": ["-m", "mkdocs", "serve", "-a", "127.0.0.1:8001"],
+      "port": 8001
+    },
+    {
       "name": "landing-dist",
       "runtimeExecutable": "node",
       "runtimeArgs": ["../scripts/serve.mjs"],

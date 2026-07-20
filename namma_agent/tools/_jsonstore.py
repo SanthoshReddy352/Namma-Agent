@@ -22,7 +22,8 @@ def store_path(config_section: str, default_filename: str) -> Path:
         path = cfg.get("store_path")
     except Exception:  # noqa: BLE001
         path = None
-    return Path(path).expanduser() if path else _REPO_ROOT / "data" / default_filename
+    from namma_agent.config import data_dir
+    return Path(path).expanduser() if path else data_dir() / default_filename
 
 
 def load(path: Path) -> list[dict]:

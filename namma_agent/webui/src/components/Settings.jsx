@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { applyUpdate, checkUpdate, clearMemory, deletePersona, deleteRoutine, exportPack, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchMemorySettings, fetchModels, fetchStatus, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listRoutines, listSkills, listTools, packDownloadUrl, reloadMcp, runRoutine, savePersona, saveConfiguredModels, saveConfiguredProviders, saveMemorySettings, saveSettings, setChannelTrust, setPersona, startComms, stopComms, fetchSecurityOverview, migrateSecrets, toggleMcpServer, toggleRoutine, toggleSkill, toggleTool, toggleToolset, uninstallApp } from "../api.js";
+import { applyUpdate, checkUpdate, clearMemory, deletePersona, deleteRoutine, deleteWatcher, exportPack, fetchAutostart, setAutostart, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchMemorySettings, fetchModels, fetchSelfReview, fetchStatus, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listRoutines, listSkills, listTools, listWatchers, packDownloadUrl, reloadMcp, resolveProposal, runRoutine, runSelfReview, runWatcher, savePersona, saveConfiguredModels, saveConfiguredProviders, saveMemorySettings, saveSettings, setChannelTrust, setPersona, startComms, stopComms, fetchSecurityOverview, migrateSecrets, toggleMcpServer, toggleRoutine, toggleSkill, toggleTool, toggleToolset, toggleWatcher, uninstallApp } from "../api.js";
 import { COMPLETION_PRESETS, SOUND_EVENTS, completionPreset, previewPreset, setCompletionPreset, setSoundEventEnabled, setSoundVolume, setSoundsEnabled, soundEventEnabled, soundVolume, soundsEnabled } from "../sounds.js";
 import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
 
@@ -37,10 +37,10 @@ function deepMerge(a, b) {
 const TAB_GROUPS = [
   { label: "General", tabs: ["Behavior", "Persona", "Appearance", "Notifications"] },
   { label: "Intelligence", tabs: ["Providers", "Models"] },
-  { label: "Capabilities", tabs: ["Skills", "Toolsets", "Routines", "Packs", "Browser"] },
+  { label: "Capabilities", tabs: ["Skills", "Toolsets", "Routines", "Watchers", "Packs", "Browser"] },
   { label: "Channels", tabs: ["Messaging"] },
   { label: "MCP", tabs: ["Config", "Servers"] },
-  { label: "System", tabs: ["Memory", "Security", "Status", "About"] },
+  { label: "System", tabs: ["Memory", "Security", "Learning", "Status", "About"] },
 ];
 const TABS = TAB_GROUPS.flatMap((g) => g.tabs);
 
@@ -61,7 +61,9 @@ const TAB_ICONS = {
   Servers: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   Memory: "M4 7a8 4 0 0016 0 8 4 0 00-16 0v10a8 4 0 0016 0M4 12a8 4 0 0016 0",
   Security: "M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6zM9 12l2 2 4-4",
+  Learning: "M4 19V5a2 2 0 012-2h13v14H6a2 2 0 00-2 2zm0 0a2 2 0 002 2h13M9 7h6",
   Routines: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3.5 2",
+  Watchers: "M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z",
   Status: "M3 12h4l2.5-7 5 14 2.5-7h4",
   About: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 11v5M12 7.5h.01",
 };
@@ -302,6 +304,203 @@ function RoutinesTab() {
   );
 }
 
+// ── Watchers: event-driven triggers with a "does it matter" gate ──────────────
+function triggerLabel(t) {
+  if (!t) return "?";
+  if (t.type === "file") return `file · ${t.path}`;
+  if (t.type === "email") return `email · ${t.query || "is:unread"}`;
+  if (t.type === "web") return `web · ${t.url}`;
+  if (t.type === "calendar") return `calendar · within ${t.within_minutes ?? 30} min`;
+  return t.type || "?";
+}
+
+function WatchersTab() {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState(0);        // id being checked
+  const [confirmId, setConfirmId] = useState(0);
+  const [ranMsg, setRanMsg] = useState("");
+
+  const load = () => listWatchers().then((r) => setItems(r?.watchers || []));
+  useEffect(() => { load(); }, []);
+
+  const doToggle = async (it) => { await toggleWatcher(it.id, !it.enabled); load(); };
+  const doDelete = async (id) => { setConfirmId(0); await deleteWatcher(id); load(); };
+  const doRun = async (it) => {
+    setBusy(it.id); setRanMsg("");
+    const r = await runWatcher(it.id);
+    setBusy(0);
+    setRanMsg(r?.ok ? `“${it.name}”: ${r.last_result || r.outcome || "checked"}`
+                    : `“${it.name}” couldn't be checked (watchers disabled?).`);
+    load();
+  };
+
+  return (
+    <>
+      <Section title="Watchers"
+               hint="Event-driven triggers: when a file lands, an email arrives, a page changes, or an event nears, a cheap “does it matter?” model pass filters noise, then you get a message (or a follow-up task runs first). Create one by asking in chat — e.g. “tell me when an invoice PDF lands in my Downloads”.">
+        {items === null && <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>}
+        {items?.length === 0 && (
+          <div className="text-[13px] text-ink-soft dark:text-night-faint">
+            No watchers yet. Ask the assistant to watch something for you — it picks the trigger and cadence.
+          </div>
+        )}
+        {(items || []).map((it) => (
+          <div key={it.id}
+               className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5 flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[13.5px] font-medium text-ink dark:text-night-ink truncate">{it.name}</span>
+                <span className="text-[11.5px] rounded-full border border-line dark:border-night-line px-2 py-0.5 text-ink-faint dark:text-night-faint shrink-0 max-w-[220px] truncate">{triggerLabel(it.trigger)}</span>
+              </div>
+              <div className="text-[12px] text-ink-faint dark:text-night-faint truncate">
+                {it.intent} · checked {agoTs(it.last_check_ts)} · fired {agoTs(it.last_fired_ts)}
+                {it.last_result ? ` · ${it.last_result}` : ""}
+              </div>
+            </div>
+            <button onClick={() => doRun(it)} disabled={busy === it.id}
+                    className="shrink-0 px-2.5 py-1 rounded-lg border border-line dark:border-night-line text-[12.5px] hover:border-brand/60 disabled:opacity-50">
+              {busy === it.id ? "Checking…" : "Check now"}
+            </button>
+            {confirmId === it.id ? (
+              <button onClick={() => doDelete(it.id)}
+                      className="shrink-0 px-2.5 py-1 rounded-lg text-[12.5px] text-white" style={{ background: "#dc2626" }}>
+                Sure?
+              </button>
+            ) : (
+              <button onClick={() => setConfirmId(it.id)}
+                      className="shrink-0 px-2.5 py-1 rounded-lg border text-[12.5px] hover:bg-[#dc2626]/10"
+                      style={{ borderColor: "#dc262666", color: "#dc2626" }}>
+                Delete
+              </button>
+            )}
+            <Toggle label="" checked={!!it.enabled} onChange={() => doToggle(it)} />
+          </div>
+        ))}
+        {ranMsg && <div className="text-[12.5px] text-ink-soft dark:text-night-faint">{ranMsg}</div>}
+      </Section>
+      <Section title="How firing works"
+               hint="Trigger checks are cheap polls with no model calls. Only when something actually changed does one model pass judge it against the watcher's intent — ignore / notify / act. Actions run with destructive tools always declined, and results deliver like routines (messaging channels, desktop fallback)." />
+    </>
+  );
+}
+
+// ── Learning: the weekly self-review (measured self-improvement) ──────────────
+const pctFmt = (v) => (v == null ? "–" : `${Math.round(v * 100)}%`);
+const numFmt = (v) => (v == null ? "–" : String(v));
+
+function StatCard({ label, value, prev, fmt = numFmt }) {
+  const delta = value != null && prev != null && value !== prev
+    ? (value > prev ? "▲" : "▼") : "";
+  return (
+    <div className="rounded-xl border border-line dark:border-night-line px-4 py-2.5 min-w-[130px]">
+      <div className="text-[11.5px] text-ink-faint dark:text-night-faint">{label}</div>
+      <div className="text-[17px] font-semibold text-ink dark:text-night-ink">
+        {fmt(value)}
+        {delta && <span className="ml-1.5 text-[11.5px] font-normal text-ink-faint dark:text-night-faint">{delta} was {fmt(prev)}</span>}
+      </div>
+    </div>
+  );
+}
+
+function LearningTab() {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const load = () => fetchSelfReview().then((r) => { if (r) setData(r); });
+  useEffect(() => { load(); }, []);
+
+  const doRun = async () => {
+    setBusy(true); setMsg("");
+    const r = await runSelfReview();
+    setBusy(false);
+    setMsg(r?.ok ? "Review complete." : "Review failed — check the server log.");
+    load();
+  };
+  const doResolve = async (p, action) => {
+    const r = await resolveProposal(p.id, action);
+    setMsg(r?.ok ? (action === "accept" ? `Accepted — ${r.detail || "applied"}.` : "Rejected.")
+                 : `Couldn't ${action}: ${r?.detail || "unknown error"}`);
+    load();
+  };
+
+  if (!data) return <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>;
+  const snaps = data.snapshots || [];
+  const cur = snaps[snaps.length - 1] || {};
+  const prev = snaps[snaps.length - 2] || {};
+  const pending = (data.proposals || []).filter((p) => p.status === "pending");
+  const resolved = (data.proposals || []).filter((p) => p.status !== "pending");
+
+  return (
+    <>
+      <Section title="What I learned"
+               hint="A weekly self-review mines your sessions (failures, corrections, repeated workflows), measures memory recall offline, and drafts proposals — nothing is ever applied without your yes.">
+        <div className="flex items-center gap-3 flex-wrap">
+          <button onClick={doRun} disabled={busy}
+                  className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line text-[12.5px] hover:border-brand/60 disabled:opacity-50">
+            {busy ? "Reviewing…" : "Run review now"}
+          </button>
+          <span className="text-[12px] text-ink-faint dark:text-night-faint">
+            {data.enabled
+              ? `Weekly runs on (${data.runner_running ? "runner active" : "runner idle"})`
+              : "Weekly runs are off — set self_review.enabled: true in config.yaml once you like a manual run."}
+          </span>
+        </div>
+        {msg && <div className="text-[12.5px] text-ink-soft dark:text-night-faint">{msg}</div>}
+        {snaps.length > 0 && (
+          <div className="flex flex-wrap gap-2.5">
+            <StatCard label={`Memory recall@${cur.k ?? "?"}`} value={cur.recall_at_k} prev={prev.recall_at_k} fmt={pctFmt} />
+            <StatCard label="Facts remembered" value={cur.facts} prev={prev.facts} />
+            <StatCard label="Skills" value={cur.skills} prev={prev.skills} />
+            <StatCard label="Tool failure rate" value={cur.failure_rate} prev={prev.failure_rate} fmt={pctFmt} />
+          </div>
+        )}
+        {data.report?.text ? (
+          <pre className="text-[12.5px] leading-relaxed whitespace-pre-wrap font-sans rounded-xl border border-line dark:border-night-line px-4 py-3 text-ink-soft dark:text-night-faint">
+            {data.report.text}
+          </pre>
+        ) : (
+          <div className="text-[13px] text-ink-soft dark:text-night-faint">
+            No review yet — run one to get your first “what I learned this week” report.
+          </div>
+        )}
+      </Section>
+
+      <Section title={`Proposals${pending.length ? ` (${pending.length} waiting)` : ""}`}
+               hint="Drafts from the review: new skills, routines, or watchers backed by what actually happened. Accepting applies through the normal stores (routines/watchers arrive disabled); rejecting remembers the no.">
+        {pending.length === 0 && (
+          <div className="text-[13px] text-ink-soft dark:text-night-faint">Nothing waiting for a decision.</div>
+        )}
+        {pending.map((p) => (
+          <div key={p.id} className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5 flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[11.5px] rounded-full border border-line dark:border-night-line px-2 py-0.5 text-ink-faint dark:text-night-faint shrink-0">{p.kind}</span>
+                <span className="text-[13.5px] font-medium text-ink dark:text-night-ink truncate">{p.title}</span>
+              </div>
+              {p.why && <div className="text-[12px] text-ink-faint dark:text-night-faint">{p.why}</div>}
+            </div>
+            <button onClick={() => doResolve(p, "accept")}
+                    className="shrink-0 px-2.5 py-1 rounded-lg border text-[12.5px]"
+                    style={{ borderColor: "#05966966", color: "#059669" }}>
+              Accept
+            </button>
+            <button onClick={() => doResolve(p, "reject")}
+                    className="shrink-0 px-2.5 py-1 rounded-lg border border-line dark:border-night-line text-[12.5px] text-ink-faint dark:text-night-faint">
+              Reject
+            </button>
+          </div>
+        ))}
+        {resolved.length > 0 && (
+          <div className="text-[12px] text-ink-faint dark:text-night-faint">
+            {resolved.filter((p) => p.status === "accepted").length} accepted · {resolved.filter((p) => p.status === "rejected").length} rejected previously
+          </div>
+        )}
+      </Section>
+    </>
+  );
+}
+
 // ── Status: every background subsystem at a glance ────────────────────────────
 const agoIso = (iso) => {
   if (!iso) return "never";
@@ -350,8 +549,18 @@ function StatusTab() {
                    detail={mem.embeddings ? "embeddings configured — semantic channel on" : "off — BM25 keyword recall only (configure memory.embeddings)"} />
         <StatusRow label="Routines" on={!!rout.runner_running}
                    detail={rout.total ? `${rout.enabled}/${rout.total} enabled · runner ${rout.runner_running ? "running" : "stopped"}` : "none created yet"} />
+        <StatusRow label="Watchers" on={!!(st.watchers || {}).runner_running}
+                   detail={(st.watchers || {}).total
+                     ? `${st.watchers.enabled}/${st.watchers.total} enabled · runner ${st.watchers.runner_running ? "running" : "stopped"}`
+                     : "none created yet"} />
         <StatusRow label="Background tasks" on={(bg.running || 0) > 0}
                    detail={bg.running ? `${bg.running} running` : (bg.items?.length ? `none running · ${bg.items.length} finished kept` : "none started")} />
+        <StatusRow label="Self-review" on={!!st.self_review?.runner_running}
+                   detail={(st.self_review?.enabled
+                             ? `weekly runs on · runner ${st.self_review.runner_running ? "running" : "stopped"}`
+                             : "weekly runs off (self_review.enabled)")
+                           + (st.self_review?.last_snapshot ? ` · last snapshot ${st.self_review.last_snapshot}` : "")
+                           + (st.self_review?.pending_proposals ? ` · ${st.self_review.pending_proposals} proposal(s) waiting` : "")} />
         <StatusRow label="Reminders" on={!!st.reminders?.running}
                    detail={st.reminders?.enabled ? (st.reminders.running ? "polling" : "enabled, thread stopped") : "off (scheduler.run_in_background)"} />
         <StatusRow label="Learning nudges" on={!!st.learning_nudger?.running}
@@ -447,6 +656,7 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
 
                 {tab === "Behavior" && (
                   <Section title="Behavior">
+                    <AutostartToggle />
                     <Field label="Default mode"><Select value={cur("conversation.default_mode", "agent")} onChange={(v) => setC("conversation.default_mode", v)} options={["agent", "chat"]} /></Field>
                     <Toggle label="Auto mode — run tools (incl. shell) without asking" checked={!!cur("conversation.auto_approve", false)} onChange={(v) => setC("conversation.auto_approve", v)} />
                     <Field label="Tool step limit (0 = unlimited)"><Input type="number" value={cur("conversation.tool_loop_limit", 0)} onChange={(v) => setC("conversation.tool_loop_limit", parseInt(v || "0", 10))} /></Field>
@@ -534,6 +744,8 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                 {tab === "Security" && <SecurityTab />}
 
                 {tab === "Routines" && <RoutinesTab />}
+                {tab === "Watchers" && <WatchersTab />}
+                {tab === "Learning" && <LearningTab />}
 
                 {tab === "Status" && <StatusTab />}
 
@@ -618,6 +830,17 @@ function GatewayControl() {
       <div className="text-[11.5px] text-ink-faint dark:text-night-faint">
         Tip: after adding or changing a token, click <b>Save</b> below, then <b>Start</b> (or Stop &amp; Start) so the gateway picks it up.
       </div>
+      <div className="text-[11.5px] text-ink-faint dark:text-night-faint">
+        Deployment &amp; gateway guides:{" "}
+        <a className="text-brand hover:underline" target="_blank" rel="noreferrer"
+           href="https://github.com/SanthoshReddy352/Namma-Agent/blob/main/docs/GATEWAYS.md">channel setup for servers</a>
+        {" · "}
+        <a className="text-brand hover:underline" target="_blank" rel="noreferrer"
+           href="https://github.com/SanthoshReddy352/Namma-Agent/blob/main/docs/DEPLOY.md">self-hosting (always-on, $0 Oracle tier)</a>
+        {" · "}
+        <a className="text-brand hover:underline" target="_blank" rel="noreferrer"
+           href="https://github.com/SanthoshReddy352/Namma-Agent/blob/main/docs/COMMS.md">per-channel credentials</a>
+      </div>
     </Section>
   );
 }
@@ -687,6 +910,27 @@ const SecCard = ({ children }) => (
 const SecEmpty = ({ children }) => (
   <div className="px-3.5 py-3 text-[12.5px] text-ink-faint dark:text-night-faint">{children}</div>
 );
+
+// A Section whose body folds away behind a chevron in the title row.
+function CollapsibleSection({ title, hint, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div>
+      <button onClick={() => setOpen((o) => !o)}
+              className="w-full flex items-center gap-2 font-medium mb-1 text-left text-ink dark:text-night-ink hover:opacity-80"
+              aria-expanded={open}>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+             className={`shrink-0 transition-transform ${open ? "rotate-90" : ""}`}>
+          <path d="M9 6l6 6-6 6" />
+        </svg>
+        {title}
+      </button>
+      {open && hint && <div className="text-[12px] text-ink-faint dark:text-night-faint mb-3">{hint}</div>}
+      {open && <div className="space-y-2.5">{children}</div>}
+    </div>
+  );
+}
 
 function SecurityTab() {
   const [data, setData] = useState(null);
@@ -817,8 +1061,9 @@ function SecurityTab() {
         </SecCard>
       </Section>
 
-      <Section title="Recent tool activity (audit trail)"
-               hint="The newest 50 tool runs, including destructive actions you approved or declined.">
+      <CollapsibleSection
+        title={`Recent tool activity (audit trail)${data.audit?.length ? ` — ${data.audit.length}` : ""}`}
+        hint="The newest 50 tool runs, including destructive actions you approved or declined.">
         <SecCard>
           {(data.audit || []).slice(0, 50).map((a) => (
             <div key={a.id} className="px-3.5 py-2 flex items-center gap-2.5">
@@ -830,7 +1075,7 @@ function SecurityTab() {
           ))}
           {!(data.audit || []).length && <SecEmpty>No tool activity recorded yet.</SecEmpty>}
         </SecCard>
-      </Section>
+      </CollapsibleSection>
     </>
   );
 }
@@ -1375,6 +1620,32 @@ const Select = ({ value, onChange, options }) => (
     {options.map((o) => <option key={o} value={o}>{o}</option>)}
   </select>
 );
+// Phase 5: start-on-login. Self-contained — reads/writes /api/autostart (the
+// HKCU Run key on Windows, an XDG autostart entry on Linux), so it needs no
+// place in config.yaml and applies instantly, no Save required.
+function AutostartToggle() {
+  const [st, setSt] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => { fetchAutostart().then(setSt).catch(() => setSt(null)); }, []);
+  if (!st) return null;
+  if (!st.supported) {
+    return <div className="text-[12px] text-ink-faint dark:text-night-faint">
+      Start on login isn't supported on {st.platform || "this OS"} yet.</div>;
+  }
+  const flip = async (v) => {
+    setErr("");
+    const r = await setAutostart(v).catch((e) => ({ ok: false, error: String(e) }));
+    if (r?.ok) setSt((s) => ({ ...s, enabled: r.enabled }));
+    else setErr(r?.error || "could not change start-on-login");
+  };
+  return (
+    <>
+      <Toggle label="Start when I sign in to this computer" checked={!!st.enabled} onChange={flip} />
+      {err && <div className="text-[12px] text-red-500">{err}</div>}
+    </>
+  );
+}
+
 const Toggle = ({ label, checked, onChange }) => (
   <label className="flex items-center justify-between gap-3 cursor-pointer">
     <span className="text-ink-soft dark:text-night-faint">{label}</span>

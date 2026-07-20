@@ -19,7 +19,8 @@ import subprocess
 import time
 from pathlib import Path
 
-_STORE = Path("data/opened_apps.json")
+from namma_agent.config import data_dir as _data_dir
+_STORE = _data_dir() / "opened_apps.json"
 
 
 def _aliases(name: str) -> list[str]:

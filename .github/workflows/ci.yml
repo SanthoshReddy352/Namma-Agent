@@ -63,3 +63,44 @@ jobs:
 
       - name: Run v2 test suite
         run: python -m pytest namma_agent/tests/ -q
+
+  # Phase 6b: the server image must build and come up healthy. Builds the real
+  # multi-stage image (UI included), boots it with the compose memory bounds,
+  # and smoke-tests the auth-exempt /api/health endpoint. Also records the
+  # container's idle RSS in the job log (the 1 GB reference-box needle).
+  docker:
+    name: Docker image smoke test
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t namma-agent:ci .
+      - name: Boot + health smoke (900m memory cap)
+        run: |
+          docker run -d --name namma --memory 900m -p 127.0.0.1:8000:8000 namma-agent:ci
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8000/api/health | grep -q '"ok":true'; then
+              echo "healthy after ~$((i*2))s"; break
+            fi
+            if [ "$i" = 30 ]; then echo "never became healthy"; docker logs namma; exit 1; fi
+            sleep 2
+          done
+      - name: Record idle memory (1 GB-box needle)
+        run: |
+          sleep 10
+          docker stats --no-stream --format 'idle memory: {{.MemUsage}} ({{.MemPerc}} of cap)' namma
+      - name: Auth smoke (token gates /api/*, health stays open)
+        run: |
+          docker rm -f namma
+          docker run -d --name namma-auth --memory 900m -e NAMMA_AUTH_TOKEN=ci-secret \
+            -p 127.0.0.1:8001:8000 namma-agent:ci
+          for i in $(seq 1 30); do
+            curl -fsS http://127.0.0.1:8001/api/health >/dev/null 2>&1 && break; sleep 2
+          done
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/api/config)
+          [ "$code" = "401" ] || { echo "expected 401 without token, got $code"; exit 1; }
+          code=$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Namma-Token: ci-secret' http://127.0.0.1:8001/api/config)
+          [ "$code" = "200" ] || { echo "expected 200 with token, got $code"; exit 1; }
+          echo "auth gate verified in the real image"
+          docker rm -f namma-auth

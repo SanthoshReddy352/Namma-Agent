@@ -23,9 +23,29 @@ from namma_agent.core.logger import configure_logging, logger
 from namma_agent.service import NammaAgentService
 from namma_agent.version import __version__
 
+# Bind address/port come from config (server.host/server.port, Phase 6a) via
+# _apply_server_config() in main(); these are the pre-config defaults. _URL
+# always targets loopback — it's what the local window/tray/toasts open, valid
+# regardless of the bind address.
 _HOST = "127.0.0.1"
 _PORT = int(os.environ.get("PORT", 8000))
-_URL = f"http://{_HOST}:{_PORT}"
+_URL = f"http://127.0.0.1:{_PORT}"
+
+
+def _apply_server_config(config: dict) -> None:
+    """Read server.host/server.port and refresh the module globals. Warns loudly
+    on a non-loopback bind without an auth token — never silently public."""
+    global _HOST, _PORT, _URL
+    from namma_agent.config import auth_token, server_bind
+
+    _HOST, _PORT = server_bind(config)
+    _URL = f"http://127.0.0.1:{_PORT}"
+    os.environ.setdefault("NAMMA_APP_URL", _URL)  # toast actions open this
+    if _HOST not in ("127.0.0.1", "localhost", "::1") and not auth_token(config):
+        logger.warning(
+            "[app] server binds %s with NO auth token — anyone who can reach "
+            "this machine can drive the agent. Set server.auth_token (or "
+            "NAMMA_AUTH_TOKEN) before exposing it. See docs/DEPLOY.md.", _HOST)
 
 # Set by _serve() if uvicorn/create_app raises on the background thread, so main()
 # can surface the *real* reason instead of a silent "did not come up in time".
@@ -373,6 +393,31 @@ def _error_html(detail: str) -> str:
 </div></body></html>"""
 
 
+def _start_tray(service: NammaAgentService, window, title: str):
+    """Phase 5: the system tray icon (show/hide, gateway status, quit).
+    Best-effort — returns None when pystray/Pillow aren't installed."""
+    from namma_agent.core.tray import start_tray
+
+    state = {"hidden": False}
+
+    def _toggle() -> None:
+        with suppress(Exception):
+            if state["hidden"]:
+                window.show()
+            else:
+                window.hide()
+            state["hidden"] = not state["hidden"]
+
+    def _quit() -> None:
+        # Destroying the window makes webview.start() return → normal shutdown.
+        with suppress(Exception):
+            window.destroy()
+
+    return start_tray(title=title, url=_URL, icon_path=_icon_path(),
+                      on_toggle=_toggle, on_quit=_quit,
+                      status_getter=getattr(service, "comms_status", None))
+
+
 def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
                    healthy: bool = True) -> None:
     """Open the native desktop window; fall back to a browser tab only if no GUI
@@ -407,11 +452,13 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
             background_color="#f6f8fc",
         )
         if healthy:
-            webview.create_window(title, _URL, **win_kwargs)
+            window = webview.create_window(title, _URL, **win_kwargs)
         else:
             detail = f"{type(_serve_error).__name__}: {_serve_error}" if _serve_error else ""
-            webview.create_window(title, html=_error_html(detail), **win_kwargs)
+            window = webview.create_window(title, html=_error_html(detail), **win_kwargs)
+        tray = None
         try:
+            tray = _start_tray(service, window, title)
             # private_mode=False keeps a disk cache between launches → faster
             # warm starts and smoother navigation (esp. on Windows/WebView2).
             webview.start(
@@ -423,6 +470,9 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
         except Exception as exc:  # noqa: BLE001 — backend unavailable; try the next
             last_exc = exc
             logger.info("[app] GUI backend %s unavailable (%s)", gui or "default", exc)
+        finally:
+            if tray is not None:
+                tray.stop()
 
     logger.warning(
         "[app] no native GUI toolkit found (%s). On Linux install one with "
@@ -442,6 +492,7 @@ def _open_browser(server_thread: Optional[threading.Thread]) -> None:
 
 def main(server_only: bool = False) -> None:
     service = _build_service()
+    _apply_server_config(service.config)
 
     # If a previous instance is already serving on our port, REUSE it rather than
     # starting a second uvicorn (the duplicate bind fails with SystemExit and the

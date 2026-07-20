@@ -170,7 +170,8 @@ def _media_missing(url: str) -> bool:
     """True when a /api/media/<path> URL has no backing file on disk."""
     rel = url[len("/api/media/"):].split("?", 1)[0].split("#", 1)[0]
     try:
-        return not (Path("data/media") / rel).exists()
+        from namma_agent.config import data_dir as _data_dir
+        return not (_data_dir() / "media" / rel).exists()
     except Exception:  # noqa: BLE001
         return True
 

@@ -7,6 +7,7 @@ environment (host probe + path resolution), fused recall, the write pipeline
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -367,3 +368,60 @@ def test_clear_memory_wipes_engram():
     reg = _registry_with_tools(eng)
     r = reg.execute("clear_memory", {"scope": "memory"})
     assert r.ok and eng.store.counts()["items"] == 0
+
+
+# ── environment: WSL awareness (Phase 5, G8) ────────────────────────────────
+
+def test_detect_wsl_parses_utf16_listing():
+    from namma_agent.core.engram.environment import detect_wsl
+    if os.name != "nt":
+        pytest.skip("wsl.exe is a Windows concept")
+
+    class FakeOut:
+        stdout = "  NAME       STATE     VERSION\r\n* Ubuntu     Running   2\r\n  kali-linux Stopped   2\r\n".encode("utf-16-le")
+
+    w = detect_wsl(_run=lambda: FakeOut())
+    assert w == {"distros": ["Ubuntu", "kali-linux"], "default": "Ubuntu"}
+
+
+def test_detect_wsl_none_when_broken():
+    from namma_agent.core.engram.environment import detect_wsl
+    if os.name != "nt":
+        pytest.skip("wsl.exe is a Windows concept")
+
+    def boom():
+        raise OSError("wsl exploded")
+
+    assert detect_wsl(_run=boom) is None
+
+    class Empty:
+        stdout = b""
+
+    assert detect_wsl(_run=lambda: Empty()) is None
+
+
+def test_resolve_path_translates_wsl_mnt():
+    env = EnvironmentMemory()
+    env._env = probe()
+    if env._env["platform"] != "nt":
+        pytest.skip("Windows-only check")
+    p, err = env.resolve_path("/mnt/c/Users/santh/notes.txt")
+    assert err is None
+    assert p.lower().startswith("c:\\users") and "mnt" not in p.lower()
+
+
+def test_resolve_path_passes_wsl_unc_through():
+    env = EnvironmentMemory()
+    env._env = probe()
+    if env._env["platform"] != "nt":
+        pytest.skip("Windows-only check")
+    p, err = env.resolve_path(r"\\wsl$\Ubuntu\home\me\x.txt")
+    assert err is None and p.startswith("\\\\wsl$")
+
+
+def test_render_mentions_wsl_when_present():
+    env = EnvironmentMemory()
+    e = env.get()
+    if not e.get("wsl"):
+        pytest.skip("no WSL on this host")
+    assert "WSL distros:" in env.render()

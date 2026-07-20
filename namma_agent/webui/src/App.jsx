@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { BrowserRouter, Routes, Route, Outlet, useNavigate } from "react-router-dom";
-import { fetchConfig, fileChat, listProjects, renameSession, useNammaAgent } from "./api.js";
+import { fetchConfig, fileChat, getAuthToken, listProjects, renameSession, setAuthToken, useNammaAgent } from "./api.js";
 import Logo from "./components/Logo.jsx";
 import Sidebar from "./components/Sidebar.jsx";
 import Settings from "./components/Settings.jsx";
@@ -159,9 +159,49 @@ function Shell() {
   );
 }
 
+// Phase 6a: self-hosted servers set an access token; any 401 from the API
+// raises "namma-auth-required" (api.js) and this gate takes over the screen.
+// Submitting stores the token and reloads so every fetch + the websocket
+// reconnect carry it. Local no-token instances never see this.
+function AuthGate() {
+  const [needed, setNeeded] = useState(false);
+  const [value, setValue] = useState("");
+  useEffect(() => {
+    const on = () => setNeeded(true);
+    window.addEventListener("namma-auth-required", on);
+    return () => window.removeEventListener("namma-auth-required", on);
+  }, []);
+  if (!needed) return null;
+  const submit = (e) => {
+    e.preventDefault();
+    if (!value.trim()) return;
+    setAuthToken(value.trim());
+    location.reload();
+  };
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-paper dark:bg-night">
+      <form onSubmit={submit} className="w-[360px] max-w-[90vw] rounded-2xl border border-line dark:border-night-line bg-white dark:bg-night-soft p-6 shadow-xl">
+        <div className="text-lg font-semibold mb-1">Access token required</div>
+        <p className="text-[13px] text-ink-faint dark:text-night-faint mb-4">
+          This server is protected. Paste the access token from your deployment
+          (printed by the installer, or <code>NAMMA_AUTH_TOKEN</code> in its .env).
+          {getAuthToken() ? " The saved token was rejected — it may have changed." : ""}
+        </p>
+        <input autoFocus type="password" value={value} onChange={(e) => setValue(e.target.value)}
+               placeholder="paste token"
+               className="w-full rounded-lg border border-line dark:border-night-line bg-paper dark:bg-night px-3 py-2 outline-none focus:border-brand mb-3" />
+        <button type="submit" className="w-full rounded-lg bg-brand text-white py-2 font-medium hover:bg-brand-deep">
+          Unlock
+        </button>
+      </form>
+    </div>
+  );
+}
+
 export default function App() {
   return (
     <BrowserRouter>
+      <AuthGate />
       <Routes>
         <Route element={<Shell />}>
           <Route index element={<ChatView />} />

@@ -56,6 +56,38 @@ def test_native_notification_never_raises(monkeypatch):
     assert notifications.send_native_notification("t", "b") is False
 
 
+def test_windows_toast_carries_action_urls(monkeypatch):
+    """Phase 5: the Windows toast has Reply/Open protocol actions wired to the
+    app URL (Reply carries the ?reply=1 hint), passed via env — never templated
+    into the script body."""
+    calls = []
+    monkeypatch.setattr(notifications.subprocess, "Popen",
+                        lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(notifications.platform, "system", lambda: "Windows")
+    assert notifications.send_native_notification(
+        "T", "B", url="http://127.0.0.1:9999") is True
+    (argv,), kwargs = calls[0][0], calls[0][1]
+    env = kwargs["env"]
+    assert env["NAMMA_NOTIFY_URL"] == "http://127.0.0.1:9999"
+    assert env["NAMMA_NOTIFY_REPLY_URL"] == "http://127.0.0.1:9999?reply=1"
+    script = argv[-1]
+    assert "ToastNotificationManager" in script     # the modern toast path
+    assert 'content="Reply"' in script and 'content="Open"' in script
+    assert "NotifyIcon" in script                   # the graceful fallback
+
+
+def test_windows_toast_default_url(monkeypatch):
+    calls = []
+    monkeypatch.setattr(notifications.subprocess, "Popen",
+                        lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(notifications.platform, "system", lambda: "Windows")
+    monkeypatch.delenv("NAMMA_APP_URL", raising=False)
+    monkeypatch.delenv("PORT", raising=False)
+    notifications.send_native_notification("T")
+    env = calls[0][1]["env"]
+    assert env["NAMMA_NOTIFY_URL"] == "http://127.0.0.1:8000"
+
+
 def test_api_notify_route(monkeypatch):
     seen = {}
 

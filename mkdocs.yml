@@ -1,0 +1,71 @@
+site_name: Namma Agent
+site_description: >-
+  The trustworthy personal agent that measurably knows you — first-class on
+  Windows. Self-hosted, any cloud brain, measured memory, event-driven
+  watchers, and a trust model that's on by default.
+site_url: https://santhoshreddy352.github.io/Namma-Agent/
+repo_url: https://github.com/SanthoshReddy352/Namma-Agent
+repo_name: SanthoshReddy352/Namma-Agent
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: teal
+      accent: deep orange
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - content.code.copy
+    - content.action.edit
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
+  - pymdownx.details
+
+exclude_docs: |
+  hospital_data.json
+
+nav:
+  - Home: README.md
+  - Why Namma: WHY_NAMMA.md
+  - Trust & security:
+      - Security model: SECURITY.md
+  - Memory:
+      - Design (Engram): MEMORY_SYSTEM_DESIGN.md
+      - Benchmarks: BENCHMARKS.md
+  - Setup:
+      - Install: INSTALL.md
+      - Messaging channels: COMMS.md
+  - Self-hosting:
+      - Overview: DEPLOY.md
+      - "Oracle free tier ($0)": DEPLOY_ORACLE.md
+      - Any VPS: DEPLOY_VPS.md
+      - Gateways on a server: GATEWAYS.md
+  - Guides:
+      - Architecture: ARCHITECTURE.md
+      - Skills: SKILLS.md
+      - Extending: EXTENDING.md
+      - Plugins (MCP): PLUGINS.md
+      - Self-modification: SELF_MODIFICATION.md
+  - Project:
+      - Releasing: RELEASING.md

@@ -1,0 +1,32 @@
+# Namma Agent — server-lite profile (Phase 6b)
+#
+# An OVERLAY for small always-on boxes (the 1 GB Oracle E2.1.Micro reference
+# target): copy it to namma_agent/config.local.yaml on the server (the
+# installer does this) and it merges over the base config. It trims context
+# and turn size so the headless agent + messaging gateway stay well under the
+# box's memory, and disables desktop-only features that make no sense headless.
+# Everything here can still be changed later from Settings (which writes the
+# same file).
+
+server:
+  host: 127.0.0.1        # keep loopback; the Telegram-only path needs NO open port.
+  port: 8000             # expose the UI later? set host: 0.0.0.0 AND an auth_token
+                         # (docs/DEPLOY.md, security checklist).
+
+conversation:
+  max_history_turns: 8         # smaller prompt per turn (default 12)
+  tool_result_max_chars: 6000  # big tool outputs are the #1 prompt-size driver
+  memory_nudge_every: 8
+
+# Voice is browser-native (no server cost) — nothing to disable for it.
+
+memory:
+  consolidate:
+    idle_minutes: 45     # consolidate less eagerly on a shared 1-OCPU slice
+    daily_at: "04:00"
+  recall:
+    k: 4
+
+logging:
+  level: info
+  to_file: true

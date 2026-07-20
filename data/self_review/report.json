@@ -1,0 +1,70 @@
+{
+  "at": 1784462110.3742108,
+  "text": "What I learned this week\n\nMemory recall@5: 92%\nFacts remembered: 13\nSkills: 8\nTool failure rate: 15% (35 of 234 calls)\nTokens (7d): 1162006 · cached reads: 11227904\n\nSessions reviewed: 15 over 7 days\nMost-failing tools: run_shell ×30, web_extract ×3, read_text_from_image ×1\nQuestions you had to re-ask: 1\nThreads left hanging: 1\n\n2 proposal(s) waiting for your yes/no in Settings → System → Learning:\n  • [skill] Windows-Compatible Shell Command Execution\n  • [skill] Web Extraction with Browser Headers",
+  "mined": {
+    "window_days": 7,
+    "sessions": 15,
+    "tool_calls": 234,
+    "failures": {
+      "count": 35,
+      "by_tool": {
+        "run_shell": 30,
+        "web_extract": 3,
+        "read_text_from_image": 1,
+        "set_learning_plan": 1
+      },
+      "examples": [
+        {
+          "tool": "web_extract",
+          "summary": "ERROR: couldn't fetch https://www.reuters.com/technology/artificial-intelligence/: HTTP Error 401: HTTP Forbidden"
+        },
+        {
+          "tool": "web_extract",
+          "summary": "ERROR: couldn't fetch https://www.artificialintelligence-news.com/: HTTP Error 403: Forbidden"
+        },
+        {
+          "tool": "web_extract",
+          "summary": "ERROR: couldn't fetch https://www.reuters.com/technology/artificial-intelligence/: HTTP Error 401: HTTP Forbidden"
+        },
+        {
+          "tool": "run_shell",
+          "summary": "ERROR: exit 1: At C:\\Users\\santh\\AppData\\Local\\Temp\\namma_shell_8oq7smea\\cmd_17bca8ed6d07.ps1:1 char:11\r\n+ cd D:\\AGI && git diff\r\n+           ~~\r\nThe token '&&'"
+        },
+        {
+          "tool": "run_shell",
+          "summary": "ERROR: exit 128: fatal: not a git repository (or any of the parent directories): .git"
+        }
+      ]
+    },
+    "failure_rate": 0.15,
+    "corrections": [],
+    "retries": [
+      {
+        "session_id": "d04a3d2b-a898-439b-a2b3-7ea4b1747001",
+        "text": "Now, you know so much about time and space complexity from the above examples and explanations right.\nDraft  a document in .md format about all the learnings ab"
+      }
+    ],
+    "repeated_workflows": [],
+    "unanswered": [
+      {
+        "session_id": "48764d1c-5408-4805-9963-5ef5abf53bd8",
+        "text": "Hi"
+      }
+    ]
+  },
+  "snapshot": {
+    "date": "2026-07-19",
+    "ts": 1784462110.3742108,
+    "recall_at_k": 0.917,
+    "k": 5,
+    "facts": 13,
+    "entities": 17,
+    "relations": 13,
+    "skills": 8,
+    "tool_calls": 234,
+    "failures": 35,
+    "failure_rate": 0.15,
+    "tokens_7d": 1162006,
+    "cached_7d": 11227904
+  }
+}

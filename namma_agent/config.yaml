@@ -2,6 +2,25 @@
 # The brain is an API call: native Anthropic/Google/OpenAI, or any
 # OpenAI-compatible endpoint (opencode / LM Studio / Ollama / custom).
 
+# ── Server (Phase 6 — self-hosting) ────────────────────────────────
+# Where the web UI/API listens. The default binds LOOPBACK ONLY — the app is
+# never silently public. To expose it (a VPS, a home server):
+#   1. set host: 0.0.0.0 (or a specific interface)
+#   2. SET AN AUTH TOKEN — with a token set, every /api/* request and the
+#      websocket require it (constant-time compare); the web UI shows a small
+#      unlock screen and remembers it. NAMMA_AUTH_TOKEN in .env works too and
+#      wins over this file. Generate one: python -c "import secrets;print(secrets.token_urlsafe(32))"
+#   3. still put TLS/a firewall in front for the open internet (docs/DEPLOY.md).
+# The Telegram-only path needs NONE of this — the gateway dials out.
+# /api/health stays token-free (Docker/systemd healthchecks); platform webhooks
+# under /webhooks/* have their own verification.
+# NAMMA_DATA_DIR relocates all runtime state (db/uploads/media/stores) for
+# volume mounts; PORT still overrides the port.
+# server:
+#   host: 127.0.0.1
+#   port: 8000
+#   auth_token: ""
+
 # ── Assistant identity ─────────────────────────────────────────────
 # THE one place to rename the assistant. Set `name` to anything you like
 # (e.g. "Jarvis", "Aria", "Max") and it changes everywhere — the system
@@ -131,6 +150,34 @@ routines:
   enabled: true                   # false hides the tools and never polls
   # poll_seconds: 30              # how often due routines are checked
   # store_path: data/routines.json
+
+# ── Event watchers (Phase 2 — "tell me WHEN…") ──────────────────────
+# A watcher = trigger + condition + action. Triggers are cheap polls (file glob,
+# new Gmail matches, web-page text hash, calendar events within N minutes); when
+# one fires, a single cheap model pass — the "only if it matters" gate — decides
+# notify / act / ignore against the watcher's stated intent, so noisy pages
+# don't become notification spam. Actions run as routine-style agent turns
+# (destructive tools always declined) and deliver over your messaging channels.
+# Ask the assistant to "watch …" — creating a watcher is the opt-in; the poll
+# thread only runs while at least one enabled watcher exists. Web/email content
+# is injection-screened (Phase 1b) before the gate or you ever see it.
+watchers:
+  enabled: true                   # false hides the tools and never polls
+  # poll_seconds: 60              # how often due watchers are checked
+  # store_path: data/watchers.json
+
+# ── Weekly self-review (Phase 3 — measured self-improvement) ────────
+# Mines the week's sessions (tool failures, corrections you made, repeated
+# workflows, threads left hanging), measures memory recall offline (mock eval,
+# no API cost), snapshots the metrics to data/self_review/ so the Learning tab
+# shows trends, and drafts skill/routine/watcher proposals you accept or reject
+# — never auto-applied. The WEEKLY run is off by default; the "Run review now"
+# button in Settings → System → Learning always works.
+self_review:
+  enabled: false                  # true: run weekly + deliver the report over comms
+  # weekday: 6                    # Sunday (Mon=0)
+  # at: "18:00"
+  # dir: data/self_review
 
 # ── Learning Room ───
 learning:

@@ -123,3 +123,7 @@ NammaAgentInstaller*.exe
 
 # Website Node_Modules
 website/node_modules
+
+# winget release artifacts (generated per release)
+installers/winget/manifests/
+installers/winget/*.exe

@@ -34,7 +34,8 @@ _API = "https://api.telegram.org/bot{token}/{method}"
 # reference them as /api/media/<rel> (served read-only by the web app). Telegram
 # can't fetch that relative path, so the reply path resolves it to the on-disk
 # file and uploads it as a real photo/document instead of a dead link.
-_MEDIA_ROOT = Path("data/media")
+from namma_agent.config import data_dir as _data_dir
+_MEDIA_ROOT = _data_dir() / "media"
 _PHOTO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif"}
 # Markdown image the render tools emit: ![alt](/api/media/diagrams/x.png)
 _MEDIA_IMG_RE = re.compile(r"!\[([^\]]*)\]\((/api/media/[^)\s]+)\)")

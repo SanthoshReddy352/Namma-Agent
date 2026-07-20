@@ -143,3 +143,36 @@ def test_record_step_carries_output():
                  {"tool": "run_shell", "ok": True, "summary": "hi", "output": "hi\n"})
     assert steps[0]["state"] == "ok"
     assert steps[0]["output"] == "hi\n"
+
+
+# -- PATH sanitization (Phase 5: stray venv entries shadow python) --------------------
+
+def test_shell_env_strips_stray_venv_entries(monkeypatch):
+    import sys as _sys
+
+    from namma_agent.core.shell_session import _shell_env
+
+    exe_dir = os.path.dirname(_sys.executable)
+    stray = (r"C:\Users\u\AppData\Local\hermes\hermes-agent\venv\Scripts"
+             if os.name == "nt" else "/home/u/.local/hermes/venv/bin")
+    keeper = r"C:\Windows\System32" if os.name == "nt" else "/usr/bin"
+    monkeypatch.setenv("PATH", os.pathsep.join([stray, keeper]))
+    path = _shell_env()["PATH"].split(os.pathsep)
+    assert stray not in path            # the stray venv is gone
+    assert keeper in path               # normal entries survive
+    assert path[0] == exe_dir           # our interpreter resolves first
+
+
+def test_shell_env_keeps_own_venv_and_dedupes(monkeypatch):
+    import sys as _sys
+
+    from namma_agent.core.shell_session import _shell_env
+
+    exe_dir = os.path.dirname(_sys.executable)
+    keeper = r"C:\Windows" if os.name == "nt" else "/bin"
+    # Our own venv dir already on PATH must not be treated as stray or duplicated.
+    monkeypatch.setenv("PATH", os.pathsep.join([keeper, exe_dir]))
+    path = _shell_env()["PATH"].split(os.pathsep)
+    assert path[0] == exe_dir
+    assert path.count(exe_dir) == 1
+    assert keeper in path

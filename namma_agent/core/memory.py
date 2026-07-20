@@ -465,6 +465,27 @@ class Database:
                         "meta": meta, "created_at": r["created_at"]})
         return out
 
+    def turns_since(self, cutoff_iso: str, limit: int = 5000) -> list[dict]:
+        """Every turn (all sessions) created at/after ``cutoff_iso``, in insert
+        order — the self-review's mining window. Stored timestamps are ISO UTC,
+        so the comparison is lexicographic."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT session_id, role, content, tools_used, created_at "
+                "FROM turns WHERE created_at >= ? ORDER BY id LIMIT ?",
+                (cutoff_iso, max(1, int(limit))),
+            ).fetchall()
+        out: list[dict] = []
+        for r in rows:
+            try:
+                tools = json.loads(r["tools_used"]) if r["tools_used"] else []
+            except (ValueError, TypeError):
+                tools = []
+            out.append({"session_id": r["session_id"], "role": r["role"],
+                        "content": r["content"], "tools_used": tools,
+                        "created_at": r["created_at"]})
+        return out
+
     def set_session_summary(self, session_id: str, summary: str) -> None:
         with self._lock:
             self.conn.execute(
