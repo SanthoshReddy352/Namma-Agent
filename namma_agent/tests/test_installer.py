@@ -150,6 +150,72 @@ def test_venv_python_path_shape(tmp_path):
     assert ".venv" in str(p) and p.name.startswith("python")
 
 
+# ── self-contained runtime (Windows winget/offline build) ────────────────────
+
+def test_bundled_runtime_none_without_meipass(monkeypatch):
+    # No PyInstaller _MEIPASS → no bundled runtime (the online-bootstrap build).
+    monkeypatch.delattr(core.sys, "_MEIPASS", raising=False)
+    assert core.bundled_runtime() is None
+
+
+def test_venv_python_prefers_bundled_runtime(tmp_path, monkeypatch):
+    # When a self-contained runtime is present in the install dir, launchers must use
+    # it — not the .venv (which the offline build never creates).
+    monkeypatch.setattr(core, "_is_windows", lambda: True)
+    rt = tmp_path / "runtime"
+    rt.mkdir()
+    (rt / "python.exe").write_bytes(b"")
+    assert core.venv_python(tmp_path) == rt / "python.exe"
+    assert core.venv_pythonw(tmp_path) == rt / "python.exe"   # falls back to python.exe
+    (rt / "pythonw.exe").write_bytes(b"")
+    assert core.venv_pythonw(tmp_path) == rt / "pythonw.exe"  # prefers pythonw when there
+
+
+def test_bootstrap_takes_offline_path_when_runtime_bundled(tmp_path, monkeypatch):
+    """The heart of the winget fix: with a bundled runtime, bootstrap copies source +
+    runtime and NEVER touches the toolchain / venv / pip / network."""
+    bundle = tmp_path / "bundle"
+    app = bundle / "app" / "namma_agent"
+    app.mkdir(parents=True)
+    (app / "version.py").write_text('__version__ = "9.9.9"\n', encoding="utf-8")
+    rt = bundle / "runtime"
+    rt.mkdir(parents=True)
+    exe = rt / ("python.exe" if os.name == "nt" else "bin/python3")
+    exe.parent.mkdir(parents=True, exist_ok=True)
+    exe.write_bytes(b"")
+    (rt / "Lib").mkdir()  # stand-in for the pre-installed site-packages
+
+    monkeypatch.setattr(core, "bundled_source", lambda: bundle / "app")
+    monkeypatch.setattr(core, "bundled_runtime", lambda: rt)
+
+    def _boom(name):
+        def _f(*_a, **_k):
+            raise AssertionError(f"offline install must not call {name}")
+        return _f
+    monkeypatch.setattr(core, "create_venv", _boom("create_venv"))
+    monkeypatch.setattr(core, "install_requirements", _boom("install_requirements"))
+    monkeypatch.setattr(core, "ensure_dependencies", _boom("ensure_dependencies"))
+    # Shortcuts/PATH shell out on Windows — stub them; not what this test covers.
+    monkeypatch.setattr(core, "create_shortcuts", lambda *_a, **_k: None)
+    monkeypatch.setattr(core, "add_to_path", lambda *_a, **_k: None)
+
+    install_dir = tmp_path / "install"
+    logs: list[str] = []
+    core.bootstrap(install_dir, logs.append)
+
+    assert (install_dir / "namma_agent" / "version.py").exists()          # source copied
+    assert (install_dir / "runtime" / "Lib").is_dir()                     # runtime copied
+    assert (install_dir / "runtime" / exe.name).exists() or \
+           (install_dir / "runtime" / "bin" / "python3").exists()         # interpreter present
+    assert any("self-contained" in l for l in logs)
+
+
+def test_copy_runtime_requires_a_bundle(tmp_path, monkeypatch):
+    monkeypatch.setattr(core, "bundled_runtime", lambda: None)
+    with pytest.raises(RuntimeError, match="bundled runtime"):
+        core.copy_runtime(tmp_path, lambda _m: None)
+
+
 # ── windowless subprocess flag ───────────────────────────────────────────────
 
 def test_no_window_flag_off_windows():
