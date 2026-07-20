@@ -79,6 +79,31 @@ def test_windows_run_key_roundtrip(monkeypatch):
     assert autostart.enabled() is False
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows registry only")
+def test_windows_run_key_created_when_absent(monkeypatch):
+    """Minimal profiles (fresh CI images, stripped installs) can lack the Run
+    key entirely — set_enabled(True) must create it, not fail with WinError 2."""
+    import winreg
+
+    # Point at a throwaway subkey that does NOT exist, so we exercise the
+    # create-or-open path without touching the real Run key.
+    ghost = r"Software\NammaAgentTest\Run"
+    monkeypatch.setattr(autostart, "_RUN_KEY", ghost)
+    monkeypatch.setattr(autostart, "_VALUE_NAME", "Entry")
+    try:
+        assert autostart.enabled() is False           # key absent → off, no raise
+        assert autostart.set_enabled(True)["ok"] is True   # creates the key
+        assert autostart.enabled() is True
+        assert autostart.set_enabled(False)["ok"] is True
+    finally:
+        # Remove the throwaway key tree so the machine is left clean.
+        for path in (ghost, r"Software\NammaAgentTest"):
+            try:
+                winreg.DeleteKey(winreg.HKEY_CURRENT_USER, path)
+            except OSError:
+                pass
+
+
 def test_autostart_endpoints(monkeypatch):
     calls = {}
     monkeypatch.setattr(autostart, "status",

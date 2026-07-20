@@ -79,16 +79,21 @@ def set_enabled(on: bool) -> dict:
         if system == "Windows":
             import winreg
 
-            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
-                                winreg.KEY_SET_VALUE) as key:
-                if on:
+            if on:
+                # CreateKeyEx, not OpenKey: the Run key exists on every normal
+                # desktop, but minimal profiles (fresh CI images, stripped
+                # installs) may lack it — create-or-open covers both.
+                with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
+                                        winreg.KEY_SET_VALUE) as key:
                     winreg.SetValueEx(key, _VALUE_NAME, 0, winreg.REG_SZ,
                                       launch_command())
-                else:
-                    try:
+            else:
+                try:
+                    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0,
+                                        winreg.KEY_SET_VALUE) as key:
                         winreg.DeleteValue(key, _VALUE_NAME)
-                    except FileNotFoundError:
-                        pass  # already off
+                except FileNotFoundError:
+                    pass  # no key / no value — already off
         else:  # Linux
             path = _autostart_dir() / _DESKTOP_FILE
             if on:
