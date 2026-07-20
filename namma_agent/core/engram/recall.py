@@ -15,7 +15,6 @@ and are temporally filtered (expired facts stay out unless asked for).
 """
 from __future__ import annotations
 
-from typing import Optional
 
 from namma_agent.core.engram.store import EngramStore
 from namma_agent.core.memory import Database

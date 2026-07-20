@@ -13,9 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from namma_agent.core.engram import Engram
 from namma_agent.core.engram.consolidate import ConsolidationScheduler, Consolidator
-from namma_agent.core.engram.core_memory import BLOCK_BUDGET_CHARS, CoreMemory
+from namma_agent.core.engram.core_memory import CoreMemory
 from namma_agent.core.engram.store import EngramStore
 from namma_agent.core.engram.writer import EngramWriter
 from namma_agent.core.memory import Database
@@ -254,7 +253,6 @@ def test_daily_trigger_fires_once_per_day():
 
 def test_daily_not_fired_late_on_boot():
     """Booting after today's daily time must not trigger a catch-up run."""
-    late = datetime.now().replace(hour=0, minute=0)
     s = ConsolidationScheduler(_consolidator()[0], idle_minutes=0, daily_at="00:00")
     assert s.due(now=time.time(), local_now=datetime.now()) is None
 

@@ -7,9 +7,10 @@ app's prebuilt web UI) inside — so the resulting installer shows the modern Na
 Agent UI even on a machine with no Python, then installs everything silently.
 Outputs land in ``installers/native/dist/``:
 
-    Windows -> NammaAgentInstaller-<ver>.exe          (single file)
-    macOS   -> NammaAgent-<ver>.dmg                    (contains the .app)
-    Linux   -> NammaAgentInstaller-<ver>-x86_64.AppImage  (or a raw binary)
+    Windows -> NammaAgentInstaller-<ver>.exe               (single file)
+    macOS   -> NammaAgent-<ver>-<arch>.dmg                 (arm64 = Apple Silicon,
+               x86_64 = Intel — CI builds BOTH; pick the one matching your Mac)
+    Linux   -> NammaAgentInstaller-<ver>-<arch>.AppImage   (or a raw binary)
 
 Run it on each OS (CI does this automatically — see .github/workflows/release.yml):
     pip install pyinstaller
@@ -130,6 +131,14 @@ def freeze(ver: str):
     run(args, cwd=ROOT)
 
 
+def _arch() -> str:
+    """Normalized CPU architecture for asset names — an unlabeled binary is how
+    Apple-Silicon users end up with an Intel build (or vice versa)."""
+    m = platform.machine().lower()
+    return {"amd64": "x86_64", "x86_64": "x86_64",
+            "arm64": "arm64", "aarch64": "arm64"}.get(m, m or "unknown")
+
+
 def package(ver: str):
     DIST.mkdir(parents=True, exist_ok=True)
     sysname = platform.system()
@@ -141,7 +150,7 @@ def package(ver: str):
         print(f"\nBuilt: {out}")
     elif sysname == "Darwin":
         appbundle = DIST / f"{NAME}.app"
-        dmg = DIST / f"NammaAgent-{ver}.dmg"
+        dmg = DIST / f"NammaAgent-{ver}-{_arch()}.dmg"
         if dmg.exists():
             dmg.unlink()
         run(["hdiutil", "create", "-volname", "Namma Agent", "-srcfolder", appbundle,
@@ -162,7 +171,7 @@ def package(ver: str):
             icon = ROOT / "namma_agent" / "assets" / "sparkle.png"
             if icon.exists():
                 shutil.copy2(icon, appdir / "namma-agent.png")
-            out = DIST / f"{NAME}-{ver}-x86_64.AppImage"
+            out = DIST / f"{NAME}-{ver}-{_arch()}.AppImage"
             run(["appimagetool", appdir, out], cwd=BUILD)
             print(f"\nBuilt: {out}")
         else:

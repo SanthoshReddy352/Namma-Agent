@@ -17,7 +17,6 @@ from namma_agent.core.engram.core_memory import CoreMemory
 from namma_agent.core.engram.environment import EnvironmentMemory, probe
 from namma_agent.core.engram.recall import recall, render_block
 from namma_agent.core.engram.store import EngramStore
-from namma_agent.core.engram.writer import EngramWriter
 from namma_agent.core.memory import Database
 from namma_agent.core.providers.base import LLMResponse, Provider
 from namma_agent.core.tools import ToolRegistry

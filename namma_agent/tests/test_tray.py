@@ -88,7 +88,7 @@ def test_start_tray_real_pystray_headless(tmp_path):
 
     try:
         import pystray  # noqa: F401
-        from PIL import Image
+        from PIL import Image  # noqa: F401 — probing Pillow availability
     except Exception:
         pytest.skip("pystray/Pillow not installed")
     from pathlib import Path

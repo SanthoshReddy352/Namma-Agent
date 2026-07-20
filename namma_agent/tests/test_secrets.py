@@ -15,7 +15,7 @@ import pytest
 
 from namma_agent.core import secrets as sec
 from namma_agent.core.logger import logger
-from namma_agent.core.tools import ToolRegistry, ToolResult
+from namma_agent.core.tools import ToolRegistry
 
 
 @pytest.fixture()

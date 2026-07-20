@@ -27,12 +27,12 @@ from pathlib import Path
 
 from namma_agent.core.docscan import scan_text
 from namma_agent.core.logger import logger
+from namma_agent.config import data_dir as _data_dir
 
 MAX_FILES_PER_PROJECT = 25
 MAX_FILE_BYTES = 10 * 1024 * 1024  # 10 MB
 
 #: Where project files live on disk: data/projects/<project_id>/<uuid>_<name>
-from namma_agent.config import data_dir as _data_dir
 PROJECT_FILES_DIR = _data_dir() / "projects"
 
 _TARGET_CHARS = 1500   # aim per chunk (~350-400 tokens)
