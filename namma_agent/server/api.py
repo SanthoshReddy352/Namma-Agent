@@ -1168,6 +1168,11 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """Every background subsystem at a glance (memory writer, consolidator,
         routines, background tasks, reminders, comms) + a 7-day usage summary."""
         return service.background_status()
+    @app.get("/api/system/status")
+    def system_status():
+        """Lightweight system resource snapshot for the navbar widget."""
+        from namma_agent.tools.system_monitor import _take_snapshot
+        return _take_snapshot()
 
     # -- proactive routines (scheduled agent runs → comms) -------------------
 
