@@ -12,7 +12,6 @@ from namma_agent.core.builtins import register_agent_tools, register_memory_tool
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import load_persona
 from namma_agent.core.providers.base import LLMResponse, Provider, ToolCall
-from namma_agent.core.safety import is_destructive
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
 

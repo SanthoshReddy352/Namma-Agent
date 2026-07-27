@@ -76,7 +76,10 @@ amount of tuning fixes:
   view stays.
 - **G8 — Environment memory.** A persistent, auto-refreshed model of the host
   (OS, drives, home, key folders, indexed apps, path conventions) injected into the
-  prompt so file paths are never guessed.
+  prompt so file paths are never guessed. *(Extended 2026-07-19, STAND_OUT
+  Phase 5: on Windows the probe also detects **WSL distros** — they ride the
+  HOST block, and the path assist translates `/mnt/<drive>/…` ↔ `<Drive>:\…`
+  and passes `\\wsl$\…` UNC paths through untouched.)*
 
 ### Non-goals
 

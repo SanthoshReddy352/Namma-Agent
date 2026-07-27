@@ -99,6 +99,22 @@ re-run `python -m namma_agent --setup`.
 You don't need to activate the venv — the launcher re-execs into the project's
 `.venv` automatically.
 
+**Windows desktop niceties (Phase 5):**
+
+- A **system-tray icon** appears while the app runs — double-click to show/hide
+  the window; the menu shows live gateway status and has Open-in-browser and
+  Quit. (Needs the `pystray` package, included in requirements; without it the
+  app simply runs without a tray.)
+- **Start when you sign in:** Settings → General → Behavior → *"Start when I
+  sign in to this computer"* — a per-user registry entry (visible in Task
+  Manager → Startup apps), no admin rights. On Linux the same toggle writes an
+  XDG autostart entry.
+- **Notifications** are real Action-Center toasts with **Reply** and **Open**
+  buttons that jump into the chat UI.
+- **winget:** once a release is published to the winget community repo,
+  `winget install namma-agent` works too (maintainers: see
+  `installers/winget/README.md`).
+
 ---
 
 ## 4. Updating an installed app

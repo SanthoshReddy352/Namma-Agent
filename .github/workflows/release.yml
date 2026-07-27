@@ -16,7 +16,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest, ubuntu-latest]
+        # macOS twice on purpose: macos-15 runners are Apple Silicon (arm64),
+        # macos-13 are Intel (x86_64) — one DMG per architecture, arch-suffixed
+        # by build.py, so users on the newest Macs get a native build instead
+        # of an unlabeled Intel one (or nothing).
+        os: [windows-latest, macos-15, macos-13, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -41,9 +45,13 @@ jobs:
 
       - name: Install appimagetool (Linux)
         if: runner.os == 'Linux'
+        # AppImage/appimagetool (maintained), NOT the archived AppImageKit:
+        # its static runtime means the produced AppImage does not need libfuse2 —
+        # which Ubuntu 22.04+ no longer ships, i.e. this is what makes the
+        # AppImage actually run on current distros.
         run: |
           sudo curl -L -o /usr/local/bin/appimagetool \
-            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+            https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
           sudo chmod +x /usr/local/bin/appimagetool
           echo "APPIMAGE_EXTRACT_AND_RUN=1" >> "$GITHUB_ENV"
 
@@ -64,6 +72,16 @@ jobs:
         with:
           files: installers/native/dist/*
           generate_release_notes: true
+          append_body: true
+          body: |
+            **Which file do I download?**
+            - **Windows** → `NammaAgentInstaller-<ver>.exe`
+            - **Mac (Apple Silicon — M1 and later)** → `NammaAgent-<ver>-arm64.dmg`
+            - **Mac (Intel)** → `NammaAgent-<ver>-x86_64.dmg`
+            - **Linux** → `NammaAgentInstaller-<ver>-x86_64.AppImage` (`chmod +x`, then run — no libfuse2 needed), or the source zip
+            - **Server/VPS** → skip the installers: [one-line install](https://github.com/SanthoshReddy352/Namma-Agent/blob/main/docs/DEPLOY.md)
+
+            *macOS note: the app isn't code-signed yet. If macOS blocks it, right-click → Open, or approve it under System Settings → Privacy & Security.*
 
       - name: Upload installers as build artifacts (manual runs)
         if: "!startsWith(github.ref, 'refs/tags/')"

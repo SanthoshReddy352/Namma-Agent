@@ -1,0 +1,24 @@
+# Namma Agent — one-service compose (Phase 6b).
+#   cp namma_agent/.env.example .env   # add your provider key (+ NAMMA_AUTH_TOKEN
+#                                      # if you expose the port beyond this host)
+#   docker compose up -d
+#   docker compose logs -f
+services:
+  namma-agent:
+    build: .
+    image: namma-agent:latest
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Loopback-only publish by default — reach it via SSH tunnel or a reverse
+      # proxy. Change to "8000:8000" (plus an auth token + firewall) to expose.
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - namma_data:/app/data
+    # Matched to the 1 GB reference box: the kernel reclaims the container
+    # before the OOM killer reaps the host.
+    mem_limit: 900m
+    memswap_limit: 1400m
+
+volumes:
+  namma_data:

@@ -142,7 +142,21 @@ def resolve_install_dir(chosen: Optional[str | os.PathLike]) -> Path:
     return p / APP_DIR_NAME
 
 
+def _runtime_python(install_dir: Path) -> Path:
+    """The bundled self-contained CPython inside an install dir (Windows offline
+    build). python-build-standalone puts python.exe at the runtime root."""
+    if _is_windows():
+        return install_dir / "runtime" / "python.exe"
+    return install_dir / "runtime" / "bin" / "python3"
+
+
 def venv_python(install_dir: Path) -> Path:
+    """The interpreter the installed app is launched with. Prefers the bundled
+    self-contained runtime (Windows winget/offline build) when present, else the
+    ``.venv`` built by the online bootstrap."""
+    rt = _runtime_python(install_dir)
+    if rt.exists():
+        return rt
     if _is_windows():
         return install_dir / ".venv" / "Scripts" / "python.exe"
     return install_dir / ".venv" / "bin" / "python"
@@ -150,6 +164,9 @@ def venv_python(install_dir: Path) -> Path:
 
 def venv_pythonw(install_dir: Path) -> Path:
     """Windows pythonw.exe (no console) for launching the app; falls back to python."""
+    rt = install_dir / "runtime" / "pythonw.exe"
+    if rt.exists():
+        return rt
     pyw = install_dir / ".venv" / "Scripts" / "pythonw.exe"
     return pyw if pyw.exists() else venv_python(install_dir)
 
@@ -160,6 +177,20 @@ def bundled_source() -> Optional[Path]:
     if base:
         p = Path(base) / "app"
         if (p / "namma_agent").is_dir():
+            return p
+    return None
+
+
+def bundled_runtime() -> Optional[Path]:
+    """When frozen with a self-contained runtime (the Windows winget/offline build), a
+    relocatable CPython — with every app dependency pre-installed — is bundled at
+    <_MEIPASS>/runtime. Its presence is what makes bootstrap take the OFFLINE path
+    (copy files, no system Python/pip/network). Absent on the online-bootstrap build."""
+    base = getattr(sys, "_MEIPASS", None)
+    if base:
+        p = Path(base) / "runtime"
+        exe = p / ("python.exe" if _is_windows() else "bin/python3")
+        if exe.exists():
             return p
     return None
 
@@ -408,6 +439,18 @@ def fetch_source(install_dir: Path, log: Log) -> None:
         log(f"  Cloning {REPO_URL} to {install_dir} …")
         _prepare_install_dir(install_dir.parent)
         _run(["git", "clone", "--depth", "1", REPO_URL, str(install_dir)], log=log)
+
+
+def copy_runtime(install_dir: Path, log: Log) -> None:
+    """Copy the bundled self-contained CPython (with deps pre-installed) into
+    ``<install_dir>/runtime`` — the offline replacement for create_venv +
+    install_requirements. No system Python, no pip, no network."""
+    src = bundled_runtime()
+    if not src:
+        raise RuntimeError("No bundled runtime found (offline install path).")
+    dst = Path(install_dir) / "runtime"
+    log(f"  Installing the bundled Python runtime to {dst} …")
+    shutil.copytree(src, dst, dirs_exist_ok=True)
 
 
 def create_venv(install_dir: Path, log: Log) -> None:
@@ -747,9 +790,17 @@ def bootstrap(install_dir: Path, reporter: "StepReporter | Log") -> Path:
     Provider + onboarding are written afterwards from the GUI forms.
 
     ``reporter`` may be a :class:`StepReporter` (modern GUI) or a plain log
-    callable (``--cli`` / tests)."""
+    callable (``--cli`` / tests).
+
+    When a self-contained runtime is bundled (the Windows winget/offline build) the
+    OFFLINE path runs instead: copy the source + the prebuilt runtime and wire the
+    launchers — no system Python, no pip, no network, so it completes in seconds under
+    winget's unattended sandbox validation."""
     install_dir = Path(install_dir)
     rep = _as_reporter(reporter)
+
+    if bundled_runtime() is not None:
+        return _bootstrap_offline(install_dir, rep)
 
     with rep.step("python") as log:
         log("Checking Python …")
@@ -786,4 +837,32 @@ def bootstrap(install_dir: Path, reporter: "StepReporter | Log") -> Path:
         add_to_path(install_dir, log)
 
     rep.log("Base install complete.")
+    return install_dir
+
+
+def _bootstrap_offline(install_dir: Path, rep: StepReporter) -> Path:
+    """Self-contained install: copy the bundled source + prebuilt runtime and wire the
+    launchers. Mirrors :func:`bootstrap` minus the toolchain/venv/pip/UI-build steps
+    (all pre-done at build time), so it needs no network and no system Python — the
+    path winget's sandbox exercises. Reuses the ``deps`` step slot to show the runtime
+    copy; the toolchain/build steps are marked skipped so the stepper stays coherent."""
+    for done in ("python", "tools"):
+        rep.skip(done)
+
+    with rep.step("source") as log:
+        fetch_source(install_dir, log)
+
+    with rep.step("deps") as log:
+        copy_runtime(install_dir, log)
+
+    for done in ("venv", "ui"):
+        rep.skip(done)
+
+    with rep.step("shortcuts") as log:
+        create_shortcuts(install_dir, log)
+
+    with rep.step("path") as log:
+        add_to_path(install_dir, log)
+
+    rep.log("Base install complete (self-contained runtime).")
     return install_dir

@@ -1,0 +1,38 @@
+# Namma Agent — systemd unit (Phase 6b). Installed by deploy/install.sh to
+# /etc/systemd/system/namma-agent.service (INSTALL_DIR placeholders filled in).
+#
+#   sudo systemctl status namma-agent     # is it running?
+#   sudo journalctl -u namma-agent -f     # live logs
+#   sudo systemctl restart namma-agent    # after config changes
+
+[Unit]
+Description=Namma Agent (headless personal AI agent + messaging gateway)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=namma
+WorkingDirectory=__INSTALL_DIR__
+# Secrets (API keys, tokens) live in .env — loaded here so the process sees
+# them without putting them in this world-readable unit file.
+EnvironmentFile=-__INSTALL_DIR__/.env
+ExecStart=__INSTALL_DIR__/.venv/bin/python -m namma_agent --server
+Restart=on-failure
+RestartSec=5
+
+# The 1 GB box guard: if the agent ever balloons, systemd kills IT — the OOM
+# killer never takes the whole box. Headroom above typical RSS (~300-400 MB).
+MemoryMax=700M
+# Don't let a runaway spawn take the box down either.
+TasksMax=256
+
+# Basic hardening — the agent still gets its own tree (it reads/writes
+# __INSTALL_DIR__) but not the rest of the system's write surface.
+NoNewPrivileges=true
+ProtectSystem=full
+ReadWritePaths=__INSTALL_DIR__
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

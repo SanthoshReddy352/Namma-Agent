@@ -11,6 +11,10 @@ in the project's `.env` file (the environment-variable name for each field is sh
 
 > **Tip:** Telegram is the easiest to start with — about two minutes, no public URL, and
 > full two-way chat.
+>
+> Running the agent on a **server** (VPS / Oracle free tier)? Start from
+> [GATEWAYS.md](GATEWAYS.md) — which channel fits a server (public-URL needs,
+> trust, the 1 GB box) — and [DEPLOY.md](DEPLOY.md) for the hosting itself.
 
 ---
 
@@ -34,6 +38,29 @@ in the project's `.env` file (the environment-variable name for each field is sh
 - **A webhook is send-only.** Discord/Slack *incoming webhooks* can post notifications but
   can never *receive* a message — that's why two-way Discord needs a **bot** and local
   two-way Slack needs **Socket Mode** (an app-level token), not just the webhook URL.
+
+---
+
+## Trust levels — who is allowed to do what
+
+An always-on gateway means messages can arrive from people who aren't you. Every
+channel therefore carries a **trust level** (`owner` / `trusted` / `untrusted`) —
+shown and changeable per channel in **Settings → Messaging**, and explained in
+full in [SECURITY.md](SECURITY.md):
+
+| Channel | Default | Why |
+|---|---|---|
+| Telegram, Signal | `owner` | the bridge only talks to your pinned chat id |
+| Discord | `trusted` | your bot in your server, but not provably you |
+| Slack, WhatsApp | `untrusted` | open webhooks any member/contact can reach |
+| anything unknown | `untrusted` | capability is never granted by omission |
+
+A message from an **untrusted** channel runs with destructive tools stripped and
+force-declined, its text wrapped as data-not-instructions, and any would-be
+memory writes **quarantined** for your review in Settings → System → Security —
+a stranger can chat, but can't change your machine or teach your agent "facts."
+If you make a webhook channel reachable from the internet, leave its trust at
+`untrusted` unless you fully control who can post to it.
 
 ---
 

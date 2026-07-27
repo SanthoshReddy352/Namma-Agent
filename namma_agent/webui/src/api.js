@@ -3,14 +3,32 @@ import { playSound } from "./sounds.js";
 import { notify } from "./notify.js";
 import { createHandsFree, handsFreeSupported } from "./handsfree.js";
 
+// ── Access token (Phase 6a — self-hosted servers) ────────────────────────────
+// When the backend has server.auth_token / NAMMA_AUTH_TOKEN set, every /api/*
+// call and the websocket must carry it. The token lives in localStorage (the
+// unlock screen writes it); locally-run instances have no token and none of
+// this activates.
+const TOKEN_KEY = "namma_auth_token";
+export const getAuthToken = () => { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } };
+export const setAuthToken = (t) => { try { localStorage.setItem(TOKEN_KEY, t || ""); } catch { /* private mode */ } };
+
 function wsURL() {
   const proto = location.protocol === "https:" ? "wss" : "ws";
-  return `${proto}://${location.host}/ws`;
+  const t = getAuthToken();
+  return `${proto}://${location.host}/ws${t ? `?token=${encodeURIComponent(t)}` : ""}`;
 }
 
 async function j(url, opts) {
   try {
-    const r = await fetch(url, opts);
+    const t = getAuthToken();
+    const r = await fetch(url, t
+      ? { ...(opts || {}), headers: { ...((opts || {}).headers || {}), "X-Namma-Token": t } }
+      : opts);
+    if (r.status === 401) {
+      // Tell the app shell to show the unlock screen; callers just see null.
+      window.dispatchEvent(new CustomEvent("namma-auth-required"));
+      return null;
+    }
     return await r.json();
   } catch {
     return null;
@@ -48,6 +66,10 @@ export const searchChats = (q) => j(`/api/search?q=${encodeURIComponent(q)}`);
 export const loadSession = (id) => j(`/api/sessions/${id}`);
 export const deleteSession = (id) => j(`/api/sessions/${id}`, { method: "DELETE" });
 export const shutdownApi = () => j("/api/shutdown", { method: "POST" });
+// Start-on-login (Phase 5): HKCU Run key on Windows, XDG autostart on Linux.
+export const fetchAutostart = () => j("/api/autostart");
+export const setAutostart = (enabled) =>
+  j("/api/autostart", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled }) });
 
 // ── Comms gateway (inbound messaging service) ────────────────────────────────
 export const fetchCommsStatus = () => j("/api/comms/status");
@@ -72,6 +94,19 @@ export const toggleRoutine = (id, enabled) =>
   j("/api/routines/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, enabled }) });
 export const deleteRoutine = (id) => j(`/api/routines/${id}`, { method: "DELETE" });
 export const runRoutine = (id) => j(`/api/routines/${id}/run`, { method: "POST" });
+
+// ── Event watchers (trigger + "does it matter" gate + action → comms) ─────────
+export const listWatchers = () => j("/api/watchers");
+export const toggleWatcher = (id, enabled) =>
+  j("/api/watchers/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, enabled }) });
+export const deleteWatcher = (id) => j(`/api/watchers/${id}`, { method: "DELETE" });
+export const runWatcher = (id) => j(`/api/watchers/${id}/run`, { method: "POST" });
+
+// ── Weekly self-review (report + metric trend + proposals) ────────────────────
+export const fetchSelfReview = () => j("/api/self_review");
+export const runSelfReview = () => j("/api/self_review/run", { method: "POST" });
+export const resolveProposal = (id, action) =>
+  j(`/api/self_review/proposals/${id}/${action}`, { method: "POST" });
 
 // ── Version + self-update ─────────────────────────────────────────────────────
 export const fetchVersion = () => j("/api/version");
@@ -327,8 +362,14 @@ export function useNammaAgent() {
       setConnected(true);
       refreshSessions(); // the server may have restarted while we were away
     };
-    ws.onclose = () => {
+    ws.onclose = (ev) => {
       setConnected(false);
+      if (ev?.code === 4401) {
+        // Server rejected our token (Phase 6a) — show the unlock screen and
+        // don't reconnect-spin against a closed door.
+        window.dispatchEvent(new CustomEvent("namma-auth-required"));
+        return;
+      }
       // A dropped socket loses any in-flight turn's events — the reply can never
       // arrive, so clear stuck "thinking" spinners instead of spinning forever.
       setData((all) => {

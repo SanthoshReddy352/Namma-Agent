@@ -1,65 +1,88 @@
 # Namma Agent
 
-### Intelligence for Everyone.
+### The trustworthy personal agent that measurably knows you — first-class on Windows.
 
-> **Your Trusted AI Companion. Your Agent, Your Advantage.**
+Namma Agent is a **self-hosted personal AI agent**. The brain is a single API
+call — native Anthropic, OpenAI, or Google, or any OpenAI-compatible endpoint
+(Ollama, LM Studio, a custom base URL). Around that one call sits everything
+that makes it an *agent*: a tool-calling loop with ~90 native tools, an
+in-process memory engine with a **published, reproducible recall benchmark**,
+event-driven **watchers** that reach out when things happen, a weekly
+**self-review** that turns "it learns you" into a number with a trend line, and
+a **layered trust model that is on by default and visible in the UI**.
 
-Namma Agent is a **cloud-only personal AI assistant** you run yourself. The brain is
-a single API call — native Anthropic, OpenAI, or Google, or any OpenAI-compatible
-endpoint (Ollama, LM Studio, opencode, or a custom base URL). Around that one call
-sits everything that makes it an *agent*: one tool-calling loop, a registry of ~85
-tools, a **Cognee knowledge-graph memory** that remembers you across every session,
-a learning-loop skill system, project knowledge bases with document RAG, a built-in
-Learning Room, browser-native voice, a streaming web UI, and messaging bridges.
+<!-- TODO(Phase 4 demo assets): 30-second GIF here — watcher catches an email →
+     Telegram ping → injection quarantine → weekly learning report. -->
 
-Everything lives in the [`namma_agent/`](namma_agent/) Python package. There is no local-model
-or PyQt stack — Namma Agent is provider-agnostic and runs anywhere Python does, from
-a laptop to a tiny server.
+Everything lives in the [`namma_agent/`](namma_agent/) Python package. No local-model
+stack, no Docker requirement, no vendor server holding your data — it runs
+anywhere Python does, from a Windows laptop to a 1 GB VPS.
 
 > **Name your assistant whatever you like.** The *project* is Namma Agent; the
 > *assistant you chat with* has a configurable display name. Set `assistant.name`
 > in [`namma_agent/config.yaml`](namma_agent/config.yaml) (or the `ASSISTANT_NAME` env var)
-> and it changes everywhere — the system prompt, the web UI, the voice, and the
-> messaging bridges. See [Name your assistant](#name-your-assistant).
+> and it changes everywhere. See [Name your assistant](#name-your-assistant).
 
 ---
 
 ## Why Namma Agent?
 
-Claude, ChatGPT, Hermes, OpenClaw, Open Interpreter — plenty of agents already exist.
-Namma is the one that stays **yours on every axis**:
+Personal agents are having a moment — and a trust crisis. The category's public
+wound is real: prompt-injection exfiltration, hijacked always-on agents,
+Microsoft's guidance to treat agents as "untrusted code execution with
+persistent credentials." Most projects answer with features. Namma's position
+is different, and it rests on four pillars:
 
-- **Any brain, no lock-in.** Native Anthropic / OpenAI / Google, or any
-  OpenAI-compatible endpoint (Ollama, LM Studio, opencode, …), swapped with one config
-  key and an automatic fallback chain across providers. Run it fully offline on a local
-  model if you want.
-- **You host it; you own the data.** No walled garden, no vendor server quietly holding
-  your memory.
-- **It remembers you — as a knowledge graph.** All long-term memory is
-  [Cognee](https://www.cognee.ai): a semantic + graph memory that connects the people,
-  projects, and preferences you mention, and recalls them by *meaning*, not keywords —
-  in normal chat, in Projects, and in the Learning Room. Self-hosted (fully local, no
-  API key needed) or on managed Cognee Cloud. See [Memory setup](#memory-setup-cognee--ollama).
-- **It acts on your real machine and life** — ~85 native tools spanning files, shell,
-  browser, smart home, Gmail/Calendar, weather/news, and a security lab — not a chat
-  box, and not a coding-only agent.
-- **It extends itself.** `create_tool` writes and hot-loads new Python tools mid-turn;
-  it authors its own `SKILL.md` playbooks after solving a novel task.
-- **It teaches.** The Learning Room turns any goal or uploaded syllabus into a
-  pedagogy-backed course — and what you learn flows into the memory graph.
-- **It's yours to name and shape.** Configurable identity and personas.
+1. **Trust is a product surface, not plumbing.** Per-channel sender trust,
+   injection screening on *everything* the agent reads, an approval gate with a
+   decline audit trail, a sandboxed shell, and a secrets vault with output
+   redaction — all **on by default** and all **observable live** in
+   Settings → System → Security. The whole model is published in
+   [docs/SECURITY.md](docs/SECURITY.md), including what Namma does *not* claim.
 
-Built in the open-source personal-agent tradition (parity-and-beyond with projects like
-Hermes on comms bridges, skills, and toolsets) — but self-extending, teaching-capable,
-and safe by default (we declined to port jailbreak-style "God Mode" skills).
+2. **Memory you can measure.** Long-term memory is **Engram** — native,
+   in-process, SQLite-backed. Zero infrastructure: no Docker, no vector DB
+   service, works offline. And it ships with a reproducible benchmark
+   (`python scripts/memory_eval.py --mock`, no API key needed) currently
+   scoring **recall@5 = 92%** on the offline retrieval suite — see
+   [docs/BENCHMARKS.md](docs/BENCHMARKS.md). "It remembers you" is a claim;
+   a recall number with a weekly trend line is a fact.
+
+3. **Event-driven, not just scheduled.** Watchers monitor files, email, web
+   pages, and your calendar with cheap zero-LLM polls, pass changes through an
+   "only if it matters" gate, and reach you over Telegram (or any configured
+   channel) — with destructive tools always declined in autonomous runs.
+
+4. **Windows is a first-class target**, not a port afterthought. Job-Object
+   shell sandboxing, Credential Manager secrets, DPAPI-sealed fallbacks, and
+   one-click installers — built on and for Windows (and Linux/macOS too).
+
+### How it compares (honestly)
+
+| | **Namma Agent** | **Hermes** | **OpenClaw** |
+|---|---|---|---|
+| Trust model | Layered, on by default, visible in a Security tab; published threat model | Approval prompts; hosted Tool Gateway | Plugin permissions; hardening in progress after public incidents |
+| Memory | Native in-process engine, **measured** (published recall benchmark) | Curated bounded memory files (excellent design, unmeasured) | Session memory + integrations |
+| Proactivity | Event watchers (file/email/web/calendar) + routines | Scheduled routines | Scheduled + some triggers |
+| Self-improvement | Weekly self-review: mined evidence → proposals you approve, metrics snapshots | Skill authoring | Community skill marketplace |
+| Channels | 5 + CLI (deliberately few — each channel is attack surface) | Many | 29 |
+| Skills ecosystem | Self-authored + self-review drafts (no marketplace) | Large ecosystem, $1.5B backing | 100+ community skills |
+| Windows | First-class (Job Objects, Credential Manager, installers) | Linux/macOS-first | macOS-leaning |
+| Hosting | Self-hosted only; runs on a $0 free-tier VPS | Self-hosted + hosted gateway | Self-hosted |
+
+If you want the biggest ecosystem, pick Hermes. If you want the most channels
+and community skills, pick OpenClaw. If you want an always-on agent you can
+*audit* — one that quarantines what strangers tell it, sandboxes what it runs,
+redacts your secrets from its own output, and shows you a number for how well
+it remembers you — that's Namma.
 
 ---
 
 ## Quick start
 
-**Want the desktop app?** The one-click installers do everything below for you —
-create the environment, install dependencies, configure your first AI provider,
-add a shortcut, and launch. See **[docs/INSTALL.md](docs/INSTALL.md)**:
+**Want the desktop app?** The one-click installers create the environment,
+install dependencies, configure your first AI provider, add a shortcut, and
+launch. See **[docs/INSTALL.md](docs/INSTALL.md)**:
 
 - **Windows:** double-click `installers\install.bat`
 - **macOS:** double-click `installers/Install Namma Agent.command`
@@ -122,123 +145,74 @@ python -m namma_agent --server     # backend only — open http://127.0.0.1:8000
 `--server` is the most reliable first run (no GUI dependency). The chat UI is at
 **http://127.0.0.1:8000**.
 
-### 4 · Set up memory (next section)
+**That's it — memory included.** Engram is in-process and needs no setup, no
+Docker, no extra services. Tell the assistant something about yourself, open a
+new chat later, and ask it back.
 
-Without Cognee the assistant still chats and uses every tool, but it won't
-**remember you across sessions**. Setting it up is one script + one click.
+### Want it always-on? Run it on a server for $0
+
+Watchers, routines, and the messaging gateway only shine when the agent never
+sleeps. **[docs/DEPLOY.md](docs/DEPLOY.md)** has the paths — including the
+flagship **[Oracle free-tier walkthrough](docs/DEPLOY_ORACLE.md)** (your own
+agent, $0/month, ~30 minutes, written for someone who has never opened a cloud
+console) and a `docker compose up -d` path. One installer line, an access
+token, and the zero-open-ports Telegram gateway by default.
 
 ---
 
-## Memory setup (Cognee + Ollama)
+## Memory (Engram)
 
-Namma's long-term memory **is** [Cognee](https://www.cognee.ai) — a semantic +
-knowledge-graph memory served by the official `cognee/cognee-mcp` container and
-reached through Namma's built-in MCP client. It adds **zero** Python dependencies
-to Namma; the only prerequisite is **Docker**.
+Namma's long-term memory is **Engram** — a native, in-process engine, not an
+external service. Design doc: [docs/MEMORY_SYSTEM_DESIGN.md](docs/MEMORY_SYSTEM_DESIGN.md).
 
-Two ways to run it — the app works identically either way:
+- **Instant identity.** Who you are, your preferences, and standing
+  instructions live in a bounded core memory injected into *every* turn —
+  zero tool calls, zero latency.
+- **Always learning.** Every message is considered for memory through an LLM
+  salience gate (only durable facts are kept), then an extract → resolve
+  pipeline that ADDs, UPDATEs, or invalidates facts instead of piling up
+  contradictions. Facts are **bi-temporal** — the graph knows *when* something
+  was true, not just that it was said.
+- **Fast, fused recall.** BM25 + entity graph + optional vector embeddings,
+  fused, in milliseconds — SQLite, in-process, no network hop. Works fully
+  offline (recall stays BM25-only without an embeddings endpoint).
+- **One brain.** All memory model calls use the model *you* picked in
+  Settings — never a separately configured extractor.
+- **Sleep-time self-improvement.** An idle/daily consolidation cycle merges,
+  promotes, decays, and reflects, so memory quality goes up while you're away.
+- **Environment memory.** A persistent model of the host machine (OS, drives,
+  folders, installed tools) so file paths are never guessed.
+- **Transparent and editable.** The Memory tab shows every fact, entity, and
+  relation — searchable, editable, deletable, with a live graph view.
+- **Measured.** `python scripts/memory_eval.py --mock` scores retrieval with
+  no API key; the weekly self-review re-runs it and trends the number. See
+  [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
-| Track | What runs | Needs |
-| ----- | --------- | ----- |
-| **Self-hosted** (default) | Cognee container + Ollama container on your machine. Fully local, key-free. | Docker |
-| **Cognee Cloud** | The same container in serve mode against a managed instance. Zero local storage. | An account at [platform.cognee.ai](https://platform.cognee.ai) |
+External memory services (Cognee, Mem0, Zep, …) can still be attached as MCP
+plugins under `mcp.servers` — additive, never load-bearing.
 
-### Self-hosted, fully local (recommended first run)
+---
 
-**Step 1 — install Docker.** [Docker Desktop](https://www.docker.com/products/docker-desktop/)
-on Windows/macOS, or your distro's `docker` + `docker compose` on Linux. Start it.
+## Trust & security
 
-**Step 2 — run the setup script** from the project root:
+The full model is in **[docs/SECURITY.md](docs/SECURITY.md)** — threat model,
+the six trust boundaries, and an honest "what Namma does NOT claim" section.
+Every claim is observable live in **Settings → System → Security**. In one
+paragraph:
 
-```powershell
-# Windows
-powershell -ExecutionPolicy Bypass -File scripts/setup_cognee.ps1
-```
-
-```bash
-# Linux / macOS
-bash scripts/setup_cognee.sh
-```
-
-The script is idempotent (safe to re-run) and does five things:
-
-1. Starts the **Ollama** container (`namma-cognee-ollama`) on the pinned
-   `agi_default` Docker network.
-2. Pulls **nomic-embed-text** (~275 MB) — the embedding model for semantic search.
-3. Pulls **qwen2.5:7b** (~4.7 GB) — the local extraction LLM that builds the graph.
-   *Using a cloud LLM instead? Skip this pull with `-SkipLocalLLM` (PowerShell) or
-   `SKIP_LOCAL_LLM=1` (bash).*
-4. Pulls the **`cognee/cognee-mcp:main`** image (large — first time only) and
-   creates `.env.cognee` from [.env.cognee.example](.env.cognee.example) (key-free
-   local defaults).
-5. Creates the **`cognee-data`** volume with the right permissions, so your memory
-   **persists** across restarts.
-
-**Step 3 — one click in the app.** Start Namma, open
-**Settings → MCP → Cognee**, and click **Register Cognee server**. It connects in
-~30 s (the container cold-starts). The dot turns green — you're done.
-
-From then on it just works: every chat grows the knowledge graph in the background
-(`Auto-ingest`, on by default), completed Learning-Room modules are pushed into the
-graph, project notes land in it, and "what do you know about me?" questions are
-answered from it — even in a brand-new chat.
-
-**Try it:** tell the assistant *"I'm Santhosh, I study CS in Bengaluru and I'm
-building a drone."* Open a **new** chat later and ask *"what am I building?"* —
-then watch the graph grow under **Memory** in the sidebar (recall / remember /
-consolidate / forget, plus the live graph view).
-
-### Configuring the models (Ollama or anything else)
-
-The graph is built by an *extraction LLM* and searched with an *embedding model*.
-Both are configured in **Settings → MCP → Cognee → Models & embeddings** — no file
-editing needed. Three one-click presets:
-
-| Preset | Extraction LLM | Embeddings | Character |
-| ------ | -------------- | ---------- | --------- |
-| **Fully local (Ollama)** *(default)* | `qwen2.5:7b` via local Ollama | `nomic-embed-text` via local Ollama | Free, private, no key. Slow graph builds on CPU (~1–3 min per memory, in the background). |
-| **Hybrid (Groq + local Ollama)** | `groq/llama-3.3-70b-versatile` (free key from [console.groq.com](https://console.groq.com)) | local Ollama | Fast graph builds; embeddings stay local. |
-| **OpenAI** | `gpt-4o-mini` | `text-embedding-3-small` | Fastest, everything cloud. |
-
-Any OpenAI-compatible endpoint works too — set **Provider** to `custom`, point
-**Endpoint** at `https://<host>/v1`, name the model `openai/<model-id>`, and paste
-the key. Click **Save & reconnect** (takes ~30 s; it only reconnects when something
-actually changed). The same settings live in [.env.cognee](.env.cognee.example) if
-you prefer a file.
-
-Local-model notes:
-
-- `qwen2.5:7b` is the **smallest** local model that reliably produces Cognee's
-  structured JSON — 3B models fail extraction. Pull others with
-  `docker exec namma-cognee-ollama ollama pull <model>`.
-- `LLM_ENDPOINT` must end in `/v1`; `EMBEDDING_ENDPOINT` must be the **full**
-  `/api/embed` URL. The presets get this right.
-- If you change the embedding model, update `EMBEDDING_DIMENSIONS` to match
-  (768 for nomic-embed-text) — and re-build memory, since old vectors won't match.
-
-### Cognee Cloud instead (zero local infra)
-
-1. Sign up at [platform.cognee.ai](https://platform.cognee.ai) and create an
-   instance — you get an instance URL (`https://….cognee.ai`) and an API key.
-2. In **Settings → MCP → Cognee → Backend**, pick **Cognee Cloud**, paste both,
-   and click **Connect to Cognee Cloud**.
-
-Switching between Self-hosted and Cloud is the same panel; your instance URL and
-key are remembered (in the git-ignored `.env.cognee.cloud`), so you paste them once.
-Only the small MCP bridge container runs locally in cloud mode — the graph, vectors,
-and embeddings all live in your cloud instance.
-
-### Memory troubleshooting
-
-| Symptom | Fix |
-| ------- | --- |
-| "server not registered" in the Cognee tab | Run the setup script, then click **Register Cognee server**. |
-| Not connected / red dot | Is Docker running? `docker ps` should list `namma-cognee-ollama`. Click **↻ Reconnect**. |
-| Register fails with a network error | Re-run the setup script — it (re)creates the `agi_default` network the containers share. |
-| Recall works but nothing new is remembered | Graph building is backgrounded; on the fully-local preset give it a few minutes. Check **Settings → MCP → Cognee → Auto-ingest** is on. |
-| Memory resets after restart | The `cognee-data` volume is missing its write perms — re-run the setup script (step 5 fixes it). |
-| Extraction errors with a local model | Use `qwen2.5:7b` or larger (3B models can't produce the structured output), or switch to the Groq preset. |
-| Want to start over | **Settings → MCP → Cognee → Danger zone → Forget everything**, or `docker volume rm cognee-data` while the app is stopped (then re-run the setup script). |
+Inbound messages carry a **per-channel trust level** (`owner` / `trusted` /
+`untrusted`); untrusted senders get destructive tools stripped, their text
+wrapped as data-not-instructions, and their would-be memory writes
+**quarantined** — a stranger on Slack can't teach your agent "facts" or wipe
+a folder. Everything the agent *reads* (uploads, web pages, search snippets,
+RSS) passes **injection screening**; flagged content is delivered wrapped and
+marked, never silently dropped. Destructive tools are **approval-gated** in
+chat and **always declined** in autonomous runs (routines, watchers,
+sub-agents); declines are audit-logged so the trail shows what was *asked*,
+not just what ran. `run_shell` children run in a **Windows Job Object** (memory
+cap, fork-bomb guard, kill-on-close) or POSIX rlimits. Secrets live in a
+**vault** (Windows Credential Manager / keyring / DPAPI-sealed file), and known
+secret values are **redacted** from every tool result and log line.
 
 ---
 
@@ -250,8 +224,8 @@ routing graph. Adding a capability is dropping one file in `namma_agent/tools/`.
 | Area            | Tools                                                                                                                             |
 | --------------- | ------------------------------------------------------------------------------------------------------------------------------- |
 | Files           | `read_file` `write_file` `list_dir` `move_path` `copy_path` `delete_path` `make_dir` `find_files` `organize_dir`                  |
-| Shell / System  | `run_shell` `system_info` `open_app` `list_open_apps`                                                                            |
-| Web             | `web_search` `web_extract` `web_crawl`                                                                                           |
+| Shell / System  | `run_shell` (sandboxed) `system_info` `open_app` `list_open_apps`                                                                |
+| Web             | `web_search` `web_extract` `web_crawl` (all injection-screened)                                                                  |
 | Browser / Media | `open_browser_url` `search_google` `play_youtube` `play_youtube_music` `media_control`                                           |
 | Network         | `ping_host` `dns_lookup` `check_port` `public_ip`                                                                                |
 | Security\*      | `port_scan` `ping_sweep` `dir_enum` `dns_enum`                                                                                   |
@@ -260,7 +234,8 @@ routing graph. Adding a capability is dropping one file in `namma_agent/tools/`.
 | Vision          | `take_screenshot` `read_text_from_image`                                                                                         |
 | Documents       | `read_document` (pdf/docx/pptx/xlsx/html via MarkItDown) · `convert_document` (Markdown → docx/pdf/pptx/html/txt/odt/… via pandoc) |
 | Scheduler       | `add_reminder` `list_reminders` `remove_reminder` (fire in background)                                                           |
-| Memory (Cognee)§ | `mcp_cognee_remember` `mcp_cognee_recall` `mcp_cognee_forget` (+ `remember_fact`/`recall_facts` aliases) · transcripts: `search_conversations` `recall_sessions` `summarize_session` · `clear_memory` |
+| Watchers        | `create_watcher` `list_watchers` `toggle_watcher` `delete_watcher` `run_watcher_now`                                             |
+| Memory (Engram) | `memory_save` `memory_search` `memory_forget` · transcripts: `search_conversations` `recall_sessions` `summarize_session` · `clear_memory` |
 | Projects‖       | `search_project_documents` `search_project_history` `remember_project_note`                                                      |
 | Learning Room¶  | `set_learning_plan` `mark_module_complete` `record_understanding` `remember_learning_note` `set_teaching_preference` `render_diagram` `fetch_image` `render_simulation` |
 | Agent           | `delegate_task` `switch_persona` `list_personas` `about_namma`                                                                  |
@@ -268,80 +243,89 @@ routing graph. Adding a capability is dropping one file in `namma_agent/tools/`.
 | Focus           | `start_focus` `focus_status` `end_focus`                                                                                         |
 | Skills          | `list_skills` `use_skill` `create_skill` `update_skill`                                                                          |
 | Self-authoring  | `create_tool` (writes + hot-loads new Python tools, approval-gated)                                                             |
-| Comms‡          | `send_notification` (+ inbound Telegram chat bridge)                                                                            |
+| Comms‡          | `send_notification` (+ inbound Telegram/Discord/Slack/WhatsApp/Signal bridges)                                                  |
 | Workspace       | `gmail_list` `gmail_read` `gmail_send` `calendar_agenda` `calendar_create_event`                                               |
 | MCP             | `mcp_list_servers` + `mcp_<server>_<tool>` per connected server                                                                 |
 
 \* off until `security.lab_mode: true` + `authorized_scopes` in config.
 † off until `smart_home.url` + `HASS_TOKEN` are set.
-‡ off until Telegram/Discord credentials are in `.env`.
-§ needs the Cognee server connected — see [Memory setup](#memory-setup-cognee--ollama).
+‡ off until the channel's credentials are in `.env` — see [docs/COMMS.md](docs/COMMS.md).
 ‖ active inside a project chat with indexed documents.
 ¶ active inside the Learning Room.
 
 Sensitive/destructive tools are approval-gated by default; set
-`conversation.auto_approve: true` to run them without prompting.
+`conversation.auto_approve: true` to run them without prompting (autonomous
+runs still decline them regardless).
 
 ---
 
 ## Highlights
 
+### 🛡️ Trust you can inspect
+
+Settings → System → Security shows the live trust map per channel, the shell
+sandbox state, the secrets inventory (names only), the quarantine log (what
+untrusted senders tried to store, which documents and pages were flagged), and
+the full approval audit trail — including destructive calls that were
+*declined*. See [Trust & security](#trust--security).
+
 ### 🧠 One agent, any brain
 
-A turn is `generate → run tools → loop → answer`. The model calls tools natively,
-chains them, and streams tokens straight to the UI. Swap Anthropic for a local
-Ollama model by editing one config key, and a `ProviderChain` falls back across
-providers automatically when one is down. Missing a system binary (e.g. `nmap`)?
-The tool returns a clear "install X" message instead of crashing.
+A turn is `generate → run tools → loop → answer`. The model calls tools
+natively, chains them, and streams tokens straight to the UI. Swap Anthropic
+for a local Ollama model by editing one config key, and a `ProviderChain` falls
+back across providers automatically when one is down.
 
-### 🕸️ Memory that's a knowledge graph, not a keyword index
+### 🔔 Watchers — it reaches out when things happen
 
-All long-term memory is Cognee. Chats, project notes, and finished learning modules
-are ingested in the background (off the reply path) into a graph of entities and
-relationships with semantic embeddings — so *"what's that thing I'm building?"*
-finds the drone project even though you never used those words. The **Memory** page
-in the sidebar exposes the whole lifecycle — remember, recall, consolidate, forget —
-plus a live graph view, and a side-by-side compare against plain keyword search.
-Chat transcripts stay in a local SQLite file (that's your chat *history*, not the
-assistant's memory) and everything can be wiped from Settings.
+A watcher is *trigger + condition + action*: watch a folder, a Gmail query, a
+web page, or your calendar. Polls are cheap and zero-LLM; when something
+changes, one "only if it matters" model pass decides notify / act / ignore
+against your stated intent — so a noisy page doesn't spam you, and the change
+summary is treated as untrusted data. Actions run as scoped agent runs
+(destructive tools declined) and deliver over your messaging channel. Manage
+them in chat ("watch my Downloads for new PDFs") or Settings → Watchers.
+
+### 📈 Measured self-improvement
+
+Once a week (opt-in), Namma mines its own transcripts — failed tool runs, your
+corrections, retries, repeated workflows — and drafts up to five proposals:
+new skills, routines, watchers, or notes. **Proposals, never actions**: each
+waits for one-click accept/reject in Settings → Learning, and accepted
+automations arrive disabled. Alongside: a "what I learned this week" report
+with metric snapshots (memory recall@k, fact/entity counts, tool failure rate,
+token spend) so growth is a trend line, not a vibe. See
+[docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 
 ### 📚 Projects with document intelligence
 
-Group chats into **projects** and give each one its own document shelf (up to 25
-files, 10 MB each). Every upload is text-extracted, **screened for prompt
-injection**, chunked structure-aware, and indexed into SQLite FTS5. In a project
-chat the assistant grounds its answers with `search_project_documents` (BM25
-ranking, per-document diversity, neighbour stitching, file/section citations) —
-wrapped in a *data-not-instructions* guard. Flagged files are quarantined out of
-retrieval until you trust them. A project chat also carries summaries of the
-project's earlier conversations, and every saved project note flows into the
-Cognee graph, so it's recallable from any chat.
+Group chats into **projects** with a document shelf. Every upload is
+text-extracted, **screened for prompt injection**, chunked structure-aware,
+and indexed into SQLite FTS5; answers are grounded with BM25 retrieval,
+citations, and a data-not-instructions guard. Flagged files are quarantined
+out of retrieval until you trust them.
 
 ### 🎓 Learning Room
 
-Turn any goal — or an uploaded **syllabus** — into a structured learning path.
-Namma Agent infers your level, builds a module path (browse it as a list or on a
-pannable React Flow canvas), and teaches one module at a time — each in its own
-chat — with research-backed pedagogy: recall warm-ups, a running example carried
-across modules, Socratic hints, and inline server-rendered diagrams, images, and
-interactive simulations. It **assesses through conversation** (not multiple-choice
-cards), keeping a persistent **learner model** of how you think, and a module only
-advances through an explicit **confidence gate**. Every completed module's recap is
-pushed into the Cognee graph — your memory literally grows from what you study.
+Turn any goal — or an uploaded syllabus — into a structured learning path with
+research-backed pedagogy: recall warm-ups, a running example, Socratic hints,
+server-rendered diagrams and simulations, and an explicit confidence gate per
+module. Completed modules flow into memory, so what you study becomes part of
+what your agent knows about you.
 
 ### 🧩 Skills & self-extension
 
-Skills are Markdown playbooks (`SKILL.md`) the assistant loads on demand and can
-**author itself** after solving a novel task. When no tool covers a need at all,
+Skills are Markdown playbooks (`SKILL.md`) the assistant loads on demand and
+can **author itself** after solving a novel task. When no tool covers a need,
 `create_tool` writes a brand-new Python tool and hot-loads it in the same turn
 (approval-gated). See [docs/SELF_MODIFICATION.md](docs/SELF_MODIFICATION.md).
 
-### 🗣️ Browser-native voice & messaging
+### 🗣️ Voice & messaging
 
-Voice is 100% browser-native (Web Speech API): the UI reads answers aloud and the
-mic dictates input — no server audio, no models to install. Chat with your
-assistant from your phone over Telegram (and Discord), with voice-message
-transcription when an STT key is configured.
+Voice is 100% browser-native (Web Speech API) — no server audio. Chat with
+your assistant from your phone over Telegram, Discord, Slack, WhatsApp, or
+Signal — each channel with its own trust level (see
+[docs/COMMS.md](docs/COMMS.md)).
 
 ---
 
@@ -375,9 +359,8 @@ text.
 - **Base config** (documented, commented): [`namma_agent/config.yaml`](namma_agent/config.yaml)
 - **UI / runtime overrides**: `namma_agent/config.local.yaml` (written by the Settings
   panel; the base file is never rewritten)
-- **Secrets**: `.env` at the project root (never commit it)
-- **Cognee container env**: `.env.cognee` (models/embeddings; git-ignored) and
-  `.env.cognee.cloud` (Cloud instance URL + key; git-ignored)
+- **Secrets**: the built-in vault (Settings → Security) or `.env` at the project
+  root (never commit it; the vault can migrate your `.env` in one click)
 - **Provider override**: `NAMMA_CONFIG=/path/to/config.yaml` to use a different file
 
 Configure several providers (each with its own API key) and a curated list of
@@ -394,17 +377,12 @@ Each degrades gracefully — if the binary is missing, the tool returns a clear
 - **Vision:** `grim` / `scrot` / `gnome-screenshot` (capture), `tesseract` (OCR).
 - **Security:** `nmap`, `gobuster`, `dig`.
 - **Real browser control:** Playwright (`pip install playwright && playwright install chromium`).
-- **Document conversion:** `convert_document` turns the Markdown the agent writes
-  into the format a user actually asks for (Word, PDF, PowerPoint, etc.). With
-  [`pandoc`](https://pandoc.org/installing.html) on PATH (a system binary, not a pip
-  package) it handles every format at high fidelity. Without it, the built-in
-  fallbacks still cover `md`, `txt`, `html`, and `docx` (the last via `python-docx`);
-  any other target returns an "install pandoc" message.
-- **Diagrams (Learning Room):** `render_diagram` produces PNGs **entirely
-  server-side** — the browser never renders mermaid. It uses the hosted
-  `mermaid.ink` API first (needs `requests`), then falls back to a fully local
-  renderer for offline use (`pip install mermaid-cli && playwright install
-  chromium`). If both are unavailable it degrades to a text outline.
+- **Document conversion:** with [`pandoc`](https://pandoc.org/installing.html) on
+  PATH, `convert_document` handles every format at high fidelity; without it the
+  built-in fallbacks still cover `md`, `txt`, `html`, and `docx`.
+- **Diagrams (Learning Room):** `render_diagram` renders PNGs entirely
+  server-side — hosted `mermaid.ink` first, local `mermaid-cli` fallback,
+  text outline if neither is available.
 - **Google Workspace:** the [`gws` CLI](https://github.com/googleworkspace/cli) for
   the Gmail/Calendar tools (`gws auth login` once).
 
@@ -414,12 +392,19 @@ Each degrades gracefully — if the binary is missing, the tool returns a clear
 
 - **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)** — how the system works, UML diagrams,
   and the reasoning behind every major technical decision. Start here.
-- **[docs/COGNEE.md](docs/COGNEE.md)** — the Cognee memory in depth: architecture,
-  the four lifecycle ops, cloud vs self-hosted, and troubleshooting.
-- **[docs/SKILLS.md](docs/SKILLS.md)** — how skills (procedural memory) work and are created.
+- **[docs/SECURITY.md](docs/SECURITY.md)** — the threat model and the six trust
+  boundaries; what's claimed, what isn't.
+- **[docs/MEMORY_SYSTEM_DESIGN.md](docs/MEMORY_SYSTEM_DESIGN.md)** — Engram in depth:
+  research survey, schema, write pipeline, recall fusion, consolidation.
+- **[docs/BENCHMARKS.md](docs/BENCHMARKS.md)** — the memory eval: methodology,
+  current numbers, how to reproduce them without an API key.
+- **[docs/COMMS.md](docs/COMMS.md)** — connect Telegram, Signal, Slack, WhatsApp, Discord.
+- **[docs/SKILLS.md](docs/SKILLS.md)** — how skills (procedural memory) work.
 - **[docs/EXTENDING.md](docs/EXTENDING.md)** — create your own tools and skills.
+- **[docs/PLUGINS.md](docs/PLUGINS.md)** — attach external MCP servers (memory
+  providers included).
 - **[docs/SELF_MODIFICATION.md](docs/SELF_MODIFICATION.md)** — how the assistant extends
-  and reconfigures itself at runtime.
+  and reconfigures itself at runtime, and the safety model.
 
 ---
 
@@ -427,6 +412,7 @@ Each degrades gracefully — if the binary is missing, the tool returns a clear
 
 ```bash
 python -m pytest namma_agent/tests/ -q       # full suite, offline/mocked, no API key
+python scripts/memory_eval.py --mock         # memory benchmark, offline
 ```
 
 ---
@@ -439,9 +425,9 @@ python -m pytest namma_agent/tests/ -q       # full suite, offline/mocked, no AP
   `python -m namma_agent --server` and open the browser.
 - **Provider/auth errors on first chat** → key missing/typo in `.env`, or
   `provider.type` doesn't match the key you set.
-- **Assistant doesn't remember you across chats** → the Cognee server isn't
-  connected. See [Memory setup](#memory-setup-cognee--ollama) — and the memory
-  troubleshooting table there.
+- **Assistant doesn't remember something you told it** → short/ephemeral
+  messages are filtered by the salience gate; say "remember this: …" to force
+  it, and check Settings → Memory to see exactly what's stored.
 
 ---
 

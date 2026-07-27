@@ -32,7 +32,8 @@ from namma_agent.core.logger import logger
 from namma_agent.core.safety import check_path
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
-_OUT_DIR = Path("data/media/documents")
+from namma_agent.config import data_dir as _data_dir
+_OUT_DIR = _data_dir() / "media" / "documents"
 
 # Friendly names → canonical extension.
 _ALIASES = {

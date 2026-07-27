@@ -93,6 +93,41 @@ def update_config(updates: dict, path: Optional[str] = None) -> dict:
     return load_config(path)
 
 
+def data_dir() -> Path:
+    """Root directory for runtime state (DB, uploads, media, watchers, vault…).
+
+    ``$NAMMA_DATA_DIR`` overrides it — the server/Docker story (Phase 6): mount
+    a volume, point the var at it, and every store follows. Default stays the
+    relative ``data/`` (the repo root in dev, the install dir for the app).
+    Read at import time by some modules, so set the var before launch (systemd
+    ``EnvironmentFile=`` and docker-compose ``environment:`` both do).
+    """
+    d = os.environ.get("NAMMA_DATA_DIR", "").strip()
+    return Path(d).expanduser() if d else Path("data")
+
+
+def server_bind(config: Optional[dict] = None) -> tuple[str, int]:
+    """(host, port) the web server binds. Defaults to loopback — never silently
+    public. ``$NAMMA_HOST``/``$PORT`` override the config (containers set env,
+    not files)."""
+    cfg = config if config is not None else load_config()
+    srv = cfg.get("server") or {}
+    host = (os.environ.get("NAMMA_HOST", "").strip()
+            or str(srv.get("host") or "127.0.0.1").strip() or "127.0.0.1")
+    port = int(os.environ.get("PORT") or srv.get("port") or 8000)
+    return host, port
+
+
+def auth_token(config: Optional[dict] = None) -> str:
+    """The access token protecting /api/* and /ws when set. Resolution:
+    ``$NAMMA_AUTH_TOKEN`` → ``server.auth_token`` in config → "" (auth off)."""
+    env = os.environ.get("NAMMA_AUTH_TOKEN", "").strip()
+    if env:
+        return env
+    cfg = config if config is not None else load_config()
+    return str((cfg.get("server") or {}).get("auth_token") or "").strip()
+
+
 def assistant_name(config: Optional[dict] = None) -> str:
     """The assistant's display name — the single source of truth for what the
     assistant is called everywhere (system prompt, UI, voice, messaging).

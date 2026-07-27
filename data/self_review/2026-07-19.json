@@ -1,0 +1,15 @@
+{
+  "date": "2026-07-19",
+  "ts": 1784462110.3742108,
+  "recall_at_k": 0.917,
+  "k": 5,
+  "facts": 13,
+  "entities": 17,
+  "relations": 13,
+  "skills": 8,
+  "tool_calls": 234,
+  "failures": 35,
+  "failure_rate": 0.15,
+  "tokens_7d": 1162006,
+  "cached_7d": 11227904
+}

@@ -109,6 +109,8 @@ installers/build/
 installers/dist/
 installers/native/build/
 installers/native/dist/
+installers/native/runtime-win-x64/
+installers/native/*.log
 *.AppImage
 *.dmg
 *.spec
@@ -123,3 +125,7 @@ NammaAgentInstaller*.exe
 
 # Website Node_Modules
 website/node_modules
+
+# winget release artifacts (generated per release)
+installers/winget/manifests/
+installers/winget/*.exe

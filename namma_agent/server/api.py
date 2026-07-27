@@ -39,8 +39,9 @@ from namma_agent.core.logger import logger
 from namma_agent.core.providers.base import usage_tokens
 from namma_agent.service import NammaAgentService
 
-_UPLOAD_DIR = Path("data/uploads")
-_MEDIA_DIR = Path("data/media")
+from namma_agent.config import data_dir as _data_dir
+_UPLOAD_DIR = _data_dir() / "uploads"
+_MEDIA_DIR = _data_dir() / "media"
 
 _WEBUI_DIST = Path(__file__).resolve().parent.parent / "webui" / "dist"
 
@@ -131,6 +132,10 @@ class UninstallBody(BaseModel):
 class NotifyBody(BaseModel):
     title: str = "Namma Agent"
     body: str = ""
+
+
+class AutostartBody(BaseModel):
+    enabled: bool = False
 
 
 class ConfiguredProvidersBody(BaseModel):
@@ -332,6 +337,37 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # ── Access-token auth (Phase 6a) ─────────────────────────────────────
+    # When a token is configured (server.auth_token / NAMMA_AUTH_TOKEN), every
+    # /api/* request must present it — Authorization: Bearer, X-Namma-Token, or
+    # ?token= — compared constant-time. Exempt: /api/health (Docker/systemd
+    # healthchecks) and everything outside /api (the static UI shell is data-free;
+    # /webhooks/* carry their own platform verification). The websocket enforces
+    # the same token itself (middleware doesn't see WS upgrades).
+    def _auth_token() -> str:
+        from namma_agent.config import auth_token
+        return auth_token(service.config)
+
+    def _token_ok(supplied: Optional[str]) -> bool:
+        import hmac
+        expected = _auth_token()
+        return (not expected) or bool(
+            supplied and hmac.compare_digest(supplied.strip(), expected))
+
+    @app.middleware("http")
+    async def _require_token(request: Request, call_next):
+        path = request.url.path
+        if _auth_token() and path.startswith("/api") and path != "/api/health":
+            supplied = request.headers.get("x-namma-token") or \
+                request.query_params.get("token")
+            authz = request.headers.get("authorization", "")
+            if not supplied and authz.lower().startswith("bearer "):
+                supplied = authz[7:]
+            if not _token_ok(supplied):
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+        return await call_next(request)
 
     @app.get("/api/health")
     def health():
@@ -922,6 +958,20 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         ok = send_native_notification(body.title, body.body)
         return {"ok": ok}
 
+    @app.get("/api/autostart")
+    def autostart_status():
+        """Start-on-login state for the Settings → Behavior toggle (Phase 5)."""
+        from namma_agent.core import autostart
+        return autostart.status()
+
+    @app.post("/api/autostart")
+    def autostart_set(body: AutostartBody):
+        """Register/unregister launching the app at user login (HKCU Run key on
+        Windows, XDG autostart entry on Linux). Never raises — failures come
+        back as {ok: False, error} for the UI."""
+        from namma_agent.core import autostart
+        return autostart.set_enabled(bool(body.enabled))
+
     @app.get("/api/version")
     def version():
         from namma_agent.version import __version__
@@ -1195,6 +1245,47 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         content = service.run_routine_now(routine_id)
         return {"ok": content is not None, "content": content or ""}
 
+    # -- event watchers (trigger + gate + action → comms) ---------------------
+
+    @app.get("/api/watchers")
+    def watchers_list():
+        return {"watchers": service.list_watchers()}
+
+    @app.post("/api/watchers/toggle")
+    def watchers_toggle(body: dict):
+        ok = service.set_watcher_enabled(int(body.get("id", 0)),
+                                         bool(body.get("enabled", True)))
+        return {"ok": ok}
+
+    @app.delete("/api/watchers/{watcher_id}")
+    def watchers_delete(watcher_id: int):
+        return {"ok": service.delete_watcher(watcher_id)}
+
+    @app.post("/api/watchers/{watcher_id}/run")
+    def watchers_run(watcher_id: int):
+        res = service.run_watcher_now(watcher_id)
+        return {"ok": res is not None, **(res or {})}
+
+    # -- weekly self-review (measured self-improvement) -----------------------
+
+    @app.get("/api/self_review")
+    def self_review_overview():
+        """Report + snapshot trend + proposals — the Learning tab's payload."""
+        return service.self_review_overview()
+
+    @app.post("/api/self_review/run")
+    def self_review_run():
+        """Manual 'Run review now' — no comms delivery, result shown in the UI."""
+        return {"ok": True, "report": service.run_self_review(deliver=False)}
+
+    @app.post("/api/self_review/proposals/{pid}/{action}")
+    def self_review_resolve(pid: int, action: str):
+        if action not in ("accept", "reject"):
+            return {"ok": False, "detail": "action must be accept or reject"}
+        ok, detail = service.resolve_self_review_proposal(
+            pid, "accepted" if action == "accept" else "rejected")
+        return {"ok": ok, "detail": detail}
+
     @app.get("/api/providers")
     def providers():
         """Provider catalog (with .env key-set flags) + the active provider config."""
@@ -1298,6 +1389,11 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
+        # Phase 6a: same token as /api/* (?token= on the WS URL — headers are
+        # awkward from browsers). 4401 = our "unauthorized" close code.
+        if not _token_ok(websocket.query_params.get("token")):
+            await websocket.close(code=4401)
+            return
         await websocket.accept()
         loop = asyncio.get_running_loop()
         outgoing: asyncio.Queue = asyncio.Queue()

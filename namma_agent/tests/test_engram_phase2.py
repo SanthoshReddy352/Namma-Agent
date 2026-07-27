@@ -7,7 +7,6 @@ is installed but not on PATH" fix).
 """
 from __future__ import annotations
 
-import json
 
 import pytest
 

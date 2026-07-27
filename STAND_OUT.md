@@ -103,18 +103,34 @@ model must exist before we widen autonomy.*
       Full suite 737 green; live verify: server picked `credential-manager`,
       API set→inventory→delete round-trip clean.
 
-### 1e — Settings → Security tab (make it all visible)
-- [ ] One tab that shows: per-channel trust levels, quarantine log (flagged docs/web/
-      memory writes + trust/untrust actions), approval audit trail (from the existing
-      `audit` table), sandbox status, secrets inventory (names only), and a plain-language
-      "trust model" explainer.
-- [ ] API: `GET /api/security/overview`, reuse existing audit/quarantine data.
-- [ ] Tests: endpoint shape; UI renders all sections (build clean + live verify).
+### 1e — Settings → Security tab (make it all visible) — ✅ landed 2026-07-18
+- [x] Settings → System → **Security** tab: plain-language trust-model explainer,
+      per-channel trust chips (links to Messaging to change), sandbox status card
+      (mechanism + caps + active), secrets inventory (backend + names only, with the
+      1d migrate button), quarantine log (untrusted-sender memory writes,
+      injection-flagged documents, suspicious web fetches), and the approval audit
+      trail — collapsible (default collapsed, count in header), destructive calls
+      badged approved/declined. Declined destructive attempts are now audit-logged
+      (`agent.py` decline path), so the trail shows what was ASKED, not just what ran.
+- [x] API: `GET /api/security/overview` — one payload aggregating `trust_map`,
+      `sandbox.status()`, secrets inventory, `store.quarantined_items()` (new),
+      `db.flagged_documents()` (new), `db.recent_audit()` (new, destructive-annotated);
+      web flags mined from the audit's ⚠ markers (no new store).
+- [x] Tests: endpoint shape test (seeded decline + quarantine + flagged doc + web
+      flag) + decline-audit assertion in `test_trust.py`. Full suite 738 green;
+      live verify: real instance rendered every section with live data (50 real
+      audit rows, credential-manager backend), collapse/expand round-trip clean.
 
-### 1f — Publishable security posture doc
-- [ ] `docs/SECURITY.md`: threat model, trust boundaries, what's sandboxed, what's
-      screened, what's approval-gated, responsible-disclosure note. This doubles as
-      Phase 4 marketing material — it's the page OpenClaw doesn't have.
+### 1f — Publishable security posture doc — ✅ landed 2026-07-19
+- [x] `docs/SECURITY.md`: threat model (4 prioritized threats + explicit
+      out-of-scope), the six trust boundaries (per-channel sender trust, injection
+      screening, approval gate + decline auditing, shell sandbox, secrets vault +
+      redaction, memory integrity), an honest "what Namma does NOT claim" section,
+      and a responsible-disclosure note. Cross-referenced to the live Security tab
+      (1e) — every claim in the doc is observable in the UI. Doubles as Phase 4
+      marketing material.
+
+**Phase 1 complete — trust is now a product surface, not plumbing.**
 
 ---
 
@@ -123,23 +139,45 @@ model must exist before we widen autonomy.*
 Builds directly on the routines runner + comms delivery; safe because Phase 1
 already established that autonomous runs decline destructive tools.*
 
-- [ ] **Watcher framework** (`core/watchers.py`, store `data/watchers.json`, runner
-      pattern copied from `core/routines.py`): a watcher = *trigger* + *condition* + *action*.
-- [ ] Trigger types (v1):
-  - [ ] `file` — path/glob appears or changes (stdlib polling; no watchdog dep).
-  - [ ] `email` — new message matching from/subject filter (reuse Gmail tooling).
-  - [ ] `web` — page/selector content changed since last poll (hash diff; screened per 1b).
-  - [ ] `calendar` — upcoming event / conflict within N minutes.
-- [ ] **"Only if it matters" LLM gate**: trigger fires → cheap agent pass decides
-      *notify / act / ignore* against the watcher's stated intent — no notification spam
-      (the #1 complaint about always-on tools).
-- [ ] Action = a routine-style scoped agent run (destructive tools always declined) →
-      delivery via comms-first / native-notification fallback (reuse routine delivery).
-- [ ] Chat tools: `create_watcher` (approval-gated), `list/toggle/delete_watcher`, `run_watcher_now`.
-- [ ] Settings → Capabilities → Watchers tab (list, last-fired, enable/disable, delete) + `/api/watchers*`.
-- [ ] Status tab row (watcher runner + per-watcher state) in `background_status()`.
-- [ ] Tests: schedule math, each trigger type (mocked), LLM gate ignore/notify paths,
-      destructive-tool refusal, persistence across restart.
+- [x] **Watcher framework** — ✅ landed 2026-07-19 (`core/watchers.py`, store
+      `data/watchers.json`, runner pattern copied from `core/routines.py`): a
+      watcher = *trigger* + *condition* + *action*, with per-type check cadence
+      (file 2 min / email 5 / calendar 5 / web 30, overridable), lazy runner
+      start (creating a watcher IS the opt-in), and per-watcher `last_result`
+      so the UI shows WHY nothing happened.
+- [x] Trigger types (v1) — all cheap polls, zero model calls, first check
+      records a baseline without firing (except calendar, where "already within
+      the window" is the point):
+  - [x] `file` — path/glob new/changed/removed (stdlib glob+mtime snapshot; no watchdog dep).
+  - [x] `email` — new message ids matching a Gmail query (via `gmail_list`);
+        summaries injection-screened per 1b (subjects are attacker-writable).
+  - [x] `web` — extracted-text hash diff via `web_extract` (so 1b screening
+        already applied); noisy-page churn is the gate's job to filter.
+  - [x] `calendar` — events starting within N minutes (via `calendar_agenda`),
+        optional title match, no re-alert per event; screened per 1b.
+- [x] **"Only if it matters" LLM gate**: trigger fires → one cheap no-tools model
+      pass (`service._watcher_gate`) decides *notify / act / ignore* against the
+      watcher's stated intent, with the change summary explicitly framed as
+      untrusted DATA. Gate failure falls back to *notify* (never silently drop);
+      `gate: false` per watcher skips the pass.
+- [x] Action = a routine-style scoped agent run (reuses `_routine_turn` —
+      destructive tools always declined) → delivery via comms-first /
+      native-notification fallback (mirrors routine delivery, 🔔 prefix).
+- [x] Chat tools: `create_watcher` (approval-gated), `list/toggle/delete_watcher`
+      (delete gated too), `run_watcher_now`.
+- [x] Settings → Capabilities → Watchers tab (trigger chip, intent, last
+      checked/fired, last result, check-now/toggle/delete) + `/api/watchers*`
+      (list/toggle/delete/run, mirroring routines).
+- [x] Status tab row (watcher runner + per-watcher state) in `background_status()`.
+- [x] Tests: `test_watchers.py` (22) — cadence math, every trigger type (mocked
+      tools, incl. error-is-a-note-not-a-fire and injection-screened summaries),
+      gate ignore/notify/act/act-degrades/failure-fallback/disabled paths,
+      persistence across runner restart, tools round-trip + destructive flags,
+      REST endpoint shapes. Full suite 760 green; live verify: real server +
+      dev UI — Watchers tab rendered a seeded watcher, "Check now" recorded a
+      real Downloads baseline into the store, delete round-trip clean.
+
+**Phase 2 complete — the agent now reaches out when things happen, not just on a clock.**
 
 ---
 
@@ -147,20 +185,44 @@ already established that autonomous runs decline destructive tools.*
 *Why third: turns Hermes's "grows with you" vibes into a number. Depends on nothing
 new — mines data the app already has (sessions, skills, memory eval, usage stats).*
 
-- [ ] **Weekly self-review** (a built-in routine, off by default until verified):
-  - [ ] Mine the week's sessions for: failed turns (tool errors, user corrections,
-        retries), repeated multi-step workflows, unanswered follow-ups.
-  - [ ] Draft outputs: proposed new/updated **skills** (via the existing skills learning
-        loop), proposed **routines/watchers**, memory consolidation notes.
-  - [ ] Drafts are PROPOSALS — surfaced for one-click accept/reject, never auto-applied.
-- [ ] **"What I learned this week" report**: delivered over comms + rendered in a new
-      **Learning Report** surface (Settings → System or sidebar): facts learned, skills
-      drafted, failures analyzed, recall-eval trend, tokens saved by caching/compaction.
-- [ ] **Metrics spine**: persist weekly snapshots (`data/self_review/*.json`) —
-      memory eval score (run `scripts/memory_eval.py --mock` headlessly), fact count,
-      skill count, failure rate — so the report can show *trend lines*, not one-offs.
-- [ ] Tests: session mining heuristics, proposal accept/reject round-trip, report
-      generation offline, snapshot persistence.
+- [x] **Weekly self-review** — ✅ landed 2026-07-19 (`core/self_review.py` +
+      `SelfReviewRunner`, OFF by default via `self_review.enabled: false`; the
+      "Run review now" button always works; a fresh enable waits for the next
+      weekly slot instead of firing instantly):
+  - [x] Mine the week's sessions (offline heuristics, zero model calls): failed
+        tool runs from the audit trail (incl. declined destructive), user
+        corrections (phrase heuristics), retries (word-set similarity on
+        consecutive asks), repeated multi-step workflows (recurring
+        `tools_used` sequences ×3+), sessions ending on an unanswered user
+        message. (`Database.turns_since` added for the window sweep.)
+  - [x] Draft outputs: ONE model pass (the user-selected Settings model) drafts
+        ≤5 proposals — skills (applied via the existing skills learning loop),
+        routines, watchers, or plain notes — each validated against the real
+        stores' rules before it's even shown.
+  - [x] Drafts are PROPOSALS: pending in `data/self_review/proposals.json`,
+        one-click accept/reject in the Learning tab, never auto-applied.
+        Accepted routines/watchers arrive DISABLED; rejected titles are
+        remembered so an idea can't nag weekly.
+- [x] **"What I learned this week" report**: plain-text report persisted +
+      rendered in Settings → System → **Learning** (stat cards with was-X
+      trends, report body, proposal queue) and delivered over comms on
+      scheduled runs (manual runs stay in the UI).
+- [x] **Metrics spine**: weekly snapshots in `data/self_review/YYYY-MM-DD.json`
+      (rerun same day = overwrite, not dup) — recall@k from the headless
+      `--mock` memory eval, fact/entity/relation counts, skill count, tool
+      failure rate, 7-day tokens + cached reads — so the report shows
+      *trend lines*, not one-offs. Status tab row + `background_status()` block.
+- [x] Tests: `test_self_review.py` (15) — mining heuristics on a seeded DB,
+      window cutoff, offline eval, snapshot persistence + trend order,
+      proposal validate/draft-parse/dedupe (rejected ideas stay dead),
+      accept-applies (skill/routine/watcher — disabled) + double-resolve
+      refusal, report trends, weekly anchoring math, runner off-by-default,
+      endpoint shapes. Full suite 775 green; live verify: real "Run review
+      now" mined 15 sessions/234 calls, measured recall@5 = 92%, and the real
+      model drafted 2 skill proposals from the actual failure evidence
+      (left pending — the user's call).
+
+**Phase 3 complete — "grows with you" is now a number with a trend line.**
 
 ---
 
@@ -168,13 +230,31 @@ new — mines data the app already has (sessions, skills, memory eval, usage sta
 *Why fourth: needs Phases 1–3 as the story. Standing out is half engineering, half
 being seen — this phase is cheap and currently at zero.*
 
-- [ ] **README overhaul**: positioning line, 30-second GIF, honest comparison table
-      (Namma vs Hermes vs OpenClaw: trust model, measured memory, watchers, Windows),
-      quick-start (installer + one-liner).
-- [ ] **Docs site**: MkDocs Material → GitHub Pages, from the existing `docs/`
-      (ARCHITECTURE, MEMORY_SYSTEM_DESIGN, SECURITY, PLUGINS) + a "why Namma" page.
-- [ ] **Publish the memory benchmark**: `docs/BENCHMARKS.md` — eval methodology,
-      recall@k numbers, how to reproduce (`--mock`, no API key). Rare in this space; free credibility.
+- [~] **README overhaul** — text landed 2026-07-19: positioning line ("the
+      trustworthy personal agent that measurably knows you"), honest comparison
+      table (Namma vs Hermes vs OpenClaw across trust/memory/proactivity/
+      self-improvement/channels/Windows/hosting — with explicit "when to pick
+      them" concessions), 41 stale Cognee references replaced with Engram
+      (zero-setup memory is now part of the quick-start story), trust &
+      watchers & self-review sections added. **Open: the 30-second GIF**
+      (placeholder comment marks the slot — needs the Phase 4 demo recordings).
+- [x] **Docs site** — landed 2026-07-19: `mkdocs.yml` (Material, dark/light,
+      nav over the existing docs), `docs/WHY_NAMMA.md` positioning page,
+      reorganized `docs/README.md` index, `.github/workflows/docs.yml`
+      (gh-deploy on docs changes to main). Verified locally: built clean +
+      rendered (Home/Why Namma/Benchmarks checked in the browser; `docs`
+      entry added to .claude/launch.json). Remaining link warnings are
+      pre-existing `../` links to source files (GitHub-only); harmless.
+      **Post-push step: enable GitHub Pages (branch `gh-pages`) in repo settings.**
+- [x] **Publish the memory benchmark** — landed 2026-07-19: `docs/BENCHMARKS.md`
+      — what's measured (real write pipeline → real recall stack, substring
+      recall@k), the two modes (offline `--mock` isolates retrieval; default
+      measures the user's model end-to-end), current number (**recall@5 = 92%**,
+      11/12, verified this session; the one miss diagnosed honestly — zero
+      lexical overlap "allergies"/"allergic", the gap embeddings close),
+      weekly trend via self-review snapshots, reproduce commands, and an
+      honest-limitations section (small self-authored dataset, generous
+      scoring, not cross-project comparable).
 - [ ] **Demo assets**: 2–3 short screen recordings (watcher catching an email →
       Telegram ping; injection quarantine in action; weekly learning report).
 - [ ] **Ship it**: GitHub release with the native installers (CI already builds them),
@@ -187,13 +267,62 @@ being seen — this phase is cheap and currently at zero.*
 *Why last but real: OpenClaw is macOS-leaning, Hermes Linux/macOS-first. "Genuinely
 great on Windows" is an underserved niche we already live in. Small items, big feel.*
 
-- [ ] System tray icon (show/hide window, gateway status dot, quit) — pywebview/pystray.
-- [ ] Start-on-login toggle (HKCU Run key; Settings → Behavior).
-- [ ] `winget` package manifest (installer already exists + Add/Remove registration).
-- [ ] WSL awareness in environment memory (Engram G8): detect distros, translate
-      `/mnt/c` ↔ `C:\` in path assist.
-- [ ] Toast actions (Reply / Open) on Windows notifications where supported.
-- [ ] Fix the open note from the port tracker: shell defaulting to the stray Hermes venv PATH.
+- [x] System tray icon — landed 2026-07-19: `core/tray.py` (pystray + Pillow,
+      both optional — no tray libs, no tray, app unaffected): show/hide window
+      (double-click default), live gateway status line (recomputed on menu
+      open, zero polling), open-in-browser, quit (destroys the window → clean
+      shutdown). Wired in `app.py:_start_tray`; tray stops on window close.
+      Tests: `test_tray.py` (4, fake-pystray menu wiring + real-pystray build).
+- [x] Start-on-login toggle — landed 2026-07-19: `core/autostart.py` (HKCU Run
+      key via winreg, prefers `pythonw.exe`; Linux XDG autostart .desktop;
+      macOS honestly unsupported), `GET/POST /api/autostart`, Settings →
+      Behavior toggle (applies instantly, no Save). Tests: `test_autostart.py`
+      (5, incl. a REAL HKCU round-trip under a test-only value name).
+- [~] `winget` package manifest — generator landed 2026-07-19; **self-contained
+      installer landed 2026-07-20** (the fix for winget validation):
+  - Manifest generator (`installers/winget/generate.py`) emits the 3-file
+    schema-1.6 set with the real release-asset SHA-256; silent switch is the
+    installer's `--cli` mode; Add/Remove DisplayName matched. Tests: `test_winget.py` (2).
+  - PR [microsoft/winget-pkgs#404738](https://github.com/microsoft/winget-pkgs/pull/404738)
+    submitted 2026-07-20 (CLA signed) but **failed unattended validation**
+    (`Validation-Unattended-Failed`): the old installer bootstrapped a
+    Python/Node toolchain from source at install time, which winget's clean
+    offline sandbox can't run — it blocked on the toolchain step.
+  - **Fix (self-contained installer):** on Windows, `installers/native/build.py`
+    (`stage_runtime`) now bundles a relocatable CPython (python-build-standalone
+    3.12.7) with every dependency pre-installed; `installer/core.py`
+    (`bundled_runtime` + `_bootstrap_offline` + `copy_runtime`) takes an OFFLINE
+    path — copy source + runtime + register, no system Python/pip/network.
+    macOS/Linux keep the venv-bootstrap path. Tests: `test_installer.py` (+4, 34 total).
+  - **Verified locally 2026-07-20:** built `NammaAgentInstaller-2.3.0.exe`
+    (232 MB self-contained); `--cli` install with Python stripped from PATH
+    exited 0 in ~124 s via the offline path (no venv/pip), registered
+    'Namma Agent' in Add/Remove; the relocated runtime booted the app
+    (`/api/health` → 200). Full suite 814 passed.
+  - **Remaining (needs a publish):** the live v2.3.0 release asset is still the
+    OLD bootstrapper. Publish the new self-contained exe as a release asset
+    (recommend a 2.3.1 bump + CI release), regenerate the manifest against it,
+    then update/replace PR #404738.
+- [x] WSL awareness (Engram G8) — landed 2026-07-19: `detect_wsl()` (UTF-16
+      parsing, graceful None), distros + default in the HOST prompt block,
+      path assist translates `/mnt/<drive>/…` → `<Drive>:\…` and passes
+      `\\wsl$\…` through. Live-verified (found the real docker-desktop
+      distro). Tests in `test_engram.py` (+5).
+- [x] Toast actions — landed 2026-07-19: Windows notifications are now real
+      Action-Center toasts (WinRT via PowerShell, powershell-AUMID route for
+      unpackaged apps) with **Reply** and **Open** protocol-action buttons
+      deep-linking the web UI (`?reply=1` hint; composer autofocuses); body
+      click opens too; in-script fallback to the legacy balloon where WinRT is
+      unavailable. Live-verified (real toast fired). Tests in
+      `test_notifications.py` (+2).
+- [x] Stray Hermes venv PATH — fixed 2026-07-19: spawned shells get a sanitized
+      PATH (`shell_session._shell_env`) — other products' `venv\Scripts` /
+      `venv/bin` entries dropped (the machine's real Hermes leftover confirmed
+      the case), Namma's own interpreter dir prepended so `python`/`pip` mean
+      the agent's venv. Port-tracker open note closed. Tests in
+      `test_shell_session.py` (+2).
+
+**Phase 5 complete — Namma feels native on Windows, not ported to it.**
 
 ---
 
@@ -216,36 +345,57 @@ and secrets vault would be irresponsible.*
 > under ~400 MB, swap file mandatory in the guide, zero heavy deps (the Engram
 > rule pays off here).
 
-### 6a — Headless server hardening (make remote exposure safe)
-- [ ] Bind address + port in config (`server.host`/`server.port`; default stays
-      `127.0.0.1` — never silently public).
-- [ ] **Access token auth** for the web UI/API when bound beyond localhost
-      (`server.auth_token` / `NAMMA_AUTH_TOKEN`): required on every REST + WebSocket
-      request; constant-time compare; UI login screen stores it.
-- [ ] Headless-friendly paths: no pywebview assumption in `--server` mode (already
-      true — verify + test), data dir override (`NAMMA_DATA_DIR`) for volume mounts.
-- [ ] Tests: auth required/rejected/accepted, localhost default unchanged, data-dir override.
+### 6a — Headless server hardening — ✅ landed 2026-07-19
+- [x] Bind address + port in config (`server.host`/`server.port` +
+      `NAMMA_HOST`/`PORT` env overrides for containers; default stays
+      `127.0.0.1`); non-loopback bind without a token logs a loud warning.
+- [x] **Access token auth** (`server.auth_token` / `NAMMA_AUTH_TOKEN`, env wins):
+      middleware on every `/api/*` request (Bearer / X-Namma-Token / ?token=,
+      `hmac.compare_digest`) + the WebSocket (?token=, close 4401). Exempt:
+      `/api/health` (healthchecks) and `/webhooks/*` (platform-verified). UI:
+      401/4401 → **unlock screen** (AuthGate) → token in localStorage → every
+      fetch + the WS carry it.
+- [x] `NAMMA_DATA_DIR` override via `config.data_dir()` — swept through all
+      state stores (db default, uploads/media, watchers/routines/self-review,
+      jsonstores, secrets vault dir, projects, app tracker, learning nudges).
+- [x] Tests: `test_server_hardening.py` (9) — bind defaults/env precedence,
+      token resolution, 401/carriers/health-exempt/static-open, WS 4401 +
+      accept, data-dir override + stores following it. **Live-verified**:
+      real server with a token → UI showed the unlock screen (API-backed
+      sidebar empty on 401), pasted token → reloaded authenticated, sessions
+      + WS up, zero console errors.
 
-### 6b — Deployment packaging (sized for the 1 GB micro)
-- [ ] **1 GB memory profile, measured**: run the headless server + gateway on (or
-      simulated as) E2.1.Micro; record RSS; trim if needed (lazy imports for the
-      UI-only paths, `conversation.tool_result_max_chars` preset, smaller history
-      window preset). Ship a `config.server-lite.yaml` profile the guide references.
-- [ ] **One-line installer for Ubuntu/Debian VPS** (`deploy/install.sh`, curl-able):
-      creates a `namma` user, venv install, **creates a 2 GB swap file** (the 1 GB
-      box's survival step), writes the systemd unit, starts the service, prints the
-      access token + next steps. Idempotent — safe to re-run.
-- [ ] **systemd unit** template (`deploy/namma-agent.service`): restart-on-failure,
-      `EnvironmentFile=.env`, `MemoryMax=` guard so the OOM killer never takes the
-      whole box, runs `python -m namma_agent --server`.
-- [ ] **Dockerfile** (python:slim, non-root user, volume for `data/` + config,
-      healthcheck on `/api/health`) + `docker-compose.yml` (one service, env-file,
-      `mem_limit` matching the micro). x86-64 first (E2.1.Micro), ARM64 also built
-      (A1 users); CI smoke-tests the image.
-- [ ] Tests: compose config validates; install.sh lints (shellcheck) + dry-run mode;
-      `/api/health` smoke test.
+### 6b — Deployment packaging — ✅ landed 2026-07-19 (RSS measurement pending)
+- [~] **1 GB memory profile**: `deploy/config.server-lite.yaml` overlay shipped
+      (smaller history window, tool-result cap, gentler consolidation, loopback
+      bind) and referenced by the installer/Dockerfile. The CI docker job
+      (below) now **records the container's idle RSS under the 900m cap** on
+      every push — first numbers arrive with the next push; confirm on a real
+      E2.1.Micro at first deploy.
+- [x] **One-line installer** `deploy/install.sh` (curl-able, idempotent =
+      updater): apt deps, **2 GB swap if <2 GB RAM**, `namma` system user,
+      clone/pull, venv (core+comms deps only), UI build (skipped when dist
+      ships), server-lite profile (first install only), token generation into
+      `.env` (kept if present), systemd unit install + start, prints token +
+      next steps. `--dry-run` / `--no-swap` flags.
+- [x] **systemd unit** `deploy/namma-agent.service`: restart-on-failure,
+      `EnvironmentFile=.env`, **`MemoryMax=700M`** + `TasksMax`, basic
+      hardening (NoNewPrivileges/ProtectSystem), `--server` headless.
+- [x] **Dockerfile** (node build stage → python:3.12-slim runtime, non-root,
+      `VOLUME /app/data` + `NAMMA_DATA_DIR`, stdlib `/api/health` HEALTHCHECK,
+      `NAMMA_HOST=0.0.0.0`) + **docker-compose.yml** (env-file, loopback-only
+      port publish by default, `mem_limit: 900m`) + `.dockerignore`.
+      Local build blocked by a machine-level Windows bug (AF_UNIX socket
+      files undeletable → Docker Desktop can't boot; diagnosed 2026-07-20,
+      reboot pending) — so the verification moved to CI: a new `docker` job
+      in ci.yml builds the real image, boots it under the 900m cap, smokes
+      `/api/health`, records idle RSS, and verifies the 6a auth gate
+      (401 without token / 200 with) inside the running image.
+- [x] Tests: `test_deploy.py` (6) — compose parses with the bounds, Dockerfile
+      essentials, unit-file guard rails, install.sh safety rails (`set -euo
+      pipefail`, dry-run, swap, token, no CRLF) + a real `bash -n` syntax pass.
 
-### 6c — Deployment guides (a first-time cloud user succeeds by reading alone)
+### 6c — Deployment guides — ✅ landed 2026-07-19 (audience contract below honored)
 *Audience contract for EVERY guide in this phase: the reader has never opened a
 cloud console, doesn't know what SSH is, and uses Windows at home. Every step is a
 numbered click-path or a copy-paste command with its expected output shown; every
@@ -253,44 +403,39 @@ numbered click-path or a copy-paste command with its expected output shown; ever
 recovery line. No unexplained jargon — the first use of a term (instance, SSH,
 firewall, token) gets a one-line definition. Success is testable: at the end the
 user messages their agent from their phone and it answers.*
-- [ ] `docs/DEPLOY.md` — the umbrella guide: what self-hosting gives you (the
-      always-on gateway), pick your path (Oracle free tier ★ recommended / any VPS /
-      always-on home PC / Docker), the security checklist in plain words (auth
-      token, firewall, trust levels for exposed webhooks), how to update, and
-      backup = "copy the `data/` folder" (+ vault caveat from 1d).
-- [ ] **`docs/DEPLOY_ORACLE.md` — the flagship walkthrough (E2.1.Micro, from zero)**:
-  - [ ] Create the Oracle Cloud Free account (card-verification note: no charges on
-        Always Free; region choice matters — pick your home region, it can't change).
-  - [ ] Create the VM: every console click to launch `VM.Standard.E2.1.Micro` with
-        Ubuntu; download the SSH key; screenshot-level detail (or described fields
-        where screenshots would rot).
-  - [ ] Connect from Windows: `ssh` in PowerShell (it's built in — no PuTTY needed),
-        fixing the key-permissions error they WILL hit, what a prompt is.
-  - [ ] Install: paste the 6b one-liner; what it prints; the 2 GB swap file it makes
-        and why the 1 GB box needs it.
-  - [ ] Oracle's TWO firewalls explained simply (Security List in the console +
-        `iptables` on the box) — only if exposing the web UI; the Telegram-only path
-        needs NO open ports at all (the gateway dials out — this is the recommended,
-        zero-exposure default).
-  - [ ] Keep-alive facts: Always Free E2.1.Micro is not idle-reclaimed (that's A1);
-        what the monthly network cap looks like for a chat workload (nowhere close).
-  - [ ] Verify + celebrate: `systemctl status`, message the bot from your phone,
-        reboot test (`sudo reboot` → it comes back by itself).
-  - [ ] Troubleshooting table: out of capacity (rare on E2.1.Micro; try another AD),
-        SSH timeout (wrong IP / security list), bot silent (token typo, gateway
-        stopped), OOM (swap missing).
-- [ ] **Generic VPS walkthrough** (`docs/DEPLOY_VPS.md`, Hetzner/DO/Lightsail-
-      agnostic, assumes the Oracle guide's literacy level): non-root user, ufw,
-      the same one-liner, optional domain + Caddy TLS (two-line config).
-- [ ] `docs/GATEWAYS.md` — per-channel messaging setup, same audience contract:
-      Telegram first (BotFather → token → chat id, with exact taps — it's the
-      recommended channel: dial-out, no public URL, `owner` trust by default),
-      then Discord (bot + intents), Slack (Socket Mode vs Events URL), WhatsApp
-      (QR link vs Cloud API webhook), Signal (signal-cli REST) — each labeled:
-      needs a public URL? recommended trust level (from 1a)? works on the 1 GB box?
-- [ ] Cross-link: Settings → Messaging surfaces "Deployment & gateway guides" links;
-      README quick-start points at DEPLOY.md; DEPLOY_ORACLE.md is the story Phase 4
-      leads with ("your own agent, $0/month, 30 minutes").
+- [x] `docs/DEPLOY.md` — landed: what self-hosting gives you, the pick-your-path
+      table (Oracle ★ / VPS / Docker / home PC), plain-words security checklist
+      (zero-exposure default, token, TLS, webhook trust, the two firewalls),
+      update = re-run the installer, backup = tar `data/` + `.env` +
+      config.local.yaml with the 1d vault machine-key caveat, and the 1 GB
+      reference-box sizing story.
+- [x] **`docs/DEPLOY_ORACLE.md` — the flagship walkthrough** — landed with every
+      contracted beat: account creation (card-verification note, home-region
+      warning), VM creation click-by-click (E2.1.Micro chosen over A1 with the
+      why, described fields not screenshots), Windows SSH (built-in, the
+      icacls key-permissions fix they WILL hit, "what a prompt is"), the
+      one-liner install with its printed 9 steps + swap-file why, the TWO
+      firewalls (with "you almost certainly need NEITHER" + SSH-tunnel
+      alternative), keep-alive facts (not idle-reclaimed; 10 TB/month vs a
+      chat workload), verify + celebrate (status → bot answers → reboot acid
+      test), and the troubleshooting table (capacity/SSH/bot-silent/OOM).
+- [x] **Generic VPS walkthrough** (`docs/DEPLOY_VPS.md`) — non-root user + ufw
+      hygiene, the same one-liner, Telegram + verify by reference, optional
+      domain + two-line Caddy TLS with the loopback-only division of labor.
+- [x] `docs/GATEWAYS.md` — the at-a-glance table (public URL? default trust?
+      1 GB fit? verdict) for all five channels + both WhatsApp/Slack modes,
+      Telegram with the exact taps (BotFather → token, @userinfobot → chat id,
+      .env lines, restart), "dials out" defined, when-you-need-webhooks
+      pointer to the Caddy step. Credential deep-dives stay in COMMS.md (no
+      duplication — deployment view only).
+- [x] Cross-links — landed: Settings → Messaging Gateway card now links the
+      three guides (GATEWAYS / DEPLOY / COMMS, new-tab); README quick-start
+      gained the "always-on for $0" section pointing at DEPLOY.md +
+      DEPLOY_ORACLE.md; COMMS.md tips point server users at GATEWAYS/DEPLOY;
+      mkdocs nav gained a Self-hosting section; docs/README.md index updated.
+
+**Phase 6 code+docs complete — remaining: measure real RSS on a 1 GB box (first
+real deploy) and wire the Docker-image smoke test into CI.**
 
 ---
 

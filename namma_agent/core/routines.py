@@ -45,7 +45,8 @@ Deliver = Callable[[str, str], None]
 
 def _store_path(config: Optional[dict] = None) -> Path:
     path = ((config or {}).get("routines") or {}).get("store_path")
-    return Path(path).expanduser() if path else _REPO_ROOT / "data" / "routines.json"
+    from namma_agent.config import data_dir
+    return Path(path).expanduser() if path else data_dir() / "routines.json"
 
 
 def load_routines(config: Optional[dict] = None) -> list[dict]:

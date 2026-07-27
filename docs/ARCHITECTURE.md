@@ -606,7 +606,11 @@ There is no Piper, no Whisper, no server-side STT. (See
 - **Base config**: `namma_agent/config.yaml` (documented, commented).
 - **Overlay**: `namma_agent/config.local.yaml` — written by the Settings panel via
   `config.update_config`; the base file is never rewritten.
-- **Secrets**: `.env` at the repo root (loaded by a tiny built-in parser).
+- **Secrets**: the OS-native vault (`core/secrets.py` — Windows Credential
+  Manager / POSIX keyring / a DPAPI-sealed fallback file) with an opt-in
+  migration from `.env`; `.env` at the repo root still works and is loaded by a
+  tiny built-in parser. Known secret **values are redacted** (`***NAME***`)
+  from every tool result and log line.
 - **Resolution**: `$NAMMA_CONFIG` → `namma_agent/config.yaml`.
 
 The **assistant's display name** is the single source of truth in `assistant.name`
@@ -649,10 +653,18 @@ flowchart TB
 
 - One process. `python -m namma_agent` runs uvicorn in a daemon thread and opens a
   pywebview window; `--server` skips the window (headless, open a browser).
-- Background work runs on dedicated threads: the reminder runner, the Telegram long-poll,
-  and the Playwright browser (the sync API must live on one thread).
+- Background work runs on dedicated threads: the reminder runner, the routines and
+  **watcher** runners, the memory consolidator, the optional weekly **self-review**
+  runner, the comms bridges (Telegram long-poll, Discord/Slack sockets), and the
+  Playwright browser (the sync API must live on one thread).
 - State is the single SQLite file + `~/.namma_agent/` (user skills, user tools, browser
-  profile) + `data/` (reminders, tasks, uploads). No external services required.
+  profile) + `data/` (reminders, tasks, uploads, watchers, self-review snapshots).
+  No external services required — memory included (Engram is in-process, §8).
+- **Desktop integration (Phase 5):** a system-tray icon (pystray — show/hide window,
+  live gateway status, quit; `core/tray.py`), a start-on-login toggle (HKCU Run key /
+  XDG autostart; `core/autostart.py`, Settings → Behavior), and Windows toasts with
+  Reply/Open protocol actions (`core/notifications.py`). All optional and
+  degrade-gracefully: without pystray or a notifier the app runs exactly as before.
 
 ---
 
@@ -723,10 +735,17 @@ and the trade-off we accepted.
   prompt.
 - **Chosen:** in-process execution, with `destructive` tools gated by a per-turn approval
   round-trip (plus an opt-in auto-approve and a lab-mode gate for security tools).
-- **Why:** the assistant's value *is* acting on your machine; a sandbox would block the
-  point. Human-in-the-loop on the dangerous subset is the pragmatic safety boundary.
+- **Why:** the assistant's value *is* acting on your machine; a full filesystem jail
+  would block the point. Human-in-the-loop on the dangerous subset is the pragmatic
+  safety boundary.
 - **Trade-off:** trust in the model + the user. We mitigate with approval, audit logging,
   destructive classification, and security tools defaulting off.
+- **2026-07 update:** approval gained a *resource* sandbox underneath it — every
+  `run_shell` child runs in a Windows **Job Object** (memory cap, fork-bomb guard,
+  kill-on-close) or under POSIX rlimits, with an optional `confine_to` path tripwire
+  (`core/sandbox.py`). Not a jail; a blast-radius limiter. Approval decides *whether*
+  a command runs; the sandbox bounds *how much damage* a bad one can do. See §14 and
+  [SECURITY.md](SECURITY.md).
 
 ### 13.8 Single-file SQLite vs Postgres / a vector DB
 - **Options:** Postgres, a vector store (v1 used Chroma), or SQLite.
@@ -970,8 +989,64 @@ and the trade-off we accepted.
 
 ---
 
-## 14. Where to go next
+## 14. Trust, proactivity & self-improvement (the 2026-07 subsystems)
 
+Three subsystem groups landed after the sections above were written; each has its
+own deep-dive doc, so this is the architectural summary and the map.
+
+### 14.1 Trust model (STAND_OUT Phase 1)
+
+Full treatment: **[SECURITY.md](SECURITY.md)** — every claim there is observable
+live in Settings → System → **Security**.
+
+- **Per-channel sender trust** (`core/trust.py`): every inbound message carries
+  `owner`/`trusted`/`untrusted` from its bridge, riding the turn as a contextvar.
+  Untrusted turns get destructive tools stripped from the model's view *and*
+  force-declined at the gate, their text wrapped as data-not-instructions, and
+  their memory writes quarantined (stored `screen_status='untrusted'`, never
+  indexed).
+- **Injection screening** (`core/docscan.py`): uploads, `web_extract`/`web_crawl`
+  pages, search snippets, and RSS headlines are screened; flagged content is
+  wrapped + marked (`⚠ possible prompt injection`), never silently dropped.
+- **Shell sandbox** (`core/sandbox.py`): Job Objects on Windows, rlimits on
+  POSIX, optional `confine_to` tripwire (§13.7).
+- **Secrets vault + redaction** (`core/secrets.py`): OS-native storage, names-only
+  inventory API, values masked in every tool result and log line (§11).
+- **Decline auditing**: destructive calls that were *refused* (untrusted sender,
+  autonomous run, user said no) land in the audit table too — the trail shows
+  what was asked, not just what ran.
+
+### 14.2 Watchers — event-driven proactivity (Phase 2)
+
+`core/watchers.py`, store `data/watchers.json`, runner cloned from routines.
+A watcher = *trigger + condition + action*: file/glob changes, new email ids
+(Gmail query), web-page text-hash diffs, calendar windows — all cheap zero-LLM
+polls with per-type cadence. On a trigger, one no-tools model pass (the
+"only if it matters" gate) decides notify / act / ignore against the watcher's
+stated intent, with the change summary framed as untrusted data; actions reuse
+the routine turn (destructive tools always declined) and deliver over comms
+with a native-notification fallback. Chat tools (`create_watcher`, …) and the
+Settings → Capabilities → Watchers tab drive it.
+
+### 14.3 Weekly self-review — measured self-improvement (Phase 3)
+
+`core/self_review.py` (opt-in, off by default). Weekly (or on demand): offline
+heuristics mine the week's sessions (failed tool runs, corrections, retries,
+repeated workflows, unanswered endings); ONE model pass drafts ≤5 proposals
+(skills / routines / watchers / notes) that are validated against the real
+stores and queued as **proposals** — one-click accept/reject in Settings →
+Learning, accepted automations arrive disabled. A metrics spine snapshots
+recall@k (from the offline eval — see [BENCHMARKS.md](BENCHMARKS.md)),
+fact/entity counts, tool failure rate, and token spend into
+`data/self_review/`, so the "what I learned" report shows trend lines.
+
+---
+
+## 15. Where to go next
+
+- The trust model in full → [SECURITY.md](SECURITY.md)
+- Engram memory design → [MEMORY_SYSTEM_DESIGN.md](MEMORY_SYSTEM_DESIGN.md) ·
+  measured → [BENCHMARKS.md](BENCHMARKS.md)
 - Build your own capabilities → [EXTENDING.md](EXTENDING.md)
 - How skills work in depth → [SKILLS.md](SKILLS.md)
 - How the assistant rewrites itself → [SELF_MODIFICATION.md](SELF_MODIFICATION.md)

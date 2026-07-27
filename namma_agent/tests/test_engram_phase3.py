@@ -13,9 +13,8 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from namma_agent.core.engram import Engram
 from namma_agent.core.engram.consolidate import ConsolidationScheduler, Consolidator
-from namma_agent.core.engram.core_memory import BLOCK_BUDGET_CHARS, CoreMemory
+from namma_agent.core.engram.core_memory import CoreMemory
 from namma_agent.core.engram.store import EngramStore
 from namma_agent.core.engram.writer import EngramWriter
 from namma_agent.core.memory import Database
@@ -254,26 +253,35 @@ def test_daily_trigger_fires_once_per_day():
 
 def test_daily_not_fired_late_on_boot():
     """Booting after today's daily time must not trigger a catch-up run."""
-    late = datetime.now().replace(hour=0, minute=0)
     s = ConsolidationScheduler(_consolidator()[0], idle_minutes=0, daily_at="00:00")
     assert s.due(now=time.time(), local_now=datetime.now()) is None
 
 
 # ── time travel: as_of graph ──────────────────────────────────────────────────
 
-def test_graph_as_of_time_travels():
+def test_graph_as_of_time_travels(monkeypatch):
     _, store, *_ = _consolidator()
     iid = store.add_item("user works at ACME", subject="user",
                          predicate="works_at", object="ACME")
     store.add_relation("user", "works_at", "ACME", item_id=iid)
-    created = datetime.now(timezone.utc)
+    # Use the STORED creation instant, and expire at a frozen later clock —
+    # sampling wall-time between add and invalidate raced CI's coarse clock
+    # (create == as_of == expire in one tick → "never known" → flaky).
+    created = store.get_item(iid)["created_at"]
+    # The relation/entity rows are stamped moments AFTER the item — "during"
+    # must be at/after the LATEST stored stamp to see the whole edge.
+    during = store.conn.execute(
+        "SELECT MAX(created_at) FROM memory_relations").fetchone()[0]
+    during = max(created, during)
+    from namma_agent.core.engram import store as store_mod
+    later = (datetime.fromisoformat(during) + timedelta(seconds=5)).isoformat()
+    monkeypatch.setattr(store_mod, "_now", lambda: later)
 
-    store.invalidate(iid)                              # superseded now
+    store.invalidate(iid)                              # superseded at +5s
     assert store.graph()["edges"] == []                # live view: gone
 
-    during = (created + timedelta(seconds=0)).isoformat()
-    assert len(store.graph(as_of=during)["edges"]) == 1     # knew it then
-    before = (created - timedelta(days=1)).isoformat()
+    assert len(store.graph(as_of=during)["edges"]) == 1      # knew it then
+    before = (datetime.fromisoformat(created) - timedelta(days=1)).isoformat()
     g = store.graph(as_of=before)
     assert g["edges"] == [] and g["nodes"] == []             # didn't know it yet
 

@@ -1,0 +1,21 @@
+# Keep the build context tiny — the image copies namma_agent/ + deploy/ only.
+.git
+.venv
+data
+logs
+responses
+plan
+scratch
+landing
+website
+installer
+installers
+docs
+node_modules
+namma_agent/webui/node_modules
+namma_agent/webui/dist
+**/__pycache__
+*.pyc
+.env
+.env.*
+namma_agent/config.local.yaml

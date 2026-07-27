@@ -29,7 +29,8 @@ from namma_agent.core.interactive import record_artifact
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
-_MEDIA = Path("data/media")
+from namma_agent.config import data_dir as _data_dir
+_MEDIA = _data_dir() / "media"
 _TIMEOUT = 12
 
 

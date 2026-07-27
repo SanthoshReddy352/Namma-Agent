@@ -3,6 +3,41 @@
 All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Self-hosting (Phase 6)**: `server.host`/`server.port` bind config
+  (loopback default) with **access-token auth** on every API call + the
+  websocket when set (`NAMMA_AUTH_TOKEN`; UI unlock screen);
+  `NAMMA_DATA_DIR` relocates all runtime state; one-line VPS installer
+  (`deploy/install.sh`: swap file, systemd unit with `MemoryMax`, token
+  generation), `Dockerfile` + `docker-compose.yml` (non-root, healthcheck,
+  loopback publish), server-lite 1 GB config profile, and four beginner-proof
+  guides (`docs/DEPLOY.md`, `DEPLOY_ORACLE.md`, `DEPLOY_VPS.md`,
+  `GATEWAYS.md`); CI now builds and smoke-tests the server image.
+- **System tray icon** (Windows/Linux/macOS, pystray): show/hide window, live
+  gateway status, open-in-browser, quit. Optional — app runs without it.
+- **Start-on-login toggle** (Settings → Behavior): HKCU Run key on Windows,
+  XDG autostart on Linux. `GET/POST /api/autostart`.
+- **Windows toast actions**: notifications are real Action-Center toasts with
+  Reply / Open buttons that deep-link into the chat UI; balloon fallback kept.
+- **WSL awareness** in environment memory: distros in the HOST prompt block,
+  `/mnt/<drive>` ↔ `<Drive>:\` path translation, `\\wsl$\` passthrough.
+- **winget packaging**: `installers/winget/generate.py` emits the manifest set
+  for a published release (silent install via the installer's `--cli` mode).
+- **Docs site**: MkDocs Material + GitHub Pages workflow; new
+  `docs/WHY_NAMMA.md` and `docs/BENCHMARKS.md` (published memory benchmark,
+  offline recall@5 = 92%).
+
+### Fixed
+- `run_shell` no longer inherits stray virtualenv PATH entries (e.g. a leftover
+  Hermes venv shadowing `python`); the agent's own interpreter now resolves first.
+
+### Changed
+- README overhauled around the trust/measured-memory/watchers/Windows story
+  (Cognee-era content removed); ARCHITECTURE/COMMS/INSTALL docs updated to the
+  current architecture (trust model, watchers, self-review, Phase 5 polish).
+
 ## [2.2.8] — Namma Agent Installer
 
 ### Changed

@@ -21,6 +21,8 @@ google-genai             # provider.type: google
 
 # ── DESKTOP WINDOW (optional — native window instead of browser) ───
 pywebview                # `python -m namma_agent` opens a native window; falls back to browser
+pystray                  # system tray icon (show/hide window, gateway status, quit) — optional, app runs fine without it
+pillow                   # tray icon image loading (pystray's image backend)
 # pywebview needs an OS web engine to render in a native window:
 #   Windows: WebView2 runtime (preinstalled on Win10/11; else the Evergreen
 #            installer). The launcher forces the EdgeChromium engine so it's

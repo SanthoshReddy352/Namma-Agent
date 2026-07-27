@@ -368,5 +368,5 @@ window, `installer/` + `installers/native/build.py`) and **plain bootstrap scrip
 - [✗] **God Mode skill** — Hermes's GODMODE is an auto-jailbreak skill whose explicit purpose is to defeat a model's safety filters and "lock it jailbroken." Will not build or port. Everything else on the list stands.
 
 ## Open notes
-- Shell defaults to the **Hermes venv** (`AppData\Local\hermes\hermes-agent\venv`); use Namma's `.venv\Scripts\python.exe` for this project. Consider fixing PATH.
+- ~~Shell defaults to the **Hermes venv** (`AppData\Local\hermes\hermes-agent\venv`); use Namma's `.venv\Scripts\python.exe` for this project. Consider fixing PATH.~~ **Fixed 2026-07-19** (STAND_OUT Phase 5): spawned shells now get a sanitized PATH — stray `venv\Scripts`/`venv/bin` entries from other products are dropped and Namma's own interpreter dir is prepended, so `python` always resolves to the agent's venv (`core/shell_session.py:_shell_env`).
 - Verify asset licenses (sounds/icons) separately — MIT covers code, not necessarily bundled media.
