@@ -10,6 +10,7 @@ Subcommands (used by the installers):
   --chat                local CLI chat gateway (REPL in the terminal)
 """
 import sys
+from pathlib import Path
 
 # Re-exec into the project venv if started with an interpreter missing the deps
 # (e.g. system python). Must run before importing the app / provider stack.
@@ -30,8 +31,10 @@ if "--version" in sys.argv:
 if "--configure" in sys.argv:
     # Non-interactive provider config from a JSON file (the GUI installer writes one).
     import json
+
     from namma_agent.core.setup_wizard import configure_provider
-    data = json.load(open(_arg_after("--configure"), encoding="utf-8"))
+    with Path(_arg_after("--configure")).open(encoding="utf-8") as config_file:
+        data = json.load(config_file)
     configure_provider(data["type"], model=data.get("model"),
                        api_key=data.get("api_key"), base_url=data.get("base_url"))
     print("provider configured")
@@ -40,8 +43,10 @@ if "--configure" in sys.argv:
 if "--onboard" in sys.argv:
     # Non-interactive onboarding from a JSON file ({name, date_of_birth, ...}).
     import json
+
     from namma_agent.core.setup_wizard import save_onboarding
-    data = json.load(open(_arg_after("--onboard"), encoding="utf-8"))
+    with Path(_arg_after("--onboard")).open(encoding="utf-8") as onboarding_file:
+        data = json.load(onboarding_file)
     saved = save_onboarding(data)
     print(f"onboarding saved: {len(saved)} fact(s)")
     raise SystemExit(0)
@@ -71,6 +76,6 @@ if "--chat" in sys.argv:
                    name=assistant_name(_svc.config)).run_blocking()
     raise SystemExit(0)
 
-from namma_agent.app import main  # noqa: E402
+from namma_agent.app import main
 
 main(server_only="--server" in sys.argv)
