@@ -42,6 +42,7 @@ data/media/
 data/memory/
 data/projects/
 data/uploads/
+omnicloud.db
 # P2.2: canonical DB is data/namma_agent.db; core/data/ was the accidental duplicate
 core/data/
 models/

@@ -7,6 +7,7 @@ import QuizCard from "../components/QuizCard.jsx";
 import Timeline from "../components/Timeline.jsx";
 import Composer from "../components/Composer.jsx";
 import TodoPanel from "../components/TodoPanel.jsx";
+import SystemMonitor from "../components/SystemMonitor.jsx";
 
 const HELP_TEXT = `Commands you can type:
 - **/new** — start a new chat
@@ -187,6 +188,7 @@ export default function ChatView() {
             className={`grid place-items-center h-7 w-7 rounded-lg transition ${voiceOn ? "text-brand-deep" : "text-ink-faint dark:text-night-faint hover:text-ink dark:hover:text-night-ink"}`}>
             {voiceOn ? <SpeakerOnIcon /> : <SpeakerOffIcon />}
           </button>
+          <SystemMonitor />
           <span className={`h-2 w-2 rounded-full ${connected ? "bg-emerald-500" : "bg-red-400"}`} title={connected ? "connected" : "reconnecting…"} />
         </div>
       </header>
