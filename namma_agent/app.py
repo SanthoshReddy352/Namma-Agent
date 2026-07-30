@@ -16,7 +16,6 @@ import threading
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import Optional
 
 from namma_agent.config import load_config
 from namma_agent.core.logger import configure_logging, logger
@@ -28,7 +27,7 @@ from namma_agent.version import __version__
 # always targets loopback — it's what the local window/tray/toasts open, valid
 # regardless of the bind address.
 _HOST = "127.0.0.1"
-_PORT = int(os.environ.get("PORT", 8000))
+_PORT = int(os.environ.get("PORT", "8000"))
 _URL = f"http://127.0.0.1:{_PORT}"
 
 
@@ -146,7 +145,7 @@ def _ensure_linux_gui_backend() -> None:
     if platform.system() != "Linux":
         return
     with suppress(Exception):
-        import gi  # noqa: F401  (already importable — nothing to do)
+        import gi
         return
 
     ver = f"{sys.version_info.major}.{sys.version_info.minor}"
@@ -161,7 +160,7 @@ def _ensure_linux_gui_backend() -> None:
             continue
         sys.path.append(d)
         try:
-            import gi  # noqa: F811
+            import gi
             gi.require_version("Gtk", "3.0")  # forces the C extension to load
             logger.info("[app] bridged system PyGObject for native window (%s)", d)
             return
@@ -330,8 +329,8 @@ def _patch_pywebview_for_windows() -> None:
                 def _sync_title(_s, _a):
                     try:
                         self.form.Text = core.DocumentTitle
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except (AttributeError, TypeError, ValueError):
+                        logger.debug("[app] webview2 title sync skipped")
 
                 core.DocumentTitleChanged += _sync_title
         except Exception as exc:  # noqa: BLE001
@@ -364,8 +363,8 @@ def _centered_geometry(width: int, height: int) -> tuple[int | None, int | None,
             x = max(0, (sw - width) // 2)
             y = max(0, (sh - height) // 2)
             return x, y, width, height
-    except Exception:  # noqa: BLE001 — never let placement math break the launch
-        pass
+    except (AttributeError, IndexError, TypeError, ValueError):
+        logger.debug("[app] window centering fallback used")
     return None, None, width, height
 
 
@@ -445,12 +444,16 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
         with suppress(Exception):
             webview.windows.clear()  # drop any window from a failed prior attempt
         gx, gy, gw, gh = _centered_geometry(1100, 760)
-        win_kwargs = dict(
-            width=gw, height=gh, x=gx, y=gy, min_size=(720, 560),
+        win_kwargs = {
+            "width": gw,
+            "height": gh,
+            "x": gx,
+            "y": gy,
+            "min_size": (720, 560),
             # Match the app's default (light) shell so there's no jarring flash of
             # plain white before React paints. (webui body bg is #f6f8fc.)
-            background_color="#f6f8fc",
-        )
+            "background_color": "#f6f8fc",
+        }
         if healthy:
             window = webview.create_window(title, _URL, **win_kwargs)
         else:
@@ -482,7 +485,7 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
     _open_browser(server_thread)
 
 
-def _open_browser(server_thread: Optional[threading.Thread]) -> None:
+def _open_browser(server_thread: threading.Thread | None) -> None:
     import webbrowser
 
     webbrowser.open(_URL)

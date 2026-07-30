@@ -88,6 +88,7 @@ export const migrateSecrets = (scrub = false) =>
 // One glance at every background subsystem (memory writer, consolidator,
 // routines, background tasks, reminders, comms) + a 7-day token-usage summary.
 export const fetchStatus = () => j("/api/status");
+export const fetchSystemStatus = () => j('/api/system/status');
 export const listRoutines = () => j("/api/routines");
 export const toggleRoutine = (id, enabled) =>
   j("/api/routines/toggle", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, enabled }) });

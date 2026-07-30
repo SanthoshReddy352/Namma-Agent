@@ -1,0 +1,10 @@
+const os = require('os');
+const crypto = require('crypto');
+const hostname = os.hostname();
+const platform = os.platform();
+const arch = os.arch();
+console.log('hostname:', hostname);
+console.log('platform:', platform);
+console.log('arch:', arch);
+const fp = crypto.createHash('sha256').update(`${hostname}|${platform}|${arch}`).digest('hex');
+console.log('fingerprint:', fp);
