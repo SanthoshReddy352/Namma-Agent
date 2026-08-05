@@ -1,0 +1,16 @@
+flowchart TB
+    subgraph Proc["Single Python process"]
+        direction TB
+        UVI[uvicorn thread<br/>FastAPI + /ws]
+        SVCp[NammaAgentService singleton]
+        AGp[Agent]
+        DBp[(SQLite — single conn, locked)]
+        RRp[ReminderRunner thread]
+        CMp[Telegram poll thread]
+        BCp[Playwright worker thread]
+        UVI --- SVCp --- AGp --- DBp
+        SVCp --- RRp & CMp
+        AGp --- BCp
+    end
+    win[pywebview window] -->|http://127.0.0.1:8000| UVI
+    browser[any browser] -->|--server mode| UVI

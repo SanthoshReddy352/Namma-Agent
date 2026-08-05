@@ -1,0 +1,38 @@
+classDiagram
+    class Provider {
+        <<abstract>>
+        +name: str
+        +model: str
+        +generate(messages, tools, stream, on_token) LLMResponse
+        +is_available() bool
+        +test_connection() bool
+        #split_system(messages) tuple
+    }
+    class LLMResponse {
+        +content: str
+        +tool_calls: list~ToolCall~
+        +usage: dict
+        +has_tool_calls() bool
+    }
+    class ToolCall {
+        +id: str
+        +name: str
+        +args: dict
+    }
+    class AnthropicProvider
+    class OpenAIProvider
+    class GoogleProvider
+    class OpenAICompatProvider
+    class ProviderChain {
+        +providers: list~Provider~
+        +active() Provider
+    }
+    Provider <|-- AnthropicProvider
+    Provider <|-- OpenAIProvider
+    Provider <|-- GoogleProvider
+    Provider <|-- OpenAICompatProvider
+    Provider <|-- ProviderChain
+    OpenAIProvider --|> OpenAICompatProvider : thin subclass
+    Provider ..> LLMResponse : returns
+    LLMResponse o-- ToolCall
+    ProviderChain o-- Provider : primary + fallbacks

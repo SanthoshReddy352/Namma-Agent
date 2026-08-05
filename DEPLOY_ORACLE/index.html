@@ -1,0 +1,1653 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The trustworthy personal agent that measurably knows you — first-class on Windows. Self-hosted, any cloud brain, measured memory, event-driven watchers, and a trust model that's on by default.">
+      
+      
+      
+        <link rel="canonical" href="https://santhoshreddy352.github.io/Namma-Agent/DEPLOY_ORACLE/">
+      
+      
+        <link rel="prev" href="../DEPLOY/">
+      
+      
+        <link rel="next" href="../DEPLOY_VPS/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Oracle free tier ($0) - Namma Agent</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#your-own-always-on-agent-for-0-oracle-cloud-free-tier-from-zero" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Namma Agent" class="md-header__button md-logo" aria-label="Namma Agent" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Namma Agent
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Oracle free tier ($0)
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/SanthoshReddy352/Namma-Agent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SanthoshReddy352/Namma-Agent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Namma Agent" class="md-nav__button md-logo" aria-label="Namma Agent" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Namma Agent
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SanthoshReddy352/Namma-Agent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SanthoshReddy352/Namma-Agent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../WHY_NAMMA/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Namma
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust & security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Trust & security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Memory
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MEMORY_SYSTEM_DESIGN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design (Engram)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BENCHMARKS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../INSTALL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../COMMS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messaging channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-hosting
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Self-hosting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oracle free tier ($0)
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oracle free tier ($0)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#part-1-create-the-oracle-cloud-account-10-min" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 1 — Create the Oracle Cloud account (~10 min)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-2-create-the-vm-5-min-of-clicking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 2 — Create the VM (~5 min of clicking)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-3-connect-from-windows-3-min" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 3 — Connect from Windows (~3 min)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-4-install-namma-agent-one-paste-510-min" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 4 — Install Namma Agent (one paste, ~5–10 min)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-5-about-oracles-two-firewalls-read-probably-skip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 5 — About Oracle's TWO firewalls (read, probably skip)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-6-connect-telegram-5-min-phone-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 6 — Connect Telegram (~5 min, phone only)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-7-verify-celebrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 7 — Verify &amp; celebrate
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY_VPS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Any VPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GATEWAYS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateways on a server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SKILLS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../EXTENDING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extending
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PLUGINS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins (MCP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SELF_MODIFICATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-modification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Project
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#part-1-create-the-oracle-cloud-account-10-min" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 1 — Create the Oracle Cloud account (~10 min)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-2-create-the-vm-5-min-of-clicking" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 2 — Create the VM (~5 min of clicking)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-3-connect-from-windows-3-min" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 3 — Connect from Windows (~3 min)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-4-install-namma-agent-one-paste-510-min" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 4 — Install Namma Agent (one paste, ~5–10 min)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-5-about-oracles-two-firewalls-read-probably-skip" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 5 — About Oracle's TWO firewalls (read, probably skip)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-6-connect-telegram-5-min-phone-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 6 — Connect Telegram (~5 min, phone only)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#part-7-verify-celebrate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Part 7 — Verify &amp; celebrate
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/SanthoshReddy352/Namma-Agent/edit/main/docs/DEPLOY_ORACLE.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="your-own-always-on-agent-for-0-oracle-cloud-free-tier-from-zero">Your own always-on agent for $0 — Oracle Cloud free tier, from zero<a class="headerlink" href="#your-own-always-on-agent-for-0-oracle-cloud-free-tier-from-zero" title="Permanent link">&para;</a></h1>
+<p>This walkthrough assumes you have <strong>never opened a cloud console</strong>, don't know
+what SSH is, and use Windows at home. Follow it top to bottom (~30 minutes);
+at the end you'll message your agent from your phone and it will answer — from
+a little server that runs forever and costs nothing.</p>
+<blockquote>
+<p><strong>What you're making:</strong> Oracle gives everyone a small <strong>Always Free</strong> virtual
+machine — the <code>VM.Standard.E2.1.Micro</code> (1 GB RAM). <em>Always Free</em> means it
+never expires and never bills. We picked this shape on purpose over the
+bigger ARM one: the ARM shape is famously "out of capacity" almost
+everywhere, while the E2.1.Micro is actually obtainable — and Namma is sized
+to run healthy in its 1 GB (the AI brain is an API call, not a local model).</p>
+</blockquote>
+<hr />
+<h2 id="part-1-create-the-oracle-cloud-account-10-min">Part 1 — Create the Oracle Cloud account (~10 min)<a class="headerlink" href="#part-1-create-the-oracle-cloud-account-10-min" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Go to <strong>signup.oraclecloud.com</strong> and fill in the form.</li>
+<li><strong>Card verification:</strong> Oracle asks for a credit/debit card to prove you're
+   a person. <em>Always Free resources never charge it.</em> You may see a small
+   temporary hold (~$1) that disappears in a few days.</li>
+<li><strong>Home region — this matters.</strong> Pick the region <em>nearest to you</em> (e.g.
+   India → Hyderabad or Mumbai). <strong>It can never be changed later</strong>, and your
+   free VM must live in your home region.</li>
+<li><em>If you see "region at capacity" during signup → pick the next-nearest
+     region instead.</em></li>
+<li>Finish signup and sign in. You land on the <strong>Oracle Cloud console</strong> — the
+   web dashboard where you make cloud things.</li>
+</ol>
+<h2 id="part-2-create-the-vm-5-min-of-clicking">Part 2 — Create the VM (~5 min of clicking)<a class="headerlink" href="#part-2-create-the-vm-5-min-of-clicking" title="Permanent link">&para;</a></h2>
+<p>An <strong>instance</strong> is Oracle's word for a virtual machine — your server.</p>
+<ol>
+<li>In the console, click the <strong>☰ menu</strong> (top-left) → <strong>Compute</strong> → <strong>Instances</strong>.</li>
+<li>Click <strong>Create instance</strong>.</li>
+<li><strong>Name:</strong> <code>namma-agent</code> (anything works).</li>
+<li><strong>Image and shape</strong> — click <strong>Edit</strong>:</li>
+<li><strong>Image:</strong> click <strong>Change image</strong> → pick <strong>Ubuntu</strong> → <em>Canonical Ubuntu
+     22.04</em> (or newer, <em>not</em> "Minimal").</li>
+<li><strong>Shape:</strong> click <strong>Change shape</strong> → <strong>Specialty and previous generation</strong>
+     → tick <strong>VM.Standard.E2.1.Micro</strong> — it's labeled <strong>Always Free-eligible</strong>.</li>
+<li><em>If you don't see the Always Free label → you're in the wrong
+     region/compartment; use the region picker (top bar) to go to your home
+     region.</em></li>
+<li><strong>Networking:</strong> leave the defaults ("Create new virtual cloud network").
+   Make sure <strong>Assign a public IPv4 address</strong> is set to <strong>Yes</strong>.</li>
+<li><strong>Add SSH keys</strong> — SSH is the remote-control connection to your server, and
+   this key pair is its password:</li>
+<li>Choose <strong>Generate a key pair for me</strong> → click <strong>Download private key</strong>.</li>
+<li>The file (e.g. <code>ssh-key-2026-07-19.key</code>) lands in your <strong>Downloads</strong>.
+     <strong>Keep it — without it you can never log in.</strong></li>
+<li>Click <strong>Create</strong>. In ~1 minute the instance turns green (<strong>Running</strong>).</li>
+<li>Copy the <strong>Public IP address</strong> shown on the instance page — that's your
+   server's address on the internet. Write it down; the steps below call it
+   <code>YOUR_IP</code>.</li>
+<li><em>Stuck on Provisioning → wait 2 minutes and refresh. "Out of capacity"
+     (rare for this shape) → try again choosing a different Availability
+     Domain (AD-1/AD-2/AD-3) in step 4.</em></li>
+</ol>
+<h2 id="part-3-connect-from-windows-3-min">Part 3 — Connect from Windows (~3 min)<a class="headerlink" href="#part-3-connect-from-windows-3-min" title="Permanent link">&para;</a></h2>
+<p>Windows 10/11 has SSH <strong>built in</strong> — no PuTTY needed.</p>
+<ol>
+<li>Open <strong>PowerShell</strong> (Start menu → type "powershell" → Enter).</li>
+<li>Fix the key's permissions (Windows makes downloaded files too open; SSH
+   refuses keys other accounts could read — you WILL hit this, so do it now):</li>
+</ol>
+<div class="highlight"><pre><span></span><code><span class="n">icacls</span> <span class="s2">&quot;$env:USERPROFILE\Downloads\ssh-key-2026-07-19.key&quot;</span> <span class="p">/</span><span class="n">inheritance</span><span class="p">:</span><span class="nb">r </span><span class="p">/</span><span class="n">grant</span><span class="p">:</span><span class="nb">r </span><span class="s2">&quot;</span><span class="p">$(</span><span class="nv">$env:USERNAME</span><span class="p">)</span><span class="s2">:(R)&quot;</span>
+</code></pre></div>
+<p>(Use your real key filename. Expected output: <code>processed file: …</code>.)
+3. Connect (replace <code>YOUR_IP</code>):</p>
+<div class="highlight"><pre><span></span><code><span class="n">ssh</span> <span class="n">-i</span> <span class="s2">&quot;$env:USERPROFILE\Downloads\ssh-key-2026-07-19.key&quot;</span> <span class="n">ubuntu</span><span class="nv">@YOUR_IP</span>
+</code></pre></div>
+<ul>
+<li>First time it asks <em>"are you sure you want to continue connecting?"</em> —
+     type <code>yes</code> and Enter.</li>
+<li>You now see a <strong>prompt</strong> like <code>ubuntu@namma-agent:~$</code> — a command line
+     <em>on your server</em>. Everything you type here runs there, not on your PC.</li>
+<li><em>"Permission denied (publickey)" → wrong key file or you typed <code>root@</code>
+     instead of <code>ubuntu@</code>. "Connection timed out" → wrong IP, or the instance
+     isn't Running.</em></li>
+</ul>
+<h2 id="part-4-install-namma-agent-one-paste-510-min">Part 4 — Install Namma Agent (one paste, ~5–10 min)<a class="headerlink" href="#part-4-install-namma-agent-one-paste-510-min" title="Permanent link">&para;</a></h2>
+<p>Paste this at the server prompt and press Enter:</p>
+<div class="highlight"><pre><span></span><code>curl<span class="w"> </span>-fsSL<span class="w"> </span>https://raw.githubusercontent.com/SanthoshReddy352/Namma-Agent/main/deploy/install.sh<span class="w"> </span><span class="p">|</span><span class="w"> </span>sudo<span class="w"> </span>bash
+</code></pre></div>
+<p>What you'll see, step by step (it prints <code>== 1/10 …</code> through <code>== 10/10 …</code>):
+system packages, then <strong>a 2 GB swap file</strong> (borrowed disk that acts as
+overflow memory — the 1 GB box's survival step; the UI build leans on it),
+the code, Python packages, <strong>the memory embedding model</strong> (Ollama + the 46 MB
+<code>all-minilm</code> — this is what lets the agent recall things you phrase
+differently later; it's installed for you and the install stops if it fails),
+the web UI build (the slowest part — a few minutes; it's fine), a
+memory-friendly config profile, a generated <strong>access token</strong>, and a <strong>systemd
+service</strong> (Ubuntu's "keep this program running and restart it after reboots"
+manager).</p>
+<p>At the end it prints:</p>
+<div class="highlight"><pre><span></span><code>  Access token (also in /opt/namma-agent/.env — you need it if you expose the web UI):
+      &lt;long random string&gt;
+</code></pre></div>
+<p><strong>Copy that token somewhere safe</strong> (you only need it if you later open the
+web UI to the internet — the phone-messaging path below doesn't use it).</p>
+<p>Then add your AI provider key:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>nano<span class="w"> </span>/opt/namma-agent/.env
+</code></pre></div>
+<p>Add a line like <code>ANTHROPIC_API_KEY=sk-ant-...</code> (or your OpenAI/Google key —
+whichever provider <code>namma_agent/config.yaml</code> names). Save with <strong>Ctrl+O</strong>,
+Enter, exit with <strong>Ctrl+X</strong>, then:</p>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>systemctl<span class="w"> </span>restart<span class="w"> </span>namma-agent
+</code></pre></div>
+<h2 id="part-5-about-oracles-two-firewalls-read-probably-skip">Part 5 — About Oracle's TWO firewalls (read, probably skip)<a class="headerlink" href="#part-5-about-oracles-two-firewalls-read-probably-skip" title="Permanent link">&para;</a></h2>
+<p>A <strong>firewall</strong> decides which network doors (ports) of your server are open.
+Oracle has <strong>two</strong>: the <strong>Security List</strong> in the console (cloud-side) <em>and</em>
+<code>iptables</code> on the box itself (Ubuntu-side). Both must open a port before the
+internet can reach it.</p>
+<p><strong>You almost certainly need NEITHER.</strong> The recommended setup — Telegram, next
+part — <em>dials out</em> from the server, so <strong>no ports open at all</strong>: nothing
+exposed, nothing to attack. Only if you someday want the web UI over the
+internet do you open port 8000 in <em>both</em> layers — and set the access token
+first, and prefer an SSH tunnel instead:
+<code>ssh -i &lt;key&gt; -L 8000:localhost:8000 ubuntu@YOUR_IP</code> → open
+http://localhost:8000 on your PC (no open ports, full UI, the token unlock
+screen appears once).</p>
+<h2 id="part-6-connect-telegram-5-min-phone-only">Part 6 — Connect Telegram (~5 min, phone only)<a class="headerlink" href="#part-6-connect-telegram-5-min-phone-only" title="Permanent link">&para;</a></h2>
+<p>Full details in <a href="../GATEWAYS/">GATEWAYS.md</a>; the short version:</p>
+<ol>
+<li>In Telegram, search <strong>@BotFather</strong> → send <code>/newbot</code> → pick a name and a
+   username. BotFather replies with a <strong>bot token</strong> (<code>123456:ABC-...</code>).</li>
+<li>Search <strong>@userinfobot</strong> → press Start → it replies with your numeric
+   <strong>chat id</strong>.</li>
+<li>On the server:</li>
+</ol>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>nano<span class="w"> </span>/opt/namma-agent/.env
+</code></pre></div>
+<p>add:</p>
+<div class="highlight"><pre><span></span><code>NAMMA_TELEGRAM_TOKEN=123456:ABC-your-token
+NAMMA_TELEGRAM_CHAT_ID=your-chat-id
+</code></pre></div>
+<p>save, exit, then <code>sudo systemctl restart namma-agent</code>.
+4. Message your bot on Telegram: <em>"hello — what can you do?"</em>
+   <strong>It answers. That's your agent, always on, $0/month.</strong></p>
+<p>Because the bridge is pinned to <em>your</em> chat id, it runs at <code>owner</code> trust —
+see <a href="../COMMS/#trust-levels--who-is-allowed-to-do-what">COMMS.md</a>.</p>
+<h2 id="part-7-verify-celebrate">Part 7 — Verify &amp; celebrate<a class="headerlink" href="#part-7-verify-celebrate" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code>sudo<span class="w"> </span>systemctl<span class="w"> </span>status<span class="w"> </span>namma-agent<span class="w">     </span><span class="c1"># expect: Active: active (running)</span>
+curl<span class="w"> </span>-s<span class="w"> </span>http://127.0.0.1:8000/api/health<span class="w">   </span><span class="c1"># expect: {&quot;ok&quot;:true}</span>
+sudo<span class="w"> </span>reboot<span class="w">                           </span><span class="c1"># the acid test</span>
+</code></pre></div>
+<p>The reboot kicks you off SSH — wait ~2 minutes, message the bot again: it
+answers <strong>by itself</strong>, because the service auto-starts. Done.</p>
+<p><strong>Keep-alive facts:</strong> the E2.1.Micro is <em>not</em> idle-reclaimed (that's the ARM
+shape's rule) — it just runs. The free network allowance (10 TB/month) is
+thousands of times more than a chat workload uses.</p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Symptom</th>
+<th>Likely cause → fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"Out of capacity" creating the VM</td>
+<td>Rare for E2.1.Micro. Try another Availability Domain, or later in the day.</td>
+</tr>
+<tr>
+<td>SSH times out</td>
+<td>Wrong IP, or instance not Running. Check the instance page.</td>
+</tr>
+<tr>
+<td>SSH "permission denied"</td>
+<td>Key permissions (Part 3 step 2) or <code>root@</code> instead of <code>ubuntu@</code>.</td>
+</tr>
+<tr>
+<td>Bot silent</td>
+<td>Token/chat-id typo in <code>.env</code> (no quotes, no spaces) → fix, <code>sudo systemctl restart namma-agent</code>. Check <code>sudo journalctl -u namma-agent -n 50</code>.</td>
+</tr>
+<tr>
+<td>Bot replies "provider error"</td>
+<td>Missing/wrong AI provider key in <code>.env</code>.</td>
+</tr>
+<tr>
+<td>Service dead after a busy day / OOM in logs</td>
+<td>Swap missing (<code>swapon --show</code> empty?) → re-run the installer; it re-creates it.</td>
+</tr>
+<tr>
+<td>Web UI unreachable from your PC</td>
+<td>That's the default (nothing exposed). Use the SSH tunnel from Part 5.</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../DEPLOY/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Overview">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Overview
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../DEPLOY_VPS/" class="md-footer__link md-footer__link--next" aria-label="Next: Any VPS">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Any VPS
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,3595 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The trustworthy personal agent that measurably knows you — first-class on Windows. Self-hosted, any cloud brain, measured memory, event-driven watchers, and a trust model that's on by default.">
+      
+      
+      
+        <link rel="canonical" href="https://santhoshreddy352.github.io/Namma-Agent/ARCHITECTURE/">
+      
+      
+        <link rel="prev" href="../GATEWAYS/">
+      
+      
+        <link rel="next" href="../SKILLS/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Architecture - Namma Agent</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#namma-agent-system-architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Namma Agent" class="md-header__button md-logo" aria-label="Namma Agent" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Namma Agent
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/SanthoshReddy352/Namma-Agent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SanthoshReddy352/Namma-Agent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Namma Agent" class="md-nav__button md-logo" aria-label="Namma Agent" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Namma Agent
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SanthoshReddy352/Namma-Agent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SanthoshReddy352/Namma-Agent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../WHY_NAMMA/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Namma
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust & security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Trust & security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Memory
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MEMORY_SYSTEM_DESIGN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design (Engram)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BENCHMARKS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../INSTALL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../COMMS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messaging channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-hosting
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Self-hosting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY_ORACLE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oracle free tier ($0)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY_VPS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Any VPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GATEWAYS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateways on a server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-design-philosophy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Design philosophy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-system-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. System context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-component-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Component architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-request-lifecycle-one-turn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The request lifecycle — one turn
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-the-agent-loop-in-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. The agent loop in detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-provider-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Provider layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-tool-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Tool system
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-memory-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Memory model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Memory model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-project-knowledge-bases-multi-document-rag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 Project knowledge bases (multi-document RAG)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-the-learning-room-a-scoped-teacher-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 The Learning Room (a scoped teacher agent)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-deterministic-memory-auto-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.3 Deterministic memory auto-capture
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-skills-procedural-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Skills (procedural memory)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Skills (procedural memory)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-shareable-packs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Shareable packs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-document-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Document conversion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-server-events-and-voice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Server, events, and voice
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-configuration-the-assistant-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Configuration &amp; the assistant name
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-process-deployment-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Process &amp; deployment model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-technical-decisions-options-choices-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Technical decisions — options, choices, and why
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Technical decisions — options, choices, and why">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#131-cloud-only-vs-local-first-with-an-intent-pipeline-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.1 Cloud-only vs local-first with an intent pipeline (v1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#132-single-agent-loop-vs-reactplanner-frameworks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.2 Single agent loop vs ReAct/planner frameworks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#133-native-tool-calling-vs-text-parsed-react" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.3 Native tool calling vs text-parsed ReAct
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#134-provider-abstraction-openai-compat-vs-an-sdk-per-provider-a-meta-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.4 Provider abstraction + OpenAI-compat vs an SDK per provider / a meta-SDK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#135-fallback-chain-vs-single-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.5 Fallback chain vs single provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#136-json-schema-tools-file-auto-discovery-vs-a-pluginentry-point-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.6 JSON-Schema tools + file auto-discovery vs a plugin/entry-point system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#137-approval-gating-vs-sandboxing-tool-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.7 Approval gating vs sandboxing tool execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#138-single-file-sqlite-vs-postgres-a-vector-db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.8 Single-file SQLite vs Postgres / a vector DB
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#139-fts5-keyword-recall-vs-embeddingvector-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.9 FTS5 keyword recall vs embedding/vector search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1310-curated-prose-notes-vs-pure-automatic-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.10 Curated prose notes vs pure automatic memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1311-skills-as-skillmd-folders-vs-hardcoded-workflows-fine-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.11 Skills as SKILL.md folders vs hardcoded workflows / fine-tuning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1312-self-authoring-tools-in-process-vs-sandboxed-plugins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.12 Self-authoring tools in-process vs sandboxed plugins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1313-browser-web-speech-api-vs-server-side-piper-whisper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.13 Browser Web Speech API vs server-side Piper / Whisper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1314-websocket-streaming-vs-sse-long-polling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.14 WebSocket streaming vs SSE / long-polling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1315-react-spa-pywebview-vs-electron-tauri-server-rendered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.15 React SPA + pywebview vs Electron / Tauri / server-rendered
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1316-playwright-real-browser-control-vs-headless-the-webbrowser-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.16 Playwright real-browser control vs headless / the webbrowser module
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1317-a-hand-written-mcp-stdio-client-vs-the-official-mcp-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.17 A hand-written MCP stdio client vs the official MCP SDK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1318-config-base-local-overlay-vs-a-single-mutable-file-or-env-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.18 Config base + local overlay vs a single mutable file or env-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1319-configurable-name-via-name-placeholder-vs-a-templating-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.19 Configurable name via {name} placeholder vs a templating engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1320-delegate_task-sub-agent-vs-a-multi-agent-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.20 delegate_task sub-agent vs a multi-agent framework
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1321-project-rag-on-fts5bm25-vs-an-embedding-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.21 Project RAG on FTS5/BM25 vs an embedding store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1322-document-injection-screening-a-data-not-instructions-guard-defense-in-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.22 Document injection screening + a data-not-instructions guard (defense in depth)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1323-the-learning-room-as-a-scoped-teacher-agent-vs-a-separate-app-or-a-chat-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.23 The Learning Room as a scoped teacher agent vs a separate app or a chat mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1324-conversational-assessment-vs-multiple-choice-quiz-cards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.24 Conversational assessment vs multiple-choice quiz cards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1325-module-thread-isolation-the-confidence-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.25 Module-thread isolation &amp; the confidence gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1326-deterministic-memory-capture-vs-model-discretion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.26 Deterministic memory capture vs model discretion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1327-server-side-diagrams-simulations-vs-client-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.27 Server-side diagrams &amp; simulations vs client rendering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1328-document-conversion-pandoc-with-self-contained-fallbacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.28 Document conversion: pandoc with self-contained fallbacks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1329-shareable-packs-with-asymmetric-trust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.29 Shareable packs with asymmetric trust
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1330-per-context-tool-scoping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.30 Per-context tool scoping
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-trust-proactivity-self-improvement-the-2026-07-subsystems" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Trust, proactivity &amp; self-improvement (the 2026-07 subsystems)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="14. Trust, proactivity &amp; self-improvement (the 2026-07 subsystems)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#141-trust-model-stand_out-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14.1 Trust model (STAND_OUT Phase 1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#142-watchers-event-driven-proactivity-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14.2 Watchers — event-driven proactivity (Phase 2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#143-weekly-self-review-measured-self-improvement-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14.3 Weekly self-review — measured self-improvement (Phase 3)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SKILLS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../EXTENDING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extending
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PLUGINS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins (MCP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SELF_MODIFICATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-modification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Project
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-design-philosophy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Design philosophy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-system-context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. System context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-component-architecture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Component architecture
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-the-request-lifecycle-one-turn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. The request lifecycle — one turn
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-the-agent-loop-in-detail" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. The agent loop in detail
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#6-provider-layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. Provider layer
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#7-tool-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. Tool system
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#8-memory-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8. Memory model
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="8. Memory model">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#81-project-knowledge-bases-multi-document-rag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.1 Project knowledge bases (multi-document RAG)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#82-the-learning-room-a-scoped-teacher-agent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.2 The Learning Room (a scoped teacher agent)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#83-deterministic-memory-auto-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        8.3 Deterministic memory auto-capture
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#9-skills-procedural-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9. Skills (procedural memory)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="9. Skills (procedural memory)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#91-shareable-packs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.1 Shareable packs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#92-document-conversion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        9.2 Document conversion
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#10-server-events-and-voice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        10. Server, events, and voice
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#11-configuration-the-assistant-name" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        11. Configuration &amp; the assistant name
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#12-process-deployment-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        12. Process &amp; deployment model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#13-technical-decisions-options-choices-and-why" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13. Technical decisions — options, choices, and why
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="13. Technical decisions — options, choices, and why">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#131-cloud-only-vs-local-first-with-an-intent-pipeline-v1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.1 Cloud-only vs local-first with an intent pipeline (v1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#132-single-agent-loop-vs-reactplanner-frameworks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.2 Single agent loop vs ReAct/planner frameworks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#133-native-tool-calling-vs-text-parsed-react" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.3 Native tool calling vs text-parsed ReAct
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#134-provider-abstraction-openai-compat-vs-an-sdk-per-provider-a-meta-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.4 Provider abstraction + OpenAI-compat vs an SDK per provider / a meta-SDK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#135-fallback-chain-vs-single-provider" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.5 Fallback chain vs single provider
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#136-json-schema-tools-file-auto-discovery-vs-a-pluginentry-point-system" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.6 JSON-Schema tools + file auto-discovery vs a plugin/entry-point system
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#137-approval-gating-vs-sandboxing-tool-execution" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.7 Approval gating vs sandboxing tool execution
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#138-single-file-sqlite-vs-postgres-a-vector-db" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.8 Single-file SQLite vs Postgres / a vector DB
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#139-fts5-keyword-recall-vs-embeddingvector-search" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.9 FTS5 keyword recall vs embedding/vector search
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1310-curated-prose-notes-vs-pure-automatic-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.10 Curated prose notes vs pure automatic memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1311-skills-as-skillmd-folders-vs-hardcoded-workflows-fine-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.11 Skills as SKILL.md folders vs hardcoded workflows / fine-tuning
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1312-self-authoring-tools-in-process-vs-sandboxed-plugins" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.12 Self-authoring tools in-process vs sandboxed plugins
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1313-browser-web-speech-api-vs-server-side-piper-whisper" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.13 Browser Web Speech API vs server-side Piper / Whisper
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1314-websocket-streaming-vs-sse-long-polling" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.14 WebSocket streaming vs SSE / long-polling
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1315-react-spa-pywebview-vs-electron-tauri-server-rendered" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.15 React SPA + pywebview vs Electron / Tauri / server-rendered
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1316-playwright-real-browser-control-vs-headless-the-webbrowser-module" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.16 Playwright real-browser control vs headless / the webbrowser module
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1317-a-hand-written-mcp-stdio-client-vs-the-official-mcp-sdk" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.17 A hand-written MCP stdio client vs the official MCP SDK
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1318-config-base-local-overlay-vs-a-single-mutable-file-or-env-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.18 Config base + local overlay vs a single mutable file or env-only
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1319-configurable-name-via-name-placeholder-vs-a-templating-engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.19 Configurable name via {name} placeholder vs a templating engine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1320-delegate_task-sub-agent-vs-a-multi-agent-framework" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.20 delegate_task sub-agent vs a multi-agent framework
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1321-project-rag-on-fts5bm25-vs-an-embedding-store" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.21 Project RAG on FTS5/BM25 vs an embedding store
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1322-document-injection-screening-a-data-not-instructions-guard-defense-in-depth" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.22 Document injection screening + a data-not-instructions guard (defense in depth)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1323-the-learning-room-as-a-scoped-teacher-agent-vs-a-separate-app-or-a-chat-mode" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.23 The Learning Room as a scoped teacher agent vs a separate app or a chat mode
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1324-conversational-assessment-vs-multiple-choice-quiz-cards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.24 Conversational assessment vs multiple-choice quiz cards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1325-module-thread-isolation-the-confidence-gate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.25 Module-thread isolation &amp; the confidence gate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1326-deterministic-memory-capture-vs-model-discretion" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.26 Deterministic memory capture vs model discretion
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1327-server-side-diagrams-simulations-vs-client-rendering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.27 Server-side diagrams &amp; simulations vs client rendering
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1328-document-conversion-pandoc-with-self-contained-fallbacks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.28 Document conversion: pandoc with self-contained fallbacks
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1329-shareable-packs-with-asymmetric-trust" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.29 Shareable packs with asymmetric trust
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#1330-per-context-tool-scoping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        13.30 Per-context tool scoping
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#14-trust-proactivity-self-improvement-the-2026-07-subsystems" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14. Trust, proactivity &amp; self-improvement (the 2026-07 subsystems)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="14. Trust, proactivity &amp; self-improvement (the 2026-07 subsystems)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#141-trust-model-stand_out-phase-1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14.1 Trust model (STAND_OUT Phase 1)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#142-watchers-event-driven-proactivity-phase-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14.2 Watchers — event-driven proactivity (Phase 2)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#143-weekly-self-review-measured-self-improvement-phase-3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        14.3 Weekly self-review — measured self-improvement (Phase 3)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#15-where-to-go-next" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        15. Where to go next
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/SanthoshReddy352/Namma-Agent/edit/main/docs/ARCHITECTURE.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="namma-agent-system-architecture">Namma Agent — System Architecture<a class="headerlink" href="#namma-agent-system-architecture" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>This is the canonical, deep-dive description of how Namma Agent actually works, end
+to end. It covers every subsystem, the request lifecycle, the data model, and —
+in the final third — <strong>every significant technical decision</strong>: what the options
+were, what we chose, and why. Each UML diagram is a <strong>rendered PNG</strong> (in
+<a href="diagrams/"><code>docs/diagrams/</code></a>) so it shows in any Markdown viewer; the editable
+Mermaid source is kept in a collapsible block beneath each figure.</p>
+</blockquote>
+<p>Namma Agent is a <strong>cloud-only personal AI assistant</strong>. The "brain" is a single LLM
+API call; everything else is plumbing around that call: a tool registry, a memory
+store, a skill system, project document RAG, a Learning Room, a streaming web UI,
+and a few background bridges. The whole application is the Python package
+<a href="../namma_agent"><code>namma_agent/</code></a>. The assistant's display name is configurable — see
+<a href="#11-configuration--the-assistant-name">Configuration</a>.</p>
+<blockquote>
+<p><strong>July 2026 update.</strong> Since this document's diagrams were rendered, the memory
+layer was replaced by <strong>Engram</strong> (native in-process memory —
+<a href="../MEMORY_SYSTEM_DESIGN/">MEMORY_SYSTEM_DESIGN.md</a> is the canonical doc) and a
+wave of agent-loop upgrades landed. The prose below is still accurate for the
+core loop/server/UI; the newer subsystems in brief:</p>
+<ul>
+<li><strong>Rolling context compaction</strong> (<code>core/agent.py</code>, <code>sessions.compact_*</code>) — long
+  chats keep an LLM-maintained summary of turns evicted from the history window,
+  injected into every prompt so the middle of a conversation is never lost.</li>
+<li><strong>Self-verification nudge</strong> (<code>core/agent.py</code>) — a turn that wrote files and
+  tries to answer without any check afterwards gets one <code>[system]</code> nudge to
+  verify first (<code>conversation.verify_after_writes</code>).</li>
+<li><strong>Proactive routines</strong> (<code>core/routines.py</code>, <code>data/routines.json</code>) — standing
+  scheduled agent runs ("morning brief") delivered over comms channels or a
+  desktop notification; managed by chat tools, <code>/api/routines*</code>, and
+  Settings → Routines. Scheduled runs always decline destructive tools.</li>
+<li><strong>Background tasks + scoped sub-agents</strong> (<code>core/builtins.py</code>) —
+  <code>background_task</code> runs a sub-agent on a detached thread (comms ping on
+  completion; results persist to <code>data/background_tasks.json</code> across restarts);
+  sub-agents never see destructive tools.</li>
+<li><strong>Embeddings-backed recall</strong> (<code>core/engram/embeddings.py</code>) — optional
+  <code>memory.embeddings</code> endpoint adds a vector channel to fused recall; without
+  it, recall stays FTS5/BM25-only exactly as described in §13.9.</li>
+<li><strong>Observability</strong> — <code>GET /api/status</code> + Settings → Status show every
+  background subsystem (memory writer, consolidator, compactor, routines,
+  background tasks, reminders, comms) plus a cumulative token-usage view
+  (<code>Database.usage_stats</code>).</li>
+<li><strong>Hands-free voice</strong> (<code>webui/src/handsfree.js</code>) — wake-word listening via the
+  browser's Web Speech API; <strong>cross-chat search</strong> — <code>GET /api/search</code> + the
+  sidebar search box.</li>
+</ul>
+</blockquote>
+<hr />
+<h2 id="1-design-philosophy">1. Design philosophy<a class="headerlink" href="#1-design-philosophy" title="Permanent link">&para;</a></h2>
+<p>Three principles shape the whole system:</p>
+<ol>
+<li><strong>One loop, not a pipeline.</strong> A turn is <code>generate → run tools → loop → answer</code>.
+   There is no intent classifier, no planner, no routing graph. The model decides
+   what to do by calling tools natively. (v1 had all three of those layers; see
+   <a href="#131-cloud-only-vs-local-first-with-an-intent-pipeline-v1">§13</a>.)</li>
+<li><strong>The model narrates, the browser speaks, the server stays stateless-ish.</strong>
+   Progress is emitted as events; audio happens in the browser; durable state is a
+   single SQLite file.</li>
+<li><strong>Everything is provider-agnostic and degrades gracefully.</strong> Swap Anthropic for
+   Ollama by editing one config key. Missing a system binary (e.g. <code>nmap</code>)? The
+   tool returns a clear "install X" message instead of crashing.</li>
+</ol>
+<hr />
+<h2 id="2-system-context">2. System context<a class="headerlink" href="#2-system-context" title="Permanent link">&para;</a></h2>
+<p><img alt="System context" src="../diagrams/01-system-context.png" /></p>
+<p><sub><strong>Figure 1 — System context.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>flowchart TB
+    user([User]) --&gt;|chat / voice / attach| UI[Web UI&lt;br/&gt;React SPA]
+    phone([Phone]) --&gt;|Telegram/Discord| Bridges
+    UI &lt;--&gt;|WebSocket + REST| Server[FastAPI server]
+    Server --&gt; Service[NammaAgentService]
+    Bridges[Comms bridges] --&gt; Service
+    Service --&gt; Agent[Agent loop]
+    Agent --&gt;|generate| LLM[(LLM provider&lt;br/&gt;Anthropic / OpenAI / Google /&lt;br/&gt;Ollama / LM Studio / custom)]
+    Agent --&gt; Tools[Tool registry ~85 tools]
+    Agent --&gt; Mem[(SQLite memory)]
+    Tools --&gt; OS[OS / shell / files]
+    Tools --&gt; Web[Web / browser / APIs]
+    Tools --&gt; MCP[MCP servers]
+    Service -.speak events.-&gt; UI
+    UI -.Web Speech API.-&gt; Speaker([🔊 / 🎤 browser voice])
+
+    classDef ext fill:#eee,stroke:#999;
+    class LLM,OS,Web,MCP,Speaker,phone,user ext;
+</code></pre></div>
+
+</details>
+
+<p>The user talks to a React single-page app over a WebSocket. The app reaches a
+<code>NammaAgentService</code>, which owns one <code>Agent</code>. The agent calls an LLM provider and a set
+of tools, persists to SQLite, and streams events back. The same service is also
+driven by the Telegram/Discord bridges, so you can chat with your assistant from your phone.</p>
+<hr />
+<h2 id="3-component-architecture">3. Component architecture<a class="headerlink" href="#3-component-architecture" title="Permanent link">&para;</a></h2>
+<p><img alt="Component architecture" src="../diagrams/02-component-architecture.png" /></p>
+<p><sub><strong>Figure 2 — Component architecture.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>flowchart TB
+    subgraph Frontend[&quot;Frontend — namma_agent/webui (React + Vite + Tailwind)&quot;]
+        App[App.jsx] --- Hook[useNammaAgent hook&lt;br/&gt;WS client]
+        App --- Composer &amp; Sidebar &amp; Settings &amp; Message
+        Hook -. Web Speech API .- Voice[ReadAloud / mic dictation]
+    end
+
+    subgraph Backend[&quot;Backend — namma_agent/&quot;]
+        API[server/api.py&lt;br/&gt;FastAPI + /ws] --&gt; SVC[service.py&lt;br/&gt;NammaAgentService]
+        SVC --&gt; AG[core/agent.py&lt;br/&gt;Agent]
+        SVC --&gt; NAR[core/narration.py]
+        SVC --&gt; EV[core/events.py&lt;br/&gt;fanout]
+        AG --&gt; PROV[core/providers/*&lt;br/&gt;Provider + ProviderChain]
+        AG --&gt; REG[core/tools.py&lt;br/&gt;ToolRegistry]
+        AG --&gt; DB[core/memory.py&lt;br/&gt;Database SQLite]
+        AG --&gt; PERS[core/persona.py]
+        AG --&gt; SK[core/skills.py&lt;br/&gt;SkillStore]
+        REG --&gt; TOOLS[tools/*.py&lt;br/&gt;auto-discovered]
+        SVC --&gt; RR[core/reminder_runner.py]
+        SVC --&gt; CM[comms/*&lt;br/&gt;Telegram/Discord]
+        SVC --&gt; MC[mcp/*&lt;br/&gt;MCP client]
+        TOOLS --&gt; BC[core/browser_controller.py&lt;br/&gt;Playwright]
+    end
+
+    Hook &lt;--&gt;|JSON over WebSocket| API
+    App --&gt;|REST| API
+</code></pre></div>
+
+</details>
+
+<table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>Files</th>
+<th>Responsibility</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Launcher</strong></td>
+<td><code>app.py</code>, <code>__main__.py</code></td>
+<td>Start uvicorn in a thread; open a pywebview window (or browser).</td>
+</tr>
+<tr>
+<td><strong>Server</strong></td>
+<td><code>server/api.py</code></td>
+<td>FastAPI REST + the <code>/ws</code> WebSocket turn channel; serves the built UI.</td>
+</tr>
+<tr>
+<td><strong>Service</strong></td>
+<td><code>service.py</code></td>
+<td>Wires provider + tools + memory + agent + narration + bridges. One per process.</td>
+</tr>
+<tr>
+<td><strong>Agent</strong></td>
+<td><code>core/agent.py</code></td>
+<td>The single turn loop.</td>
+</tr>
+<tr>
+<td><strong>Providers</strong></td>
+<td><code>core/providers/</code></td>
+<td>Normalize every LLM behind one <code>Provider</code> interface + fallback chain.</td>
+</tr>
+<tr>
+<td><strong>Tools</strong></td>
+<td><code>core/tools.py</code>, <code>tools/</code></td>
+<td>Registry + ~85 tools (auto-discovered modules + db/provider-backed builtins).</td>
+</tr>
+<tr>
+<td><strong>Memory</strong></td>
+<td><code>core/memory.py</code></td>
+<td>SQLite: sessions, turns, facts (+FTS5), audit.</td>
+</tr>
+<tr>
+<td><strong>Persona/Skills</strong></td>
+<td><code>core/persona.py</code>, <code>core/skills.py</code></td>
+<td>System prompt; procedural memory.</td>
+</tr>
+<tr>
+<td><strong>Events/Narration</strong></td>
+<td><code>core/events.py</code>, <code>core/narration.py</code></td>
+<td>Pub/sub fanout; spoken progress lines.</td>
+</tr>
+<tr>
+<td><strong>Bridges</strong></td>
+<td><code>comms/</code>, <code>mcp/</code>, <code>core/reminder_runner.py</code></td>
+<td>Messaging, MCP tools, scheduled reminders.</td>
+</tr>
+<tr>
+<td><strong>Frontend</strong></td>
+<td><code>webui/</code></td>
+<td>React chat with streaming, timeline, voice, settings.</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-the-request-lifecycle-one-turn">4. The request lifecycle — one turn<a class="headerlink" href="#4-the-request-lifecycle-one-turn" title="Permanent link">&para;</a></h2>
+<p>This is the most important sequence in the system: what happens from a keystroke to
+a streamed answer.</p>
+<p><img alt="Request lifecycle — one turn" src="../diagrams/03-request-lifecycle.png" /></p>
+<p><sub><strong>Figure 3 — Request lifecycle — one turn.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>sequenceDiagram
+    autonumber
+    participant U as User
+    participant UI as React UI (useNammaAgent)
+    participant WS as FastAPI /ws
+    participant SV as NammaAgentService
+    participant AG as Agent
+    participant P as Provider
+    participant T as ToolRegistry
+    participant DB as SQLite
+
+    U-&gt;&gt;UI: type message, Enter
+    UI-&gt;&gt;WS: {type:&quot;user_input&quot;, text, session_id, mode}
+    WS-&gt;&gt;SV: run_turn(text, sink, on_token, approval, ...)
+    SV-&gt;&gt;AG: process_turn(...)  (sink attached for speak/events)
+    AG-&gt;&gt;DB: add_turn(user)
+    loop until final answer (bounded / cancellable)
+        AG-&gt;&gt;P: generate(messages, tools, stream)
+        P--&gt;&gt;UI: token deltas (on_token → WS &quot;token&quot;)
+        alt response has tool_calls
+            AG--&gt;&gt;UI: &quot;preamble&quot; (spoken ack) + &quot;speak&quot; event
+            AG-&gt;&gt;T: execute(tool, args)
+            Note over AG,T: destructive tool → approval() round-trip over WS
+            T--&gt;&gt;AG: ToolResult
+            AG-&gt;&gt;DB: log_audit(tool)
+            AG--&gt;&gt;UI: &quot;tool_started&quot; / &quot;tool_finished&quot;
+        else no tool_calls
+            AG-&gt;&gt;DB: add_turn(assistant, final)
+            AG--&gt;&gt;UI: &quot;turn_completed&quot;
+        end
+    end
+    WS--&gt;&gt;UI: {type:&quot;turn_result&quot;, content, tools_used}
+    UI--&gt;&gt;U: rendered answer (+ browser TTS if voice on)
+</code></pre></div>
+
+</details>
+
+<p>Key points:</p>
+<ul>
+<li><strong>Streaming</strong> — when the UI asks for tokens, the provider streams deltas straight
+  to the socket as <code>token</code> events; the bubble fills in live.</li>
+<li><strong>Events are a fanout</strong> — every step (<code>preamble</code>, <code>tool_started</code>, <code>tool_finished</code>,
+  <code>speak</code>, <code>turn_completed</code>) is emitted once and fanned out to the narration engine
+  and the WebSocket sink (<code>core/events.py:fanout</code>).</li>
+<li><strong>Approval is a blocking round-trip</strong> — for a destructive tool, the agent calls
+  the <code>approval(tool, args)</code> callback, which (over the socket) sends an
+  <code>approval_request</code> and blocks a worker thread on a queue until the UI replies.</li>
+<li><strong>Cancellation</strong> — a <code>stop</code> message flips a flag the loop checks every step.</li>
+</ul>
+<hr />
+<h2 id="5-the-agent-loop-in-detail">5. The agent loop in detail<a class="headerlink" href="#5-the-agent-loop-in-detail" title="Permanent link">&para;</a></h2>
+<p><img alt="The agent loop" src="../diagrams/04-agent-loop.png" /></p>
+<p><sub><strong>Figure 4 — The agent loop.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>flowchart TD
+    Start([process_turn]) --&gt; Build[Build messages:&lt;br/&gt;system = persona + facts + skills + memory&lt;br/&gt;+ recent history + user turn]
+    Build --&gt; Loop{loop step}
+    Loop --&gt;|cancelled| Stop[return &#39;Stopped.&#39;]
+    Loop --&gt;|limit hit| Cap[return limit message]
+    Loop --&gt; Gen[provider.generate&lt;br/&gt;stream tokens]
+    Gen --&gt; HasTools{tool_calls?}
+    HasTools --&gt;|no| Final[persist final answer&lt;br/&gt;emit turn_completed] --&gt; Done([AgentResult])
+    HasTools --&gt;|yes| Pre[emit preamble + speak]
+    Pre --&gt; Each[for each tool call]
+    Each --&gt; Dgate{destructive?}
+    Dgate --&gt;|yes| Appr{approval?}
+    Appr --&gt;|declined| Decl[append &#39;declined&#39; result]
+    Appr --&gt;|approved| Exec[registry.execute]
+    Dgate --&gt;|no| Exec
+    Exec --&gt; Audit[log_audit + emit tool_finished&lt;br/&gt;append tool result to messages]
+    Decl --&gt; Loop
+    Audit --&gt; Loop
+</code></pre></div>
+
+</details>
+
+<ul>
+<li><strong>System prompt assembly</strong> (<code>Agent._build_messages</code> → <code>Persona.system_prompt</code>):
+  persona identity + tone + dos/donts, the shared agent preamble (tool-routing
+  rules), formatting rules, the <strong>skills catalog</strong>, the <strong>curated memory block</strong>
+  (<code>USER.md</code> + <code>MEMORY.md</code>), <code>USER_FACTS</code>, and a periodic memory nudge. In <strong>chat
+  mode</strong> all of that tool/skill machinery is dropped — it's a pure conversation with
+  no tools.</li>
+<li><strong><code>tool_loop_limit &lt;= 0</code> means unlimited</strong> — the user drives complex multi-tool
+  tasks, and the Stop button is the control. A positive value is a hard cap.</li>
+<li><strong>Tool results</strong> are appended as <code>role:"tool"</code> messages and the loop continues, so
+  the model sees outcomes and can chain steps.</li>
+</ul>
+<hr />
+<h2 id="6-provider-layer">6. Provider layer<a class="headerlink" href="#6-provider-layer" title="Permanent link">&para;</a></h2>
+<p>Every LLM is normalized behind one interface so the rest of the system never sees
+provider-specific shapes.</p>
+<p><img alt="Provider layer (class diagram)" src="../diagrams/05-provider-layer.png" /></p>
+<p><sub><strong>Figure 5 — Provider layer (class diagram).</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>classDiagram
+    class Provider {
+        &lt;&lt;abstract&gt;&gt;
+        +name: str
+        +model: str
+        +generate(messages, tools, stream, on_token) LLMResponse
+        +is_available() bool
+        +test_connection() bool
+        #split_system(messages) tuple
+    }
+    class LLMResponse {
+        +content: str
+        +tool_calls: list~ToolCall~
+        +usage: dict
+        +has_tool_calls() bool
+    }
+    class ToolCall {
+        +id: str
+        +name: str
+        +args: dict
+    }
+    class AnthropicProvider
+    class OpenAIProvider
+    class GoogleProvider
+    class OpenAICompatProvider
+    class ProviderChain {
+        +providers: list~Provider~
+        +active() Provider
+    }
+    Provider &lt;|-- AnthropicProvider
+    Provider &lt;|-- OpenAIProvider
+    Provider &lt;|-- GoogleProvider
+    Provider &lt;|-- OpenAICompatProvider
+    Provider &lt;|-- ProviderChain
+    OpenAIProvider --|&gt; OpenAICompatProvider : thin subclass
+    Provider ..&gt; LLMResponse : returns
+    LLMResponse o-- ToolCall
+    ProviderChain o-- Provider : primary + fallbacks
+</code></pre></div>
+
+</details>
+
+<ul>
+<li><strong><code>generate()</code></strong> returns a normalized <code>LLMResponse</code> with <code>content</code>, <code>tool_calls</code>
+  (already parsed into neutral <code>ToolCall</code>s), and <code>usage</code>. Tool definitions go in as
+  JSON Schema and are translated to each vendor's tool format inside the provider.</li>
+<li><strong><code>OpenAICompatProvider</code></strong> is the workhorse: any endpoint that speaks
+  <code>/v1/chat/completions</code> (Ollama, LM Studio, opencode, vLLM, a custom base URL).
+  <code>OpenAIProvider</code> is a thin subclass.</li>
+<li><strong><code>ProviderChain</code></strong> wraps a primary + ordered fallbacks. If the active provider
+  errors or is unavailable, the next is tried — configured via <code>provider.fallback</code>.</li>
+<li><strong><code>from_config(config)</code></strong> builds the right provider (or chain) from <code>config.yaml</code>.</li>
+</ul>
+<hr />
+<h2 id="7-tool-system">7. Tool system<a class="headerlink" href="#7-tool-system" title="Permanent link">&para;</a></h2>
+<p><img alt="Tool system" src="../diagrams/06-tool-system.png" /></p>
+<p><sub><strong>Figure 6 — Tool system.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>flowchart LR
+    subgraph Discovery[&quot;load_tools() at startup&quot;]
+        scan[pkgutil scans namma_agent/tools/*.py] --&gt; reg[module.register registry]
+        user[load_user_tools&lt;br/&gt;~/.namma_agent/tools/*.py] --&gt; reg
+        mcp[MCPManager registers&lt;br/&gt;mcp_server_tool] --&gt; reg
+    end
+    reg --&gt; REG[(ToolRegistry)]
+    AG[Agent] --&gt;|definitions JSON Schema| P[Provider]
+    AG --&gt;|execute name,args| REG
+    REG --&gt;|destructive?| GATE{approval gate}
+    GATE --&gt; H[tool handler] --&gt; RES[ToolResult ok/content/error]
+</code></pre></div>
+
+</details>
+
+<ul>
+<li><strong>Auto-discovery</strong> — every file in <code>namma_agent/tools/</code> that exposes <code>register(registry)</code>
+  is imported and registered at boot. Adding a capability = adding a file. No
+  central list, no intent regex.</li>
+<li><strong>Neutral definitions</strong> — a tool is <code>(name, description, json_schema, handler,
+  destructive)</code>. The model reads the description + schema to decide when to call it.</li>
+<li><strong>Approval gate</strong> — tools flagged <code>destructive=True</code> (shell, file deletes, smart-home
+  mutations, <code>create_tool</code>, …) must pass the per-turn <code>approval</code> callback before they
+  run, unless <code>conversation.auto_approve</code> is set.</li>
+<li><strong><code>ToolResult</code></strong> carries <code>ok</code>, <code>content</code> (what the model sees), optional <code>error</code>,
+  and structured <code>data</code>. Errors are returned, not raised, so a failing tool is just a
+  message the model can react to.</li>
+<li><strong>Self-authored tools</strong> — <code>create_tool</code> writes a new module to <code>~/.namma_agent/tools/</code>
+  and hot-loads it (see <a href="../SELF_MODIFICATION/">SELF_MODIFICATION.md</a>).</li>
+</ul>
+<hr />
+<h2 id="8-memory-model">8. Memory model<a class="headerlink" href="#8-memory-model" title="Permanent link">&para;</a></h2>
+<p>One SQLite file (<code>data/namma_agent.db</code>), thread-safe single connection.</p>
+<p><img alt="Memory model (ER diagram)" src="../diagrams/07-memory-model.png" /></p>
+<p><sub><strong>Figure 7 — Memory model (ER diagram).</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>erDiagram
+    sessions ||--o{ turns : has
+    sessions {
+        TEXT id PK
+        TEXT created_at
+        TEXT updated_at
+        TEXT persona
+        TEXT summary
+    }
+    turns {
+        INTEGER id PK
+        TEXT session_id FK
+        TEXT role
+        TEXT content
+        TEXT tools_used
+        TEXT created_at
+    }
+    facts {
+        INTEGER id PK
+        TEXT key UK
+        TEXT value
+        TEXT category
+        REAL confidence
+        TEXT updated_at
+    }
+    audit {
+        INTEGER id PK
+        TEXT session_id
+        TEXT tool_name
+        TEXT args
+        TEXT result_summary
+        INTEGER success
+        TEXT created_at
+    }
+    facts ||..|| facts_fts : &quot;FTS5 mirror&quot;
+    turns ||..|| turns_fts : &quot;FTS5 mirror&quot;
+</code></pre></div>
+
+</details>
+
+<ul>
+<li><strong><code>facts</code></strong> = durable key/value facts about the user (<code>remember_fact</code>), with a
+  standalone <strong>FTS5</strong> index for fuzzy recall.</li>
+<li><strong><code>turns</code></strong> = full conversation history with a <strong>FTS5</strong> index over content for
+  cross-session keyword recall (<code>search_conversations</code>). Sessions get auto-summarized
+  when a new one starts.</li>
+<li><strong><code>audit</code></strong> = every tool call (name, args, result, success) for traceability.</li>
+<li><strong>Curated notes</strong> — beyond SQLite, <code>core/memory_notes.py</code> maintains human-readable
+  <code>USER.md</code> + <code>MEMORY.md</code> that the agent edits and that are injected into the prompt.
+  This is the "what the assistant chooses to remember in prose" layer.</li>
+</ul>
+<p>Three layers feed the prompt, in increasing order of automation: the <strong>curated
+notes</strong> the agent writes on purpose, the <strong>structured facts</strong> it (or the auto-capture
+pass in §8.3) upserts, and the <strong>FTS5 recall</strong> it queries on demand. Projects (§8.1)
+and the Learning Room (§8.2) layer their own scoped tables onto the same single file.</p>
+<h3 id="81-project-knowledge-bases-multi-document-rag">8.1 Project knowledge bases (multi-document RAG)<a class="headerlink" href="#81-project-knowledge-bases-multi-document-rag" title="Permanent link">&para;</a></h3>
+<p>A <strong>project</strong> groups related chats and gives them a shared document shelf (≤ 25
+files, ≤ 10 MB each). Files live on disk under <code>data/projects/&lt;project_id&gt;/</code>; their
+text is indexed into <code>project_documents</code> + <code>doc_chunks</code> (+ a <code>doc_chunks_fts</code> BM25
+index). The whole stack stays inside the one SQLite file — <strong>no vector DB, no
+embedding service</strong> (see <a href="#1321-project-rag-on-fts5bm25-vs-an-embedding-store">§13.21</a>).</p>
+<ol>
+<li><strong>Ingest</strong> (<code>core/docindex.py</code>) — text extraction (MarkItDown/pypdf/docx),
+   then <strong>prompt-injection screening</strong> (<code>core/docscan.py</code>). Flagged files are
+   indexed but <strong>quarantined</strong> out of retrieval until the user explicitly trusts
+   them. Clean text is <strong>structure-aware chunked</strong> (<code>_TARGET_CHARS≈1500</code>,
+   markdown-heading breadcrumbs as section labels, a section change forces a chunk
+   boundary, oversized paragraphs split at sentence boundaries, and a ~200-char
+   tail overlap within a section so an answer that straddles a boundary survives).</li>
+<li><strong>Retrieve</strong> — the agent calls <code>search_project_documents</code>; the question is
+   sanitised into safe FTS5 OR-prefix terms (stopwords dropped, operators
+   neutralised), BM25-ranked, diversified per document (<code>max_per_doc</code>), and then
+   each hit's ±1 <strong>neighbours are stitched</strong> back into a coherent run. Excerpts are
+   returned with file/section citations, wrapped in a <em>data-not-instructions</em> guard.</li>
+<li><strong>Continuity</strong> — a project chat's scope block also lists summaries of the
+   project's earlier sessions (auto-summarized when a new project chat opens),
+   with <code>search_project_history</code> for verbatim recall — so conversations days apart
+   share context.</li>
+</ol>
+<h3 id="82-the-learning-room-a-scoped-teacher-agent">8.2 The Learning Room (a scoped teacher agent)<a class="headerlink" href="#82-the-learning-room-a-scoped-teacher-agent" title="Permanent link">&para;</a></h3>
+<p>The Learning Room (<code>core/learning.py</code>) is <strong>not a chat mode</strong> — it is the same agent
+loop driven by a teaching contract and a deliberately <strong>narrow tool set</strong>. A <em>topic</em>
+owns a <em>path</em> (<code>plan</code> = an ordered list of modules); each module is taught in <strong>its
+own chat thread</strong>, and the topic's overview session doubles as the <strong>path chat</strong>.</p>
+<ul>
+<li><strong>Per-context tool scoping.</strong> Inside a Learning-Room session the registry is
+  filtered to <code>LEARNING_TOOLS</code> — visuals (<code>render_diagram</code>, <code>fetch_image</code>,
+  <code>render_simulation</code>), the teaching/learning-state tools (<code>record_understanding</code>,
+  <code>remember_learning_note</code>, <code>mark_module_complete</code>, <code>set_learning_plan</code>,
+  <code>set_teaching_preference</code>), and a few research/file tools. Handing the teacher all
+  ~85 tools buries the visual ones and bloats every prompt; scoping is what keeps
+  them salient (<a href="#1330-per-context-tool-scoping">§13.30</a>).</li>
+<li><strong>Two contracts.</strong> The <strong>path chat</strong> is a planning desk (explain/reshape the path
+  via <code>set_learning_plan</code>, set standing preferences via <code>set_teaching_preference</code>);
+  the <strong>module</strong> prompt is the full pedagogy contract.</li>
+<li><strong>Conversational assessment, not quiz cards.</strong> Understanding is gauged from the
+  dialogue and recorded with <code>record_understanding</code> (a 0–100 score + an analytical
+  note). The multiple-choice <code>pose_quiz</code> tool exists in the global registry but is
+  intentionally <strong>excluded</strong> from <code>LEARNING_TOOLS</code>
+  (<a href="#1324-conversational-assessment-vs-multiple-choice-quiz-cards">§13.24</a>).</li>
+<li><strong>A persistent learner model.</strong> The understanding score, the running analysis,
+  strengths/gaps, completed-module recaps, and the one <em>running example</em> are read at
+  the <strong>start of every module</strong>, so each module teaches the real person, not a blank
+  slate.</li>
+<li><strong>The confidence gate.</strong> A module ends only when the learner confirms confidence,
+  at which point the teacher MUST call <code>mark_module_complete(recap=…)</code>; the recap is
+  written to the topic's scope memory and carried into later modules. A finished
+  module's thread becomes <strong>review-only</strong>, and content reserved for later modules is
+  off-limits in the current thread — this hard boundary keeps module chats from
+  bleeding into each other (<a href="#1325-module-thread-isolation--the-confidence-gate">§13.25</a>).</li>
+<li><strong>Syllabus → path.</strong> Uploading a syllabus runs it through the same <code>docscan</code>
+  screen, verifies it really is a syllabus, infers the learner's level, and builds
+  the module path from it.</li>
+<li><strong>Server-side visuals.</strong> <code>render_diagram</code>/<code>render_simulation</code> produce images/HTML
+  <strong>on the server</strong> and the agent loop drops them inline at the exact call site
+  (<a href="#1327-server-side-diagrams--simulations-vs-client-rendering">§13.27</a>).</li>
+<li><code>core/learning_nudge.py</code> adds opt-in stale-topic Telegram nudges.</li>
+</ul>
+<h3 id="83-deterministic-memory-auto-capture">8.3 Deterministic memory auto-capture<a class="headerlink" href="#83-deterministic-memory-auto-capture" title="Permanent link">&para;</a></h3>
+<p>Left to its own discretion the model almost never calls <code>remember_fact</code>, so durable
+facts about the user were quietly lost. <code>core/memory_extract.py</code> closes that gap
+<strong>without</strong> trusting model discretion: a cheap <strong>regex gate</strong> (<code>looks_personal</code>)
+decides whether an exchange plausibly revealed something durable — ordinary task
+turns ("play a song") never match and cost nothing — and only then does <strong>one
+focused LLM pass</strong> extract structured facts and upsert them into <code>facts</code> (which the
+agent already injects into every future session). It runs <strong>fire-and-forget on a
+background thread</strong> so it never adds reply latency; opt out with
+<code>memory.auto_capture: false</code> (<a href="#1326-deterministic-memory-capture-vs-model-discretion">§13.26</a>).</p>
+<hr />
+<h2 id="9-skills-procedural-memory">9. Skills (procedural memory)<a class="headerlink" href="#9-skills-procedural-memory" title="Permanent link">&para;</a></h2>
+<p>A skill is a folder with a <code>SKILL.md</code> (YAML frontmatter + markdown body) in the
+<em>Anthropic Agent Skills</em> format. Two roots: bundled (<code>namma_agent/skills/</code>) and learned
+(<code>~/.namma_agent/skills/</code>).</p>
+<p><img alt="Skills at runtime" src="../diagrams/08-skills-runtime.png" /></p>
+<p><sub><strong>Figure 8 — Skills at runtime.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>flowchart LR
+    boot[startup] --&gt; store[SkillStore.reload]
+    store --&gt; scan[rglob SKILL.md across roots&lt;br/&gt;parse frontmatter, filter by platform]
+    scan --&gt; cat[catalog: name + one-liner]
+    cat --&gt; prompt[injected into system prompt]
+    model[model sees a match] --&gt; use[use_skill name]
+    use --&gt; render[render: substitute SKILL_DIR/SESSION_ID&lt;br/&gt;+ optional inline-shell]
+    render --&gt; follow[full procedure returned → model follows it]
+    novel[solved a novel task] --&gt; create[create_skill → ~/.namma_agent/skills]
+    create --&gt; store
+</code></pre></div>
+
+</details>
+
+<p>The <strong>learning loop</strong>: the model is told to call <code>create_skill</code> after solving a
+novel multi-step task, and <code>update_skill</code> to refine one. Learned skills override
+bundled ones on name collision. Full detail in <a href="../SKILLS/">SKILLS.md</a>.</p>
+<h3 id="91-shareable-packs">9.1 Shareable packs<a class="headerlink" href="#91-shareable-packs" title="Permanent link">&para;</a></h3>
+<p><code>core/packs.py</code> exports the user's authored skills/tools as a single <code>.zip</code>
+(<code>manifest.json</code> + <code>INSTALL.md</code> + each skill folder + each tool file) and imports
+someone else's. The trust model is <strong>asymmetric on purpose</strong>: skills are just
+markdown and install silently, but tools are arbitrary Python that loads
+in-process — so import only writes the tools the caller <strong>explicitly approves</strong>
+(the UI defaults every tool to <em>off</em> and shows its source). Tool metadata is read
+by <strong>parsing the AST</strong>, never by importing, and extraction is guarded against
+path traversal (<a href="#1329-shareable-packs-with-asymmetric-trust">§13.29</a>).</p>
+<h3 id="92-document-conversion">9.2 Document conversion<a class="headerlink" href="#92-document-conversion" title="Permanent link">&para;</a></h3>
+<p>The agent writes Markdown natively; <code>tools/convert.py</code> (<code>convert_document</code>) turns
+it into whatever the user actually asked for — Word, PDF, PowerPoint, HTML, ODT,
+LaTeX, … — and drops a downloadable file into the chat. It follows the project's
+graceful-degradation pattern: <strong>pandoc</strong> handles every format at high fidelity when
+present, and self-contained fallbacks (<code>python-docx</code>, a stdlib HTML/text renderer)
+still cover <code>docx</code>/<code>html</code>/<code>txt</code>/<code>md</code> without it; anything else returns a clear
+"install pandoc" message (<a href="#1328-document-conversion-pandoc-with-self-contained-fallbacks">§13.28</a>).</p>
+<hr />
+<h2 id="10-server-events-and-voice">10. Server, events, and voice<a class="headerlink" href="#10-server-events-and-voice" title="Permanent link">&para;</a></h2>
+<p><strong>WebSocket protocol</strong> (<code>/ws</code>) — JSON messages both ways:</p>
+<table>
+<thead>
+<tr>
+<th>Inbound (UI→server)</th>
+<th>Outbound (server→UI)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>user_input {text, session_id, mode}</code></td>
+<td><code>token {text}</code> — streamed answer delta</td>
+</tr>
+<tr>
+<td><code>approval_response {id, approved}</code></td>
+<td><code>preamble {text}</code> — spoken acknowledgement</td>
+</tr>
+<tr>
+<td><code>password_response {id, password}</code></td>
+<td><code>tool_started</code> / <code>tool_finished</code></td>
+</tr>
+<tr>
+<td><code>stop</code> — cancel the turn</td>
+<td><code>approval_request {id, tool, args}</code></td>
+</tr>
+<tr>
+<td><code>stop_speech</code> — barge-in</td>
+<td><code>password_request {id, prompt}</code></td>
+</tr>
+<tr>
+<td><code>ping</code></td>
+<td><code>speak {text}</code> — voice this in the browser</td>
+</tr>
+<tr>
+<td></td>
+<td><code>stop_speaking</code> — cancel browser TTS</td>
+</tr>
+<tr>
+<td></td>
+<td><code>turn_result {content, tools_used}</code> / <code>stopped</code> / <code>error</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Voice is 100% browser-native</strong> (Web Speech API). The backend produces no audio:
+narration's short spoken lines are emitted as <code>speak</code> events; the UI voices them via
+<code>speechSynthesis</code> when the voice toggle is on, and reads answers aloud on demand
+(<code>ReadAloud</code>). The mic uses <code>webkitSpeechRecognition</code> to dictate into the composer.
+There is no Piper, no Whisper, no server-side STT. (See
+<a href="#1313-browser-web-speech-api-vs-server-side-piper--whisper">§13.13</a>.)</p>
+<hr />
+<h2 id="11-configuration-the-assistant-name">11. Configuration &amp; the assistant name<a class="headerlink" href="#11-configuration-the-assistant-name" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Base config</strong>: <code>namma_agent/config.yaml</code> (documented, commented).</li>
+<li><strong>Overlay</strong>: <code>namma_agent/config.local.yaml</code> — written by the Settings panel via
+  <code>config.update_config</code>; the base file is never rewritten.</li>
+<li><strong>Secrets</strong>: the OS-native vault (<code>core/secrets.py</code> — Windows Credential
+  Manager / POSIX keyring / a DPAPI-sealed fallback file) with an opt-in
+  migration from <code>.env</code>; <code>.env</code> at the repo root still works and is loaded by a
+  tiny built-in parser. Known secret <strong>values are redacted</strong> (<code>***NAME***</code>)
+  from every tool result and log line.</li>
+<li><strong>Resolution</strong>: <code>$NAMMA_CONFIG</code> → <code>namma_agent/config.yaml</code>.</li>
+</ul>
+<p>The <strong>assistant's display name</strong> is the single source of truth in <code>assistant.name</code>
+(or the <code>ASSISTANT_NAME</code> env var), resolved by <code>config.assistant_name()</code>. It flows
+into the system prompt (persona identity uses a <code>{name}</code> placeholder), the UI
+(<code>/api/config</code> → title/greeting/sidebar/composer), the about tool, and Telegram.
+<code>NAMMA_*</code> env-var names are intentionally fixed.</p>
+<hr />
+<h2 id="12-process-deployment-model">12. Process &amp; deployment model<a class="headerlink" href="#12-process-deployment-model" title="Permanent link">&para;</a></h2>
+<p><img alt="Process &amp; deployment" src="../diagrams/09-process-deployment.png" /></p>
+<p><sub><strong>Figure 9 — Process &amp; deployment.</strong></sub></p>
+<details>
+<summary>Mermaid source</summary>
+
+<div class="highlight"><pre><span></span><code>flowchart TB
+    subgraph Proc[&quot;Single Python process&quot;]
+        direction TB
+        UVI[uvicorn thread&lt;br/&gt;FastAPI + /ws]
+        SVCp[NammaAgentService singleton]
+        AGp[Agent]
+        DBp[(SQLite — single conn, locked)]
+        RRp[ReminderRunner thread]
+        CMp[Telegram poll thread]
+        BCp[Playwright worker thread]
+        UVI --- SVCp --- AGp --- DBp
+        SVCp --- RRp &amp; CMp
+        AGp --- BCp
+    end
+    win[pywebview window] --&gt;|http://127.0.0.1:8000| UVI
+    browser[any browser] --&gt;|--server mode| UVI
+</code></pre></div>
+
+</details>
+
+<ul>
+<li>One process. <code>python -m namma_agent</code> runs uvicorn in a daemon thread and opens a
+  pywebview window; <code>--server</code> skips the window (headless, open a browser).</li>
+<li>Background work runs on dedicated threads: the reminder runner, the routines and
+  <strong>watcher</strong> runners, the memory consolidator, the optional weekly <strong>self-review</strong>
+  runner, the comms bridges (Telegram long-poll, Discord/Slack sockets), and the
+  Playwright browser (the sync API must live on one thread).</li>
+<li>State is the single SQLite file + <code>~/.namma_agent/</code> (user skills, user tools, browser
+  profile) + <code>data/</code> (reminders, tasks, uploads, watchers, self-review snapshots).
+  No external services required — memory included (Engram is in-process, §8).</li>
+<li><strong>Desktop integration (Phase 5):</strong> a system-tray icon (pystray — show/hide window,
+  live gateway status, quit; <code>core/tray.py</code>), a start-on-login toggle (HKCU Run key /
+  XDG autostart; <code>core/autostart.py</code>, Settings → Behavior), and Windows toasts with
+  Reply/Open protocol actions (<code>core/notifications.py</code>). All optional and
+  degrade-gracefully: without pystray or a notifier the app runs exactly as before.</li>
+</ul>
+<hr />
+<h2 id="13-technical-decisions-options-choices-and-why">13. Technical decisions — options, choices, and why<a class="headerlink" href="#13-technical-decisions-options-choices-and-why" title="Permanent link">&para;</a></h2>
+<p>Each decision below lists the realistic alternatives, what Namma Agent chose, the reason,
+and the trade-off we accepted.</p>
+<h3 id="131-cloud-only-vs-local-first-with-an-intent-pipeline-v1">13.1 Cloud-only vs local-first with an intent pipeline (v1)<a class="headerlink" href="#131-cloud-only-vs-local-first-with-an-intent-pipeline-v1" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> (a) keep v1 — local GGUF model + <code>intent_recognizer</code> (3,500-line regex
+  router) + a planning engine + a routing stack; (b) cloud-only single agent loop.</li>
+<li><strong>Chosen:</strong> (b). The brain is an API call; v1's intent/planning/routing layers were
+  deleted.</li>
+<li><strong>Why:</strong> modern hosted models call tools natively and reason well enough that the
+  deterministic intent layer became negative value — every new capability needed a
+  regex <em>and</em> a planner entry. The loop is ~200 lines vs thousands.</li>
+<li><strong>Trade-off:</strong> a hard dependency on a provider (network + key), and less determinism.
+  Mitigated by supporting <strong>local</strong> OpenAI-compatible servers (Ollama/LM Studio), so
+  "cloud-only" still runs fully offline if you want.</li>
+</ul>
+<h3 id="132-single-agent-loop-vs-reactplanner-frameworks">13.2 Single agent loop vs ReAct/planner frameworks<a class="headerlink" href="#132-single-agent-loop-vs-reactplanner-frameworks" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> LangChain/LangGraph agents, a custom planner-executor, or a plain loop.</li>
+<li><strong>Chosen:</strong> a plain <code>while</code> loop calling <code>provider.generate</code> with tools.</li>
+<li><strong>Why:</strong> native tool-calling already encodes "think → act → observe." A framework
+  would add a large dependency and indirection for behavior we get in a few dozen lines.</li>
+<li><strong>Trade-off:</strong> we hand-roll streaming, cancellation, and approval. That code is small
+  and fully under our control, which we preferred to a framework's abstractions.</li>
+</ul>
+<h3 id="133-native-tool-calling-vs-text-parsed-react">13.3 Native tool calling vs text-parsed ReAct<a class="headerlink" href="#133-native-tool-calling-vs-text-parsed-react" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> parse <code>Action: …</code> out of model text, or use the provider's structured
+  tool-call API.</li>
+<li><strong>Chosen:</strong> native structured tool calls (normalized to <code>ToolCall</code>).</li>
+<li><strong>Why:</strong> structured calls are reliable, typed, and support parallel calls; text
+  parsing is brittle and model-specific.</li>
+<li><strong>Trade-off:</strong> providers without tool APIs need the OpenAI-compat path; pure
+  text-only models aren't first-class.</li>
+</ul>
+<h3 id="134-provider-abstraction-openai-compat-vs-an-sdk-per-provider-a-meta-sdk">13.4 Provider abstraction + OpenAI-compat vs an SDK per provider / a meta-SDK<a class="headerlink" href="#134-provider-abstraction-openai-compat-vs-an-sdk-per-provider-a-meta-sdk" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> one giant SDK (LiteLLM/LangChain), or hand-written providers behind a
+  shared interface.</li>
+<li><strong>Chosen:</strong> a thin <code>Provider</code> ABC with native Anthropic/OpenAI/Google subclasses plus
+  a generic OpenAI-compat client.</li>
+<li><strong>Why:</strong> the surface we use (generate + tools + streaming) is small; owning it avoids
+  a heavy transitive dependency and keeps response normalization explicit. One compat
+  client covers the long tail (Ollama, LM Studio, vLLM, custom).</li>
+<li><strong>Trade-off:</strong> we maintain four providers, but each is small and rarely changes.</li>
+</ul>
+<h3 id="135-fallback-chain-vs-single-provider">13.5 Fallback chain vs single provider<a class="headerlink" href="#135-fallback-chain-vs-single-provider" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> single configured provider, or a primary + ordered fallbacks.</li>
+<li><strong>Chosen:</strong> <code>ProviderChain</code> (primary then fallbacks).</li>
+<li><strong>Why:</strong> resilience to a provider outage / rate limit / a local server being down,
+  with zero app-code changes.</li>
+<li><strong>Trade-off:</strong> a failover can change model behavior mid-session; acceptable for a
+  personal assistant.</li>
+</ul>
+<h3 id="136-json-schema-tools-file-auto-discovery-vs-a-pluginentry-point-system">13.6 JSON-Schema tools + file auto-discovery vs a plugin/entry-point system<a class="headerlink" href="#136-json-schema-tools-file-auto-discovery-vs-a-pluginentry-point-system" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> setuptools entry points, a manifest/registry file, or convention-based
+  discovery.</li>
+<li><strong>Chosen:</strong> drop a <code>namma_agent/tools/&lt;name&gt;.py</code> with <code>register(registry)</code>; it's imported
+  at boot.</li>
+<li><strong>Why:</strong> lowest friction — one file ships a capability, and the schema <em>is</em> the spec
+  the model routes from. No regexes, no central list to keep in sync.</li>
+<li><strong>Trade-off:</strong> import-time errors in one tool are caught and logged (it's skipped)
+  rather than failing the whole app; you trade strictness for robustness.</li>
+</ul>
+<h3 id="137-approval-gating-vs-sandboxing-tool-execution">13.7 Approval gating vs sandboxing tool execution<a class="headerlink" href="#137-approval-gating-vs-sandboxing-tool-execution" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> run everything in a container/jail, or run in-process behind an approval
+  prompt.</li>
+<li><strong>Chosen:</strong> in-process execution, with <code>destructive</code> tools gated by a per-turn approval
+  round-trip (plus an opt-in auto-approve and a lab-mode gate for security tools).</li>
+<li><strong>Why:</strong> the assistant's value <em>is</em> acting on your machine; a full filesystem jail
+  would block the point. Human-in-the-loop on the dangerous subset is the pragmatic
+  safety boundary.</li>
+<li><strong>Trade-off:</strong> trust in the model + the user. We mitigate with approval, audit logging,
+  destructive classification, and security tools defaulting off.</li>
+<li><strong>2026-07 update:</strong> approval gained a <em>resource</em> sandbox underneath it — every
+  <code>run_shell</code> child runs in a Windows <strong>Job Object</strong> (memory cap, fork-bomb guard,
+  kill-on-close) or under POSIX rlimits, with an optional <code>confine_to</code> path tripwire
+  (<code>core/sandbox.py</code>). Not a jail; a blast-radius limiter. Approval decides <em>whether</em>
+  a command runs; the sandbox bounds <em>how much damage</em> a bad one can do. See §14 and
+  <a href="../SECURITY/">SECURITY.md</a>.</li>
+</ul>
+<h3 id="138-single-file-sqlite-vs-postgres-a-vector-db">13.8 Single-file SQLite vs Postgres / a vector DB<a class="headerlink" href="#138-single-file-sqlite-vs-postgres-a-vector-db" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> Postgres, a vector store (v1 used Chroma), or SQLite.</li>
+<li><strong>Chosen:</strong> one SQLite file with FTS5.</li>
+<li><strong>Why:</strong> zero-ops, single-user, local-first; FTS5 gives good keyword recall without a
+  server or embedding pipeline. v1's Chroma + six "domain stores" were overkill for one
+  person's assistant.</li>
+<li><strong>Trade-off:</strong> no semantic (embedding) search and no multi-writer concurrency. For a
+  single-user app neither matters; see 13.9.</li>
+</ul>
+<h3 id="139-fts5-keyword-recall-vs-embeddingvector-search">13.9 FTS5 keyword recall vs embedding/vector search<a class="headerlink" href="#139-fts5-keyword-recall-vs-embeddingvector-search" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> embed turns and do ANN search, or full-text keyword search.</li>
+<li><strong>Chosen:</strong> FTS5 keyword search + curated prose notes.</li>
+<li><strong>Why:</strong> no embedding model/dependency/cost, deterministic, debuggable, and "find that
+  thing I mentioned" is mostly lexical. The curated <code>USER.md</code>/<code>MEMORY.md</code> cover the
+  "important context, always in prompt" need that vectors are often used for.</li>
+<li><strong>Trade-off:</strong> misses paraphrase-only matches. Acceptable, and re-addable later behind
+  the same memory interface.</li>
+</ul>
+<h3 id="1310-curated-prose-notes-vs-pure-automatic-memory">13.10 Curated prose notes vs pure automatic memory<a class="headerlink" href="#1310-curated-prose-notes-vs-pure-automatic-memory" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> fully automatic (store everything, retrieve by similarity) vs an explicit
+  curated layer the agent writes.</li>
+<li><strong>Chosen:</strong> both — automatic turn/fact storage <strong>and</strong> agent-curated <code>USER.md</code>/<code>MEMORY.md</code>
+  injected every turn.</li>
+<li><strong>Why:</strong> the highest-value context (who the user is, ongoing projects, preferences)
+  should be <em>always present and human-auditable</em>, not hoped-for from a retrieval hit.</li>
+<li><strong>Trade-off:</strong> the agent must maintain the notes; prompt size grows. Bounded and worth it.</li>
+</ul>
+<h3 id="1311-skills-as-skillmd-folders-vs-hardcoded-workflows-fine-tuning">13.11 Skills as SKILL.md folders vs hardcoded workflows / fine-tuning<a class="headerlink" href="#1311-skills-as-skillmd-folders-vs-hardcoded-workflows-fine-tuning" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> bake procedures into code, fine-tune the model, or store them as data the
+  model loads on demand.</li>
+<li><strong>Chosen:</strong> Markdown skill folders (Anthropic Agent Skills format) discovered at runtime,
+  with a create/update learning loop.</li>
+<li><strong>Why:</strong> procedures become editable data, portable across models, and the model can
+  <em>author its own</em> — no retraining, no redeploy. Catalog-in-prompt + load-on-demand keeps
+  the context cost to one line per skill until needed.</li>
+<li><strong>Trade-off:</strong> skills are advisory (the model may ignore them) and unsandboxed text; we
+  accept that for flexibility.</li>
+</ul>
+<h3 id="1312-self-authoring-tools-in-process-vs-sandboxed-plugins">13.12 Self-authoring tools in-process vs sandboxed plugins<a class="headerlink" href="#1312-self-authoring-tools-in-process-vs-sandboxed-plugins" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> forbid runtime code-gen; sandbox authored tools; or write + hot-load them
+  in-process.</li>
+<li><strong>Chosen:</strong> <code>create_tool</code> writes a module to <code>~/.namma_agent/tools/</code> and imports it live —
+  <strong>approval-gated</strong>.</li>
+<li><strong>Why:</strong> lets the assistant genuinely extend itself for capabilities no tool covers,
+  which is a core goal.</li>
+<li><strong>Trade-off:</strong> model-written code runs with app privileges. The approval gate + the
+  "prefer create_skill (no code) when possible" guidance are the controls. (See
+  <a href="../SELF_MODIFICATION/">SELF_MODIFICATION.md</a>.)</li>
+</ul>
+<h3 id="1313-browser-web-speech-api-vs-server-side-piper-whisper">13.13 Browser Web Speech API vs server-side Piper / Whisper<a class="headerlink" href="#1313-browser-web-speech-api-vs-server-side-piper-whisper" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> server TTS (Piper) + server STT (faster-whisper + sounddevice), or the
+  browser's built-in <code>speechSynthesis</code> + <code>SpeechRecognition</code>.</li>
+<li><strong>Chosen:</strong> browser-native voice; the backend produces no audio and has no STT.</li>
+<li><strong>Why:</strong> removes heavy native dependencies (Piper binary + ONNX voices, whisper models,
+  PortAudio) and a whole audio-hardware failure surface; the browser already ships capable
+  TTS/STT; and it works correctly when the server is remote (audio belongs on the client,
+  not the server host). Narration is still server-decided — emitted as <code>speak</code> events and
+  voiced in the browser.</li>
+<li><strong>Trade-off:</strong> voice quality/availability depends on the browser (Web Speech STT is
+  Chromium-best), and there's no voice when accessed by a non-speech client. Acceptable
+  for a web-first assistant.</li>
+</ul>
+<h3 id="1314-websocket-streaming-vs-sse-long-polling">13.14 WebSocket streaming vs SSE / long-polling<a class="headerlink" href="#1314-websocket-streaming-vs-sse-long-polling" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> Server-Sent Events, polling, or a WebSocket.</li>
+<li><strong>Chosen:</strong> one WebSocket for the whole turn channel.</li>
+<li><strong>Why:</strong> turns are bidirectional — tokens and tool events stream down <em>while</em> approval
+  and password responses and stop/barge-in flow up. SSE is one-way; polling is laggy.</li>
+<li><strong>Trade-off:</strong> slightly more connection management (reconnect logic in the hook).</li>
+</ul>
+<h3 id="1315-react-spa-pywebview-vs-electron-tauri-server-rendered">13.15 React SPA + pywebview vs Electron / Tauri / server-rendered<a class="headerlink" href="#1315-react-spa-pywebview-vs-electron-tauri-server-rendered" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> Electron, Tauri, an htmx/server-rendered UI, or a Vite React SPA served by
+  FastAPI and shown in pywebview.</li>
+<li><strong>Chosen:</strong> Vite + React + Tailwind, built to static files FastAPI serves, opened in a
+  lightweight pywebview window (browser fallback).</li>
+<li><strong>Why:</strong> a streaming chat UI is genuinely stateful and benefits from React; pywebview is
+  far lighter than bundling Chromium (Electron) and needs no Rust toolchain (Tauri); and
+  the exact same bundle works in any browser for <code>--server</code> mode.</li>
+<li><strong>Trade-off:</strong> a Node build step for the UI. The built <code>dist/</code> is committed so running
+  the app needs no Node.</li>
+</ul>
+<h3 id="1316-playwright-real-browser-control-vs-headless-the-webbrowser-module">13.16 Playwright real-browser control vs headless / the <code>webbrowser</code> module<a class="headerlink" href="#1316-playwright-real-browser-control-vs-headless-the-webbrowser-module" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> just shell out to <code>webbrowser.open</code>, drive a headless browser, or drive the
+  user's real visible browser.</li>
+<li><strong>Chosen:</strong> Playwright driving the <strong>real</strong> browser binary on a copy of the real profile,
+  with a graceful <code>webbrowser</code> fallback.</li>
+<li><strong>Why:</strong> media playback and control (YouTube/YT-Music play/pause/seek/fullscreen) need a
+  live, signed-in, visible page; headless gets blocked ("something went wrong") and the
+  stdlib module can't control playback.</li>
+<li><strong>Trade-off:</strong> Playwright + a browser are heavyweight optional deps; the single-thread
+  sync API needs a dedicated worker thread. Both are isolated and optional.</li>
+</ul>
+<h3 id="1317-a-hand-written-mcp-stdio-client-vs-the-official-mcp-sdk">13.17 A hand-written MCP stdio client vs the official MCP SDK<a class="headerlink" href="#1317-a-hand-written-mcp-stdio-client-vs-the-official-mcp-sdk" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> depend on the <code>mcp</code> SDK, or implement the JSON-RPC-over-stdio handshake.</li>
+<li><strong>Chosen:</strong> a small persistent stdio client (<code>initialize → tools/list → tools/call</code>).</li>
+<li><strong>Why:</strong> the protocol slice we need is tiny; avoiding the SDK keeps dependencies and
+  version-coupling down, and the client registers each server's tools as
+  <code>mcp_&lt;server&gt;_&lt;tool&gt;</code> straight into the same registry.</li>
+<li><strong>Trade-off:</strong> we track the spec manually if it evolves. Cheap for the surface used.</li>
+</ul>
+<h3 id="1318-config-base-local-overlay-vs-a-single-mutable-file-or-env-only">13.18 Config base + local overlay vs a single mutable file or env-only<a class="headerlink" href="#1318-config-base-local-overlay-vs-a-single-mutable-file-or-env-only" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> one mutable <code>config.yaml</code> the UI rewrites, env-vars only, or a commented
+  base + a machine-written overlay.</li>
+<li><strong>Chosen:</strong> base <code>config.yaml</code> (hand-edited, documented) + <code>config.local.yaml</code> (UI-written
+  overlay), deep-merged, secrets in <code>.env</code>.</li>
+<li><strong>Why:</strong> the UI can persist settings <strong>without</strong> clobbering the documented, commented base
+  file, and you can diff what you changed from defaults.</li>
+<li><strong>Trade-off:</strong> two files to reason about; the loader's merge order is the contract.</li>
+</ul>
+<h3 id="1319-configurable-name-via-name-placeholder-vs-a-templating-engine">13.19 Configurable name via <code>{name}</code> placeholder vs a templating engine<a class="headerlink" href="#1319-configurable-name-via-name-placeholder-vs-a-templating-engine" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> a templating library (Jinja), per-surface string tables, or a single token
+  substituted late.</li>
+<li><strong>Chosen:</strong> one <code>assistant_name()</code> source of truth + a <code>{name}</code> placeholder substituted
+  when rendering the prompt, with the UI reading the name from <code>/api/config</code>.</li>
+<li><strong>Why:</strong> trivially simple, no dependency, and impossible to half-apply — the prompt is
+  rendered in one place and the UI threads one prop. <code>NAMMA_*</code> env names are deliberately
+  excluded so secrets/identifiers stay stable.</li>
+<li><strong>Trade-off:</strong> a literal <code>{name}</code> in unrelated text would be substituted; in practice it
+  appears only where intended.</li>
+</ul>
+<h3 id="1320-delegate_task-sub-agent-vs-a-multi-agent-framework">13.20 <code>delegate_task</code> sub-agent vs a multi-agent framework<a class="headerlink" href="#1320-delegate_task-sub-agent-vs-a-multi-agent-framework" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> a full multi-agent orchestrator (CrewAI/AutoGen style), or one bounded
+  sub-agent tool.</li>
+<li><strong>Chosen:</strong> a single <code>delegate_task</code> tool that runs a sub-agent over a <strong>read-only</strong>
+  research toolset and can't recurse into itself.</li>
+<li><strong>Why:</strong> it collapses v1's Delegate/MoA/ResearchAgent into one understandable primitive
+  that handles "go research this" without orchestration complexity or runaway recursion.</li>
+<li><strong>Trade-off:</strong> no rich agent-to-agent collaboration. Sufficient for the assistant's needs.</li>
+</ul>
+<h3 id="1321-project-rag-on-fts5bm25-vs-an-embedding-store">13.21 Project RAG on FTS5/BM25 vs an embedding store<a class="headerlink" href="#1321-project-rag-on-fts5bm25-vs-an-embedding-store" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> embed every chunk into a vector DB (Chroma/pgvector/FAISS) for semantic
+  retrieval, or keyword BM25 over the existing SQLite FTS5.</li>
+<li><strong>Chosen:</strong> FTS5/BM25 with structure-aware chunking, per-document diversity, and
+  neighbour stitching (<code>core/docindex.py</code>).</li>
+<li><strong>Why:</strong> it keeps the <em>entire</em> project knowledge base inside the one SQLite file —
+  no embedding model, no vector service, no extra process — while staying genuinely
+  useful: the model writes targeted queries, and overlap + ±1 neighbour stitching give
+  it coherent, citable context. For a single-user assistant this is zero-ops and
+  debuggable.</li>
+<li><strong>Trade-off:</strong> misses pure-paraphrase matches a dense retriever would catch. Re-addable
+  later behind the same <code>retrieve()</code> interface; for now lexical recall + the model's own
+  query phrasing covers the need.</li>
+</ul>
+<h3 id="1322-document-injection-screening-a-data-not-instructions-guard-defense-in-depth">13.22 Document injection screening + a data-not-instructions guard (defense in depth)<a class="headerlink" href="#1322-document-injection-screening-a-data-not-instructions-guard-defense-in-depth" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> trust uploaded documents, run an LLM classifier on every file, or apply a
+  cheap heuristic tripwire plus a prompt-hygiene wrapper.</li>
+<li><strong>Chosen:</strong> a heuristic scanner (<code>core/docscan.py</code>: instruction-override, role-marker
+  smuggling, hidden unicode, exfiltration/tool-call directives — high severity flags on
+  one hit, medium in pairs) <strong>and</strong> a <em>data-not-instructions</em> guard wrapped around every
+  retrieved excerpt.</li>
+<li><strong>Why:</strong> uploaded files are untrusted input that flows into the prompt; two cheap,
+  independent layers (screen at ingest, neutralise at retrieval) catch each other's
+  misses without an LLM call per upload. Flagged files stay visible but <strong>quarantined</strong>
+  until the user trusts them, so honest documents aren't silently dropped.</li>
+<li><strong>Trade-off:</strong> heuristics have false negatives/positives; thresholds are tuned to let
+  real syllabi and prompt-engineering docs through. The retrieval guard is the backstop.</li>
+</ul>
+<h3 id="1323-the-learning-room-as-a-scoped-teacher-agent-vs-a-separate-app-or-a-chat-mode">13.23 The Learning Room as a scoped teacher agent vs a separate app or a chat mode<a class="headerlink" href="#1323-the-learning-room-as-a-scoped-teacher-agent-vs-a-separate-app-or-a-chat-mode" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> a standalone tutoring app, a "learning" persona, or the same agent loop
+  driven by a teaching contract over a narrowed tool set.</li>
+<li><strong>Chosen:</strong> reuse the one agent loop; <code>core/learning.py</code> supplies the system-prompt
+  contract (path-chat vs module) and a per-session <strong>tool filter</strong>.</li>
+<li><strong>Why:</strong> all the hard parts — streaming, tools, memory, approval — already exist; the
+  Learning Room is "the same engine, different prompt + tools," not a parallel stack.</li>
+<li><strong>Trade-off:</strong> the teaching quality lives in a long prompt contract rather than code, so
+  it's tuned by editing prose. Acceptable — and far cheaper than a second runtime.</li>
+</ul>
+<h3 id="1324-conversational-assessment-vs-multiple-choice-quiz-cards">13.24 Conversational assessment vs multiple-choice quiz cards<a class="headerlink" href="#1324-conversational-assessment-vs-multiple-choice-quiz-cards" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> check understanding with <code>pose_quiz</code> multiple-choice cards, or assess from
+  the dialogue and record a score.</li>
+<li><strong>Chosen:</strong> conversational assessment — the teacher asks pointed questions in its own
+  words and logs a 0–100 read with <code>record_understanding</code>; <code>pose_quiz</code> is deliberately
+  <strong>excluded</strong> from <code>LEARNING_TOOLS</code>.</li>
+<li><strong>Why:</strong> open answers (and the learner's <em>own</em> questions) reveal the actual gap far
+  better than four options to pattern-match, and feed a richer learner model.</li>
+<li><strong>Trade-off:</strong> assessment is softer/less gradeable than scored cards. The 0–100 score +
+  analysis note recover enough structure for spaced-repetition warm-ups.</li>
+</ul>
+<h3 id="1325-module-thread-isolation-the-confidence-gate">13.25 Module-thread isolation &amp; the confidence gate<a class="headerlink" href="#1325-module-thread-isolation-the-confidence-gate" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> teach a whole topic in one long chat, or give each module its own thread
+  with a hard boundary and an explicit completion gate.</li>
+<li><strong>Chosen:</strong> one chat <strong>per module</strong>; later modules are off-limits in the current thread,
+  a finished module's thread becomes review-only, and a module completes <strong>only</strong> when the
+  learner confirms confidence and the teacher calls <code>mark_module_complete(recap=…)</code>.</li>
+<li><strong>Why:</strong> it stops lessons bleeding across modules, makes "where am I" obvious, and the
+  saved recap (concepts + the running example) carries forward so later modules build on
+  earlier ones instead of repeating them.</li>
+<li><strong>Trade-off:</strong> more sessions to manage and a gate the model must honor; enforced by the
+  prompt contract and the path's per-module state.</li>
+</ul>
+<h3 id="1326-deterministic-memory-capture-vs-model-discretion">13.26 Deterministic memory capture vs model discretion<a class="headerlink" href="#1326-deterministic-memory-capture-vs-model-discretion" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> rely on the model to call <code>remember_fact</code>, store every turn, or a
+  deterministic post-turn extraction.</li>
+<li><strong>Chosen:</strong> <code>core/memory_extract.py</code> — a cheap regex gate decides if an exchange
+  plausibly revealed something durable, and only then does one focused LLM pass extract
+  and upsert structured facts, fire-and-forget on a background thread.</li>
+<li><strong>Why:</strong> the model almost never volunteers <code>remember_fact</code>, so recall starved; the gate
+  keeps ordinary task turns free (no LLM cost), and capture never adds reply latency.</li>
+<li><strong>Trade-off:</strong> an extra (gated) LLM call on disclosure turns, and regex-bounded recall.
+  Opt out with <code>memory.auto_capture: false</code>.</li>
+</ul>
+<h3 id="1327-server-side-diagrams-simulations-vs-client-rendering">13.27 Server-side diagrams &amp; simulations vs client rendering<a class="headerlink" href="#1327-server-side-diagrams-simulations-vs-client-rendering" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> render Mermaid/visuals in the browser, or produce them on the server and
+  inline the result.</li>
+<li><strong>Chosen:</strong> server-side — <code>render_diagram</code> emits a verified PNG (hosted <code>mermaid.ink</code>
+  first, local <code>mermaid-cli</code> fallback, text outline if neither), <code>render_simulation</code>
+  emits self-contained HTML/JS; the agent loop drops the artifact in at the call site.</li>
+<li><strong>Why:</strong> the model can only make an image appear by <em>calling the tool</em>, which kills the
+  failure mode of fabricated <code>/api/media/…</code> links showing broken images, and works
+  identically for Telegram and any non-browser client.</li>
+<li><strong>Trade-off:</strong> optional heavyweight deps for the offline path; both degrade gracefully.</li>
+</ul>
+<h3 id="1328-document-conversion-pandoc-with-self-contained-fallbacks">13.28 Document conversion: pandoc with self-contained fallbacks<a class="headerlink" href="#1328-document-conversion-pandoc-with-self-contained-fallbacks" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> require pandoc, ship per-format Python libraries, or pandoc-first with
+  built-in fallbacks.</li>
+<li><strong>Chosen:</strong> pandoc when present (every format, high fidelity); otherwise stdlib/<code>python-docx</code>
+  fallbacks for <code>docx</code>/<code>html</code>/<code>txt</code>/<code>md</code>, and a clear "install pandoc" message for the rest.</li>
+<li><strong>Why:</strong> matches the project-wide degrade-gracefully rule — the common asks work out of
+  the box, power formats light up when a single system binary is installed.</li>
+<li><strong>Trade-off:</strong> two code paths to keep in sync; the fallback set is intentionally small.</li>
+</ul>
+<h3 id="1329-shareable-packs-with-asymmetric-trust">13.29 Shareable packs with asymmetric trust<a class="headerlink" href="#1329-shareable-packs-with-asymmetric-trust" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> a plugin marketplace, import-everything zips, or per-artifact opt-in.</li>
+<li><strong>Chosen:</strong> a plain <code>.zip</code> (<code>core/packs.py</code>) where skills (markdown) install silently
+  but tools (Python) are written <strong>only if explicitly approved</strong>; tool metadata is read by
+  AST parsing (never import), and extraction is path-traversal-guarded.</li>
+<li><strong>Why:</strong> sharing should be one file and trivially auditable, but importing code is
+  importing risk — so the dangerous half is opt-in and inspectable, the safe half is
+  frictionless.</li>
+<li><strong>Trade-off:</strong> importing tools is a manual approval step; that friction is the point.</li>
+</ul>
+<h3 id="1330-per-context-tool-scoping">13.30 Per-context tool scoping<a class="headerlink" href="#1330-per-context-tool-scoping" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>Options:</strong> always expose the full registry, or narrow it to the task at hand.</li>
+<li><strong>Chosen:</strong> scope the tools per context — e.g. the Learning Room sees only
+  <code>LEARNING_TOOLS</code>, <code>delegate_task</code> sees a read-only research subset.</li>
+<li><strong>Why:</strong> with ~85 tools, the ones that matter for a context (the visual teaching tools)
+  get buried and under-used, and every prompt pays for definitions it won't call. A tight
+  set keeps the right tools salient and the token footprint down.</li>
+<li><strong>Trade-off:</strong> a context can't reach a tool outside its set without widening the scope —
+  an acceptable, deliberate constraint.</li>
+</ul>
+<hr />
+<h2 id="14-trust-proactivity-self-improvement-the-2026-07-subsystems">14. Trust, proactivity &amp; self-improvement (the 2026-07 subsystems)<a class="headerlink" href="#14-trust-proactivity-self-improvement-the-2026-07-subsystems" title="Permanent link">&para;</a></h2>
+<p>Three subsystem groups landed after the sections above were written; each has its
+own deep-dive doc, so this is the architectural summary and the map.</p>
+<h3 id="141-trust-model-stand_out-phase-1">14.1 Trust model (STAND_OUT Phase 1)<a class="headerlink" href="#141-trust-model-stand_out-phase-1" title="Permanent link">&para;</a></h3>
+<p>Full treatment: <strong><a href="../SECURITY/">SECURITY.md</a></strong> — every claim there is observable
+live in Settings → System → <strong>Security</strong>.</p>
+<ul>
+<li><strong>Per-channel sender trust</strong> (<code>core/trust.py</code>): every inbound message carries
+  <code>owner</code>/<code>trusted</code>/<code>untrusted</code> from its bridge, riding the turn as a contextvar.
+  Untrusted turns get destructive tools stripped from the model's view <em>and</em>
+  force-declined at the gate, their text wrapped as data-not-instructions, and
+  their memory writes quarantined (stored <code>screen_status='untrusted'</code>, never
+  indexed).</li>
+<li><strong>Injection screening</strong> (<code>core/docscan.py</code>): uploads, <code>web_extract</code>/<code>web_crawl</code>
+  pages, search snippets, and RSS headlines are screened; flagged content is
+  wrapped + marked (<code>⚠ possible prompt injection</code>), never silently dropped.</li>
+<li><strong>Shell sandbox</strong> (<code>core/sandbox.py</code>): Job Objects on Windows, rlimits on
+  POSIX, optional <code>confine_to</code> tripwire (§13.7).</li>
+<li><strong>Secrets vault + redaction</strong> (<code>core/secrets.py</code>): OS-native storage, names-only
+  inventory API, values masked in every tool result and log line (§11).</li>
+<li><strong>Decline auditing</strong>: destructive calls that were <em>refused</em> (untrusted sender,
+  autonomous run, user said no) land in the audit table too — the trail shows
+  what was asked, not just what ran.</li>
+</ul>
+<h3 id="142-watchers-event-driven-proactivity-phase-2">14.2 Watchers — event-driven proactivity (Phase 2)<a class="headerlink" href="#142-watchers-event-driven-proactivity-phase-2" title="Permanent link">&para;</a></h3>
+<p><code>core/watchers.py</code>, store <code>data/watchers.json</code>, runner cloned from routines.
+A watcher = <em>trigger + condition + action</em>: file/glob changes, new email ids
+(Gmail query), web-page text-hash diffs, calendar windows — all cheap zero-LLM
+polls with per-type cadence. On a trigger, one no-tools model pass (the
+"only if it matters" gate) decides notify / act / ignore against the watcher's
+stated intent, with the change summary framed as untrusted data; actions reuse
+the routine turn (destructive tools always declined) and deliver over comms
+with a native-notification fallback. Chat tools (<code>create_watcher</code>, …) and the
+Settings → Capabilities → Watchers tab drive it.</p>
+<h3 id="143-weekly-self-review-measured-self-improvement-phase-3">14.3 Weekly self-review — measured self-improvement (Phase 3)<a class="headerlink" href="#143-weekly-self-review-measured-self-improvement-phase-3" title="Permanent link">&para;</a></h3>
+<p><code>core/self_review.py</code> (opt-in, off by default). Weekly (or on demand): offline
+heuristics mine the week's sessions (failed tool runs, corrections, retries,
+repeated workflows, unanswered endings); ONE model pass drafts ≤5 proposals
+(skills / routines / watchers / notes) that are validated against the real
+stores and queued as <strong>proposals</strong> — one-click accept/reject in Settings →
+Learning, accepted automations arrive disabled. A metrics spine snapshots
+recall@k (from the offline eval — see <a href="../BENCHMARKS/">BENCHMARKS.md</a>),
+fact/entity counts, tool failure rate, and token spend into
+<code>data/self_review/</code>, so the "what I learned" report shows trend lines.</p>
+<hr />
+<h2 id="15-where-to-go-next">15. Where to go next<a class="headerlink" href="#15-where-to-go-next" title="Permanent link">&para;</a></h2>
+<ul>
+<li>The trust model in full → <a href="../SECURITY/">SECURITY.md</a></li>
+<li>Engram memory design → <a href="../MEMORY_SYSTEM_DESIGN/">MEMORY_SYSTEM_DESIGN.md</a> ·
+  measured → <a href="../BENCHMARKS/">BENCHMARKS.md</a></li>
+<li>Build your own capabilities → <a href="../EXTENDING/">EXTENDING.md</a></li>
+<li>How skills work in depth → <a href="../SKILLS/">SKILLS.md</a></li>
+<li>How the assistant rewrites itself → <a href="../SELF_MODIFICATION/">SELF_MODIFICATION.md</a></li>
+<li>Setup &amp; run → <a href="../README.md">../README.md</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../GATEWAYS/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Gateways on a server">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Gateways on a server
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../SKILLS/" class="md-footer__link md-footer__link--next" aria-label="Next: Skills">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Skills
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,11 @@
+flowchart LR
+    subgraph Discovery["load_tools() at startup"]
+        scan[pkgutil scans namma_agent/tools/*.py] --> reg[module.register registry]
+        user[load_user_tools<br/>~/.namma_agent/tools/*.py] --> reg
+        mcp[MCPManager registers<br/>mcp_server_tool] --> reg
+    end
+    reg --> REG[(ToolRegistry)]
+    AG[Agent] -->|definitions JSON Schema| P[Provider]
+    AG -->|execute name,args| REG
+    REG -->|destructive?| GATE{approval gate}
+    GATE --> H[tool handler] --> RES[ToolResult ok/content/error]

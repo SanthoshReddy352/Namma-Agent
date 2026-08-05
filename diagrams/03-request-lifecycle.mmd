@@ -1,0 +1,33 @@
+sequenceDiagram
+    autonumber
+    participant U as User
+    participant UI as React UI (useNammaAgent)
+    participant WS as FastAPI /ws
+    participant SV as NammaAgentService
+    participant AG as Agent
+    participant P as Provider
+    participant T as ToolRegistry
+    participant DB as SQLite
+
+    U->>UI: type message, Enter
+    UI->>WS: {type:"user_input", text, session_id, mode}
+    WS->>SV: run_turn(text, sink, on_token, approval, ...)
+    SV->>AG: process_turn(...)  (sink attached for speak/events)
+    AG->>DB: add_turn(user)
+    loop until final answer (bounded / cancellable)
+        AG->>P: generate(messages, tools, stream)
+        P-->>UI: token deltas (on_token → WS "token")
+        alt response has tool_calls
+            AG-->>UI: "preamble" (spoken ack) + "speak" event
+            AG->>T: execute(tool, args)
+            Note over AG,T: destructive tool → approval() round-trip over WS
+            T-->>AG: ToolResult
+            AG->>DB: log_audit(tool)
+            AG-->>UI: "tool_started" / "tool_finished"
+        else no tool_calls
+            AG->>DB: add_turn(assistant, final)
+            AG-->>UI: "turn_completed"
+        end
+    end
+    WS-->>UI: {type:"turn_result", content, tools_used}
+    UI-->>U: rendered answer (+ browser TTS if voice on)

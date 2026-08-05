@@ -1,0 +1,18 @@
+flowchart TD
+    Start([process_turn]) --> Build[Build messages:<br/>system = persona + facts + skills + memory<br/>+ recent history + user turn]
+    Build --> Loop{loop step}
+    Loop -->|cancelled| Stop[return 'Stopped.']
+    Loop -->|limit hit| Cap[return limit message]
+    Loop --> Gen[provider.generate<br/>stream tokens]
+    Gen --> HasTools{tool_calls?}
+    HasTools -->|no| Final[persist final answer<br/>emit turn_completed] --> Done([AgentResult])
+    HasTools -->|yes| Pre[emit preamble + speak]
+    Pre --> Each[for each tool call]
+    Each --> Dgate{destructive?}
+    Dgate -->|yes| Appr{approval?}
+    Appr -->|declined| Decl[append 'declined' result]
+    Appr -->|approved| Exec[registry.execute]
+    Dgate -->|no| Exec
+    Exec --> Audit[log_audit + emit tool_finished<br/>append tool result to messages]
+    Decl --> Loop
+    Audit --> Loop

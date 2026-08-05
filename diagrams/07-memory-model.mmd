@@ -1,0 +1,36 @@
+erDiagram
+    sessions ||--o{ turns : has
+    sessions {
+        TEXT id PK
+        TEXT created_at
+        TEXT updated_at
+        TEXT persona
+        TEXT summary
+    }
+    turns {
+        INTEGER id PK
+        TEXT session_id FK
+        TEXT role
+        TEXT content
+        TEXT tools_used
+        TEXT created_at
+    }
+    facts {
+        INTEGER id PK
+        TEXT key UK
+        TEXT value
+        TEXT category
+        REAL confidence
+        TEXT updated_at
+    }
+    audit {
+        INTEGER id PK
+        TEXT session_id
+        TEXT tool_name
+        TEXT args
+        TEXT result_summary
+        INTEGER success
+        TEXT created_at
+    }
+    facts ||..|| facts_fts : "FTS5 mirror"
+    turns ||..|| turns_fts : "FTS5 mirror"

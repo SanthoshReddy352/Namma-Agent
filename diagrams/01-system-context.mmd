@@ -1,0 +1,18 @@
+flowchart TB
+    user([User]) -->|chat / voice / attach| UI[Web UI<br/>React SPA]
+    phone([Phone]) -->|Telegram/Discord| Bridges
+    UI <-->|WebSocket + REST| Server[FastAPI server]
+    Server --> Service[NammaAgentService]
+    Bridges[Comms bridges] --> Service
+    Service --> Agent[Agent loop]
+    Agent -->|generate| LLM[(LLM provider<br/>Anthropic / OpenAI / Google /<br/>Ollama / LM Studio / custom)]
+    Agent --> Tools[Tool registry ~85 tools]
+    Agent --> Mem[(SQLite memory)]
+    Tools --> OS[OS / shell / files]
+    Tools --> Web[Web / browser / APIs]
+    Tools --> MCP[MCP servers]
+    Service -.speak events.-> UI
+    UI -.Web Speech API.-> Speaker([🔊 / 🎤 browser voice])
+
+    classDef ext fill:#eee,stroke:#999;
+    class LLM,OS,Web,MCP,Speaker,phone,user ext;

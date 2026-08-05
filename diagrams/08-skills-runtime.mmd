@@ -1,0 +1,10 @@
+flowchart LR
+    boot[startup] --> store[SkillStore.reload]
+    store --> scan[rglob SKILL.md across roots<br/>parse frontmatter, filter by platform]
+    scan --> cat[catalog: name + one-liner]
+    cat --> prompt[injected into system prompt]
+    model[model sees a match] --> use[use_skill name]
+    use --> render[render: substitute SKILL_DIR/SESSION_ID<br/>+ optional inline-shell]
+    render --> follow[full procedure returned → model follows it]
+    novel[solved a novel task] --> create[create_skill → ~/.namma_agent/skills]
+    create --> store

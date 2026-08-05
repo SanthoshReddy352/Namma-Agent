@@ -1,0 +1,2020 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="The trustworthy personal agent that measurably knows you — first-class on Windows. Self-hosted, any cloud brain, measured memory, event-driven watchers, and a trust model that's on by default.">
+      
+      
+      
+        <link rel="canonical" href="https://santhoshreddy352.github.io/Namma-Agent/COMMS/">
+      
+      
+        <link rel="prev" href="../INSTALL/">
+      
+      
+        <link rel="next" href="../DEPLOY/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Messaging channels - Namma Agent</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#messaging-comms-setup-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="Namma Agent" class="md-header__button md-logo" aria-label="Namma Agent" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Namma Agent
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Messaging channels
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="m17.75 4.09-2.53 1.94.91 3.06-2.63-1.81-2.63 1.81.91-3.06-2.53-1.94L12.44 4l1.06-3 1.06 3zm3.5 6.91-1.64 1.25.59 1.98-1.7-1.17-1.7 1.17.59-1.98L15.75 11l2.06-.05L18.5 9l.69 1.95zm-2.28 4.95c.83-.08 1.72 1.1 1.19 1.85-.32.45-.66.87-1.08 1.27C15.17 23 8.84 23 4.94 19.07c-3.91-3.9-3.91-10.24 0-14.14.4-.4.82-.76 1.27-1.08.75-.53 1.93.36 1.85 1.19-.27 2.86.69 5.83 2.89 8.02a9.96 9.96 0 0 0 8.02 2.89m-1.64 2.02a12.08 12.08 0 0 1-7.8-3.47c-2.17-2.19-3.33-5-3.49-7.82-2.81 3.14-2.7 7.96.31 10.98 3.02 3.01 7.84 3.12 10.98.31"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="teal" data-md-color-accent="deep-orange"  aria-label="Light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 7a5 5 0 0 1 5 5 5 5 0 0 1-5 5 5 5 0 0 1-5-5 5 5 0 0 1 5-5m0 2a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3m0-7 2.39 3.42C13.65 5.15 12.84 5 12 5s-1.65.15-2.39.42zM3.34 7l4.16-.35A7.2 7.2 0 0 0 5.94 8.5c-.44.74-.69 1.5-.83 2.29zm.02 10 1.76-3.77a7.131 7.131 0 0 0 2.38 4.14zM20.65 7l-1.77 3.79a7.02 7.02 0 0 0-2.38-4.15zm-.01 10-4.14.36c.59-.51 1.12-1.14 1.54-1.86.42-.73.69-1.5.83-2.29zM12 22l-2.41-3.44c.74.27 1.55.44 2.41.44.82 0 1.63-.17 2.37-.44z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/SanthoshReddy352/Namma-Agent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SanthoshReddy352/Namma-Agent
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="Namma Agent" class="md-nav__button md-logo" aria-label="Namma Agent" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Namma Agent
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SanthoshReddy352/Namma-Agent" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    SanthoshReddy352/Namma-Agent
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../WHY_NAMMA/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Why Namma
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Trust & security
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Trust & security
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SECURITY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Security model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Memory
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../MEMORY_SYSTEM_DESIGN/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Design (Engram)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../BENCHMARKS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Setup
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../INSTALL/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messaging channels
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Messaging channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-channel-can-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each channel can do
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trust-levels-who-is-allowed-to-do-what" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust levels — who is allowed to do what
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#telegram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telegram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whatsapp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WhatsApp
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WhatsApp">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#qr-link-personal-number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        QR link (personal number)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cloud-api-meta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud API (Meta)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#discord" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discord
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#turning-it-on" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Turning it on
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference: environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exposing-your-server-for-slack-whatsapp-inbound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exposing your server (for Slack / WhatsApp inbound)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes-on-formatting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes on formatting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-hosting
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Self-hosting
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY_ORACLE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Oracle free tier ($0)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../DEPLOY_VPS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Any VPS
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../GATEWAYS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateways on a server
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../ARCHITECTURE/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SKILLS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Skills
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../EXTENDING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Extending
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../PLUGINS/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Plugins (MCP)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../SELF_MODIFICATION/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Self-modification
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Project
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../RELEASING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Releasing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#what-each-channel-can-do" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        What each channel can do
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#trust-levels-who-is-allowed-to-do-what" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Trust levels — who is allowed to do what
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#telegram" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telegram
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#signal" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Signal
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#slack" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Slack
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#whatsapp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        WhatsApp
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="WhatsApp">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#qr-link-personal-number" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        QR link (personal number)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cloud-api-meta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Cloud API (Meta)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#discord" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Discord
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#turning-it-on" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Turning it on
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reference-environment-variables" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reference: environment variables
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#exposing-your-server-for-slack-whatsapp-inbound" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Exposing your server (for Slack / WhatsApp inbound)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#notes-on-formatting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Notes on formatting
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+    <a href="https://github.com/SanthoshReddy352/Namma-Agent/edit/main/docs/COMMS.md" title="Edit this page" class="md-content__button md-icon" rel="edit">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M10 20H6V4h7v5h5v3.1l2-2V8l-6-6H6c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h4zm10.2-7c.1 0 .3.1.4.2l1.3 1.3c.2.2.2.6 0 .8l-1 1-2.1-2.1 1-1c.1-.1.2-.2.4-.2m0 3.9L14.1 23H12v-2.1l6.1-6.1z"/></svg>
+    </a>
+  
+  
+
+
+<h1 id="messaging-comms-setup-guide">Messaging / Comms Setup Guide<a class="headerlink" href="#messaging-comms-setup-guide" title="Permanent link">&para;</a></h1>
+<p>Connect your assistant to chat platforms so it can <strong>send you notifications</strong> and —
+on most channels — <strong>reply to your messages</strong> from your phone.</p>
+<p>Everything here is optional. Set up only the channel(s) you want; the rest stay off.
+All credentials are entered in the app under <strong>Settings → Messaging</strong>, then saved and
+started from the <strong>Gateway</strong> control on that same tab. Behind the scenes they're stored
+in the project's <code>.env</code> file (the environment-variable name for each field is shown in
+<code>code</code>).</p>
+<blockquote>
+<p><strong>Tip:</strong> Telegram is the easiest to start with — about two minutes, no public URL, and
+full two-way chat.</p>
+<p>Running the agent on a <strong>server</strong> (VPS / Oracle free tier)? Start from
+<a href="../GATEWAYS/">GATEWAYS.md</a> — which channel fits a server (public-URL needs,
+trust, the 1 GB box) — and <a href="../DEPLOY/">DEPLOY.md</a> for the hosting itself.</p>
+</blockquote>
+<hr />
+<h2 id="what-each-channel-can-do">What each channel can do<a class="headerlink" href="#what-each-channel-can-do" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th style="text-align: center;">Outbound (notify)</th>
+<th style="text-align: center;">Two-way (chat back)</th>
+<th>Needs a public URL?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Telegram</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅ (polling)</td>
+<td>No</td>
+</tr>
+<tr>
+<td>Signal</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅ (polling)</td>
+<td>No (local signal-cli)</td>
+</tr>
+<tr>
+<td>Discord</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅ (bot / Gateway)</td>
+<td>No (bot dials out)</td>
+</tr>
+<tr>
+<td>Slack</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅ (Socket Mode, or webhook)</td>
+<td>No with Socket Mode; yes for the webhook path</td>
+</tr>
+<tr>
+<td>WhatsApp</td>
+<td style="text-align: center;">✅</td>
+<td style="text-align: center;">✅ (QR: dial-out, or Cloud API: webhook)</td>
+<td>Cloud API: yes; QR link: no</td>
+</tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Outbound</strong> works as soon as the credentials are saved — ask your assistant to
+  "send a test notification."</li>
+<li><strong>Two-way (inbound)</strong> also requires starting the <strong>Gateway</strong> (Settings → Messaging →
+  <strong>Start</strong>). Telegram, Signal, the <strong>Discord bot</strong>, and <strong>Slack Socket Mode</strong> all dial
+  <em>out</em>, so they work fully locally — no public URL. Only the Slack <strong>webhook</strong> path and
+  WhatsApp need your server reachable from the internet (see
+  <a href="#exposing-your-server-for-sl--whatsapp-inbound">Exposing your server</a>).</li>
+<li><strong>A webhook is send-only.</strong> Discord/Slack <em>incoming webhooks</em> can post notifications but
+  can never <em>receive</em> a message — that's why two-way Discord needs a <strong>bot</strong> and local
+  two-way Slack needs <strong>Socket Mode</strong> (an app-level token), not just the webhook URL.</li>
+</ul>
+<hr />
+<h2 id="trust-levels-who-is-allowed-to-do-what">Trust levels — who is allowed to do what<a class="headerlink" href="#trust-levels-who-is-allowed-to-do-what" title="Permanent link">&para;</a></h2>
+<p>An always-on gateway means messages can arrive from people who aren't you. Every
+channel therefore carries a <strong>trust level</strong> (<code>owner</code> / <code>trusted</code> / <code>untrusted</code>) —
+shown and changeable per channel in <strong>Settings → Messaging</strong>, and explained in
+full in <a href="../SECURITY/">SECURITY.md</a>:</p>
+<table>
+<thead>
+<tr>
+<th>Channel</th>
+<th>Default</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Telegram, Signal</td>
+<td><code>owner</code></td>
+<td>the bridge only talks to your pinned chat id</td>
+</tr>
+<tr>
+<td>Discord</td>
+<td><code>trusted</code></td>
+<td>your bot in your server, but not provably you</td>
+</tr>
+<tr>
+<td>Slack, WhatsApp</td>
+<td><code>untrusted</code></td>
+<td>open webhooks any member/contact can reach</td>
+</tr>
+<tr>
+<td>anything unknown</td>
+<td><code>untrusted</code></td>
+<td>capability is never granted by omission</td>
+</tr>
+</tbody>
+</table>
+<p>A message from an <strong>untrusted</strong> channel runs with destructive tools stripped and
+force-declined, its text wrapped as data-not-instructions, and any would-be
+memory writes <strong>quarantined</strong> for your review in Settings → System → Security —
+a stranger can chat, but can't change your machine or teach your agent "facts."
+If you make a webhook channel reachable from the internet, leave its trust at
+<code>untrusted</code> unless you fully control who can post to it.</p>
+<hr />
+<h2 id="telegram">Telegram<a class="headerlink" href="#telegram" title="Permanent link">&para;</a></h2>
+<p><strong>Fields:</strong> Bot token (<code>NAMMA_TELEGRAM_TOKEN</code>), Chat id (<code>NAMMA_TELEGRAM_CHAT_ID</code>)</p>
+<ol>
+<li>In Telegram, open <strong><a href="https://t.me/BotFather">@BotFather</a></strong> and send <code>/newbot</code>.
+   Follow the prompts (a display name, then a unique username ending in <code>bot</code>).</li>
+<li>BotFather replies with a <strong>bot token</strong> like <code>123456789:AAH...</code>.
+   → paste it into <strong>Bot token</strong> (<code>NAMMA_TELEGRAM_TOKEN</code>).</li>
+<li><strong>Message your new bot once</strong> (send it any text). A bot can't message you until you've
+   started a chat with it.</li>
+<li>Get your <strong>chat id</strong> — either:</li>
+<li>Message <strong><a href="https://t.me/userinfobot">@userinfobot</a></strong>; it replies with your numeric id, <strong>or</strong></li>
+<li>Open <code>https://api.telegram.org/bot&lt;YOUR_TOKEN&gt;/getUpdates</code> in a browser and find
+     <code>"chat":{"id":123456789}</code>.</li>
+</ol>
+<p>→ paste the number into <strong>Chat id</strong> (<code>NAMMA_TELEGRAM_CHAT_ID</code>).</p>
+<p>With both set, your assistant sends notifications <strong>and</strong> you can chat with it from your
+phone (commands like <code>/new</code>, <code>/mode</code>, <code>/model</code> work in-chat).</p>
+<hr />
+<h2 id="signal">Signal<a class="headerlink" href="#signal" title="Permanent link">&para;</a></h2>
+<p><strong>Fields:</strong> API URL (<code>NAMMA_SIGNAL_API_URL</code>), Sender number (<code>NAMMA_SIGNAL_NUMBER</code>),
+Recipient / group id (<code>NAMMA_SIGNAL_RECIPIENT</code>)</p>
+<p>Signal has no public bot API, so you run a small local bridge —
+<a href="https://github.com/bbernhard/signal-cli-rest-api"><code>signal-cli-rest-api</code></a>.</p>
+<ol>
+<li><strong>Run the bridge</strong> (Docker is easiest):
+   <div class="highlight"><pre><span></span><code>docker<span class="w"> </span>run<span class="w"> </span>-d<span class="w"> </span>--name<span class="w"> </span>signal-api<span class="w"> </span>-p<span class="w"> </span><span class="m">8080</span>:8080<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-v<span class="w"> </span><span class="nv">$HOME</span>/.local/share/signal-cli:/home/.local/share/signal-cli<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>bbernhard/signal-cli-rest-api
+</code></pre></div>
+   → <strong>API URL</strong> = <code>http://localhost:8080</code> (<code>NAMMA_SIGNAL_API_URL</code>).</li>
+<li><strong>Register a number</strong> with the bridge. The simplest path is to <strong>link</strong> it as a second
+   device to an existing Signal account: open
+   <code>http://localhost:8080/v1/qrcodelink?device_name=namma</code> and scan the QR from
+   Signal → <em>Settings → Linked devices</em>. (You can also register a fresh number — see the
+   project's README.) The registered number in <strong>E.164</strong> (e.g. <code>+919876543210</code>) goes in
+   <strong>Sender number</strong> (<code>NAMMA_SIGNAL_NUMBER</code>).</li>
+<li><strong>Recipient / group id</strong> — the number you want it to talk to in E.164, <strong>or</strong> a Signal
+   group id → <strong>Recipient / group id</strong> (<code>NAMMA_SIGNAL_RECIPIENT</code>).</li>
+</ol>
+<p>With these set, your assistant both sends <strong>and</strong> replies to Signal messages (polling — no
+public URL needed).</p>
+<hr />
+<h2 id="slack">Slack<a class="headerlink" href="#slack" title="Permanent link">&para;</a></h2>
+<p><strong>Fields:</strong> Webhook URL (<code>NAMMA_SLACK_WEBHOOK_URL</code>),
+<em>(two-way, local)</em> App token (<code>NAMMA_SLACK_APP_TOKEN</code>) + Bot token (<code>NAMMA_SLACK_BOT_TOKEN</code>),
+<em>(two-way, public-URL alternative)</em> Signing secret (<code>NAMMA_SLACK_SIGNING_SECRET</code>)</p>
+<ol>
+<li>Go to <strong><a href="https://api.slack.com/apps">api.slack.com/apps</a></strong> → <strong>Create New App</strong> →
+   <strong>From scratch</strong>. Name it and pick your workspace.</li>
+<li><strong>Outbound:</strong> open <strong>Incoming Webhooks</strong> → toggle <strong>On</strong> → <strong>Add New Webhook to
+   Workspace</strong> → choose a channel → <strong>Allow</strong>. Copy the URL (<code>https://hooks.slack.com/services/...</code>)
+   → <strong>Webhook URL</strong> (<code>NAMMA_SLACK_WEBHOOK_URL</code>). This alone enables notifications.</li>
+<li><strong>For two-way replies — Socket Mode (recommended; works locally, no public URL):</strong></li>
+<li><strong>Socket Mode</strong> → toggle <strong>On</strong>. This generates an <strong>app-level token</strong> (<code>xapp-…</code>) with
+     <code>connections:write</code> → <strong>App token</strong> (<code>NAMMA_SLACK_APP_TOKEN</code>).</li>
+<li><strong>OAuth &amp; Permissions</strong> → add the <strong><code>chat:write</code></strong> bot scope → <strong>Install to Workspace</strong>
+     → copy the <strong>Bot User OAuth Token</strong> (<code>xoxb-…</code>) → <strong>Bot token</strong> (<code>NAMMA_SLACK_BOT_TOKEN</code>).</li>
+<li><strong>Event Subscriptions</strong> → toggle <strong>On</strong> and subscribe to bot message events
+     (<code>message.channels</code> for channels, <code>message.im</code> for DMs). With Socket Mode on, Slack
+     delivers these over the websocket — <strong>no Request URL needed</strong>.</li>
+<li>Invite the bot to the channel (<code>/invite @YourApp</code>), then start the Gateway.</li>
+<li><strong>Alternative — HTTP Events API (needs a public URL):</strong> instead of Socket Mode, copy the
+   <strong>Signing Secret</strong> from <strong>Basic Information</strong> → <code>NAMMA_SLACK_SIGNING_SECRET</code>, and under
+   <strong>Event Subscriptions</strong> set the <strong>Request URL</strong> to <code>https://&lt;your-public-host&gt;/webhooks/slack</code>.
+   Used only when no app-level token is set.</li>
+</ol>
+<hr />
+<h2 id="whatsapp">WhatsApp<a class="headerlink" href="#whatsapp" title="Permanent link">&para;</a></h2>
+<p>WhatsApp has <strong>two backends</strong>, chosen by <strong>Backend</strong> (<code>NAMMA_WHATSAPP_MODE</code>) in
+Settings → Messaging:</p>
+<table>
+<thead>
+<tr>
+<th>Backend</th>
+<th><code>NAMMA_WHATSAPP_MODE</code></th>
+<th>What it is</th>
+<th>Public URL?</th>
+<th>Restrictions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Cloud API</strong> (default)</td>
+<td><code>cloud</code></td>
+<td>Official Meta Business API</td>
+<td>Yes, for inbound</td>
+<td>Free-form text only inside the 24-hour window; otherwise pre-approved templates</td>
+</tr>
+<tr>
+<td><strong>QR link</strong></td>
+<td><code>qr</code></td>
+<td>Your own number, linked by scanning a QR (WhatsApp Web protocol, via <code>neonize</code>)</td>
+<td>No — dials out</td>
+<td>None (messages first, replies freely)</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>⚠️ <strong>QR mode is unofficial.</strong> It drives a multi-device session the same way
+WhatsApp Web does, which is <strong>against WhatsApp's Terms of Service</strong> and can get a
+number <strong>banned</strong>. It's the best fit for a self-hosted personal assistant on
+<em>your own</em> number — but that risk is yours. Prefer the Cloud API if you need an
+official, supported integration.</p>
+</blockquote>
+<h3 id="qr-link-personal-number">QR link (personal number)<a class="headerlink" href="#qr-link-personal-number" title="Permanent link">&para;</a></h3>
+<ol>
+<li><code>pip install neonize</code> (ships the whatsmeow session engine).</li>
+<li>Settings → Messaging → <strong>WhatsApp → Backend: qr</strong>. Set <strong>Your number</strong>
+   (<code>NAMMA_WHATSAPP_TO</code>) to your WhatsApp number in <strong>E.164 digits</strong> (e.g.
+   <code>919876543210</code>). Save.</li>
+<li><strong>Start</strong> the gateway (top of the Messaging tab) — this opens the WhatsApp
+   session. A <strong>QR code</strong> appears in the WhatsApp panel.</li>
+<li>On your phone: <strong>WhatsApp → Settings → Linked Devices → Link a device</strong>, and
+   scan it. Once linked, the panel shows ✅ and the session persists in
+   <code>~/.namma_agent/whatsapp_qr.sqlite3</code> (scan once; it reconnects on its own).</li>
+</ol>
+<p>Inbound is scoped to <code>NAMMA_WHATSAPP_TO</code> so only <em>you</em> can drive the agent; leave
+it empty to accept DMs from anyone (personal boxes only). Group messages are ignored.</p>
+<h3 id="cloud-api-meta">Cloud API (Meta)<a class="headerlink" href="#cloud-api-meta" title="Permanent link">&para;</a></h3>
+<p><strong>Fields:</strong> Access token (<code>NAMMA_WHATSAPP_TOKEN</code>), Phone number id
+(<code>NAMMA_WHATSAPP_PHONE_ID</code>), Recipient (<code>NAMMA_WHATSAPP_TO</code>),
+<em>(optional, for two-way)</em> Verify token (<code>NAMMA_WHATSAPP_VERIFY_TOKEN</code>)</p>
+<p>Uses the <strong>WhatsApp Cloud API</strong> from Meta.</p>
+<ol>
+<li>At <strong><a href="https://developers.facebook.com/">developers.facebook.com</a></strong> → <strong>My Apps</strong> →
+   <strong>Create App</strong> → add the <strong>WhatsApp</strong> product.</li>
+<li>Open <strong>WhatsApp → API Setup</strong>:</li>
+<li>Copy the <strong>Temporary access token</strong> → <strong>Access token</strong> (<code>NAMMA_WHATSAPP_TOKEN</code>).
+     For long-term use, generate a permanent token via a <strong>System User</strong> in Business
+     Settings (the temporary one expires in ~24h).</li>
+<li>Copy the <strong>Phone number ID</strong> (the sender) → <strong>Phone number id</strong>
+     (<code>NAMMA_WHATSAPP_PHONE_ID</code>). Until you register your own number, Meta provides a test
+     sender number.</li>
+<li><strong>Recipient</strong> — your phone number in <strong>E.164 digits only</strong>, e.g. <code>919876543210</code>
+   (no <code>+</code>, no spaces) → <strong>Recipient</strong> (<code>NAMMA_WHATSAPP_TO</code>). Add it to the allowed
+   recipients in the API Setup page first, or messages won't deliver.</li>
+<li><strong>For two-way replies:</strong></li>
+<li>Choose any string as your <strong>verify token</strong> and put the same value in <strong>Verify token</strong>
+     (<code>NAMMA_WHATSAPP_VERIFY_TOKEN</code>).</li>
+<li>In the app's <strong>Configuration → Webhooks</strong>, set the callback URL to
+     <code>https://&lt;your-public-host&gt;/webhooks/whatsapp</code> and the verify token to the same
+     string. Subscribe to <code>messages</code>. Inbound requires a publicly reachable server.</li>
+</ol>
+<hr />
+<h2 id="discord">Discord<a class="headerlink" href="#discord" title="Permanent link">&para;</a></h2>
+<p><strong>Fields:</strong> Webhook URL (<code>NAMMA_DISCORD_WEBHOOK_URL</code>) — outbound;
+<em>(two-way)</em> Bot token (<code>NAMMA_DISCORD_BOT_TOKEN</code>),
+<em>(optional)</em> Channel id (<code>NAMMA_DISCORD_CHANNEL_ID</code>)</p>
+<p><strong>Outbound (notifications only):</strong>
+1. In your Discord server, open a channel's <strong>settings (gear icon)</strong> →
+   <strong>Integrations</strong> → <strong>Webhooks</strong> → <strong>New Webhook</strong>.
+2. Pick the target channel, optionally rename it, then <strong>Copy Webhook URL</strong>
+   (<code>https://discord.com/api/webhooks/...</code>)
+   → paste into <strong>Webhook URL</strong> (<code>NAMMA_DISCORD_WEBHOOK_URL</code>).</p>
+<p><strong>Two-way (receive + reply) — needs a bot, because a webhook is send-only.</strong> The bot
+connects to the Discord Gateway over a websocket and dials <em>out</em>, so it works locally
+(no public URL):
+1. <strong><a href="https://discord.com/developers/applications">discord.com/developers</a></strong> → <strong>New
+   Application</strong> → name it → <strong>Bot</strong> (left nav) → <strong>Reset Token</strong> → <strong>Copy</strong> →
+   <strong>Bot token</strong> (<code>NAMMA_DISCORD_BOT_TOKEN</code>).
+2. On the same <strong>Bot</strong> page, under <strong>Privileged Gateway Intents</strong>, enable
+   <strong>MESSAGE CONTENT INTENT</strong> (without it, incoming message text arrives empty).
+3. <strong>OAuth2 → URL Generator</strong> → scopes <strong><code>bot</code></strong>, bot permissions <strong>View Channels</strong> +
+   <strong>Send Messages</strong> → open the generated URL → add the bot to your server.
+4. <em>(Optional)</em> To restrict the assistant to one channel, enable Developer Mode
+   (User Settings → Advanced), right-click the channel → <strong>Copy Channel ID</strong> →
+   <strong>Channel id</strong> (<code>NAMMA_DISCORD_CHANNEL_ID</code>). Leave blank to listen everywhere the
+   bot can see.
+5. Start the Gateway (Settings → Messaging → <strong>Start</strong>).</p>
+<p>Discord is send-only here — your assistant posts notifications, but doesn't read replies.</p>
+<hr />
+<h2 id="turning-it-on">Turning it on<a class="headerlink" href="#turning-it-on" title="Permanent link">&para;</a></h2>
+<ol>
+<li>Enter credentials in <strong>Settings → Messaging</strong> and click <strong>Save</strong>.</li>
+<li>On the <strong>Gateway</strong> control at the top of that tab, click <strong>Start</strong>.</li>
+<li>Configured channels are listed; Telegram and Signal begin polling immediately.</li>
+<li>Editing a token later? Click <strong>Save</strong>, then <strong>Stop</strong> and <strong>Start</strong> so the gateway
+     reloads it (no app restart needed).</li>
+<li>Test outbound by asking your assistant to <strong>"send a test notification."</strong></li>
+</ol>
+<p>The Gateway governs only the <strong>inbound</strong> side. Outbound notifications work whether or not
+the gateway is running.</p>
+<hr />
+<h2 id="reference-environment-variables">Reference: environment variables<a class="headerlink" href="#reference-environment-variables" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Variable</th>
+<th>Channel</th>
+<th>Required for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bot token</td>
+<td><code>NAMMA_TELEGRAM_TOKEN</code></td>
+<td>Telegram</td>
+<td>out + in</td>
+</tr>
+<tr>
+<td>Chat id</td>
+<td><code>NAMMA_TELEGRAM_CHAT_ID</code></td>
+<td>Telegram</td>
+<td>outbound</td>
+</tr>
+<tr>
+<td>API URL</td>
+<td><code>NAMMA_SIGNAL_API_URL</code></td>
+<td>Signal</td>
+<td>out + in</td>
+</tr>
+<tr>
+<td>Sender number</td>
+<td><code>NAMMA_SIGNAL_NUMBER</code></td>
+<td>Signal</td>
+<td>out + in</td>
+</tr>
+<tr>
+<td>Recipient / group id</td>
+<td><code>NAMMA_SIGNAL_RECIPIENT</code></td>
+<td>Signal</td>
+<td>outbound</td>
+</tr>
+<tr>
+<td>Webhook URL</td>
+<td><code>NAMMA_SLACK_WEBHOOK_URL</code></td>
+<td>Slack</td>
+<td>outbound</td>
+</tr>
+<tr>
+<td>App token (xapp-)</td>
+<td><code>NAMMA_SLACK_APP_TOKEN</code></td>
+<td>Slack</td>
+<td>inbound (Socket Mode)</td>
+</tr>
+<tr>
+<td>Bot token (xoxb-)</td>
+<td><code>NAMMA_SLACK_BOT_TOKEN</code></td>
+<td>Slack</td>
+<td>inbound replies</td>
+</tr>
+<tr>
+<td>Signing secret</td>
+<td><code>NAMMA_SLACK_SIGNING_SECRET</code></td>
+<td>Slack</td>
+<td>inbound (webhook path)</td>
+</tr>
+<tr>
+<td>Backend (cloud/qr)</td>
+<td><code>NAMMA_WHATSAPP_MODE</code></td>
+<td>WhatsApp</td>
+<td>selects backend</td>
+</tr>
+<tr>
+<td>Access token</td>
+<td><code>NAMMA_WHATSAPP_TOKEN</code></td>
+<td>WhatsApp</td>
+<td>out + in (cloud)</td>
+</tr>
+<tr>
+<td>Phone number id</td>
+<td><code>NAMMA_WHATSAPP_PHONE_ID</code></td>
+<td>WhatsApp</td>
+<td>out + in (cloud)</td>
+</tr>
+<tr>
+<td>Recipient / your number</td>
+<td><code>NAMMA_WHATSAPP_TO</code></td>
+<td>WhatsApp</td>
+<td>out + in scope</td>
+</tr>
+<tr>
+<td>Verify token</td>
+<td><code>NAMMA_WHATSAPP_VERIFY_TOKEN</code></td>
+<td>WhatsApp</td>
+<td>inbound (cloud)</td>
+</tr>
+<tr>
+<td>Webhook URL</td>
+<td><code>NAMMA_DISCORD_WEBHOOK_URL</code></td>
+<td>Discord</td>
+<td>outbound</td>
+</tr>
+<tr>
+<td>Bot token</td>
+<td><code>NAMMA_DISCORD_BOT_TOKEN</code></td>
+<td>Discord</td>
+<td>inbound (two-way)</td>
+</tr>
+<tr>
+<td>Channel id</td>
+<td><code>NAMMA_DISCORD_CHANNEL_ID</code></td>
+<td>Discord</td>
+<td>inbound (optional)</td>
+</tr>
+</tbody>
+</table>
+<p><code>NAMMA_*</code> variable names are stable identifiers — don't rename them. You can also set these
+directly in <code>.env</code> instead of the UI; shell environment variables take precedence over
+<code>.env</code> at runtime. A template lives in <a href="../namma_agent/.env.example"><code>namma_agent/.env.example</code></a>.</p>
+<hr />
+<h2 id="exposing-your-server-for-slack-whatsapp-inbound">Exposing your server (for Slack / WhatsApp inbound)<a class="headerlink" href="#exposing-your-server-for-slack-whatsapp-inbound" title="Permanent link">&para;</a></h2>
+<p>Webhook channels need Slack/Meta to reach your machine. For a quick local setup, tunnel
+your server (default <code>http://127.0.0.1:8000</code>) with a tool like
+<a href="https://ngrok.com/">ngrok</a>:</p>
+<div class="highlight"><pre><span></span><code>ngrok<span class="w"> </span>http<span class="w"> </span><span class="m">8000</span>
+</code></pre></div>
+<p>Use the resulting <code>https://&lt;random&gt;.ngrok.app</code> host in the callback URLs above
+(<code>…/webhooks/slack</code>, <code>…/webhooks/whatsapp</code>). For always-on use, deploy the server to a host
+with a stable public HTTPS URL instead.</p>
+<hr />
+<h2 id="notes-on-formatting">Notes on formatting<a class="headerlink" href="#notes-on-formatting" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>E.164</strong> phone format = <code>+</code> <code>&lt;country code&gt;</code> <code>&lt;number&gt;</code>, e.g. <code>+919876543210</code>.
+  Signal keeps the leading <code>+</code>; WhatsApp's <strong>Recipient</strong> field wants <strong>digits only</strong>
+  (<code>919876543210</code>).</li>
+<li><strong>E.164</strong> group ids for Signal are the raw group identifier from your signal-cli setup.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="Footer" >
+        
+          
+          <a href="../INSTALL/" class="md-footer__link md-footer__link--prev" aria-label="Previous: Install">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Previous
+              </span>
+              <div class="md-ellipsis">
+                Install
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../DEPLOY/" class="md-footer__link md-footer__link--next" aria-label="Next: Overview">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                Next
+              </span>
+              <div class="md-ellipsis">
+                Overview
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["navigation.sections", "navigation.top", "navigation.footer", "search.suggest", "content.code.copy", "content.action.edit"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
