@@ -1,0 +1,17 @@
+{
+  "id": "bc655502dccd",
+  "session_id": "274b5896-e0a7-46e6-a242-1bd6f012706c",
+  "tool": "write_file",
+  "created_at": "2026-08-03T18:09:52+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\AppData\\Local\\Temp\\build_deck.py",
+      "kind": "file",
+      "stored": "files/0.py",
+      "size": 14354,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

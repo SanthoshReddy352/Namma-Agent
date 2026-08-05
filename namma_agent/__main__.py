@@ -1,13 +1,16 @@
 """`python -m namma_agent` → launch the app (or run a one-off subcommand).
 
-Subcommands (used by the installers):
+Subcommands (used by the installers — do not rename):
   --version             print the version and exit
   --setup               interactive: configure the first provider, then onboarding
   --configure <file>    non-interactive: write provider config from a JSON file
                         (keys: type, model, api_key, base_url) — for the GUI installer
   --onboard <file>      non-interactive: save onboarding answers from a JSON file
   --server              run headless (no native window)
-  --chat                local CLI chat gateway (REPL in the terminal)
+  --chat / --tui        the terminal UI (see :mod:`namma_agent.tui.cli`)
+
+Anything else — ``gateway``, ``sessions``, ``config``, ``-z``, ``--resume``, … —
+is handed to the full command surface in :mod:`namma_agent.tui.cli`.
 """
 import sys
 
@@ -53,23 +56,37 @@ if "--setup" in sys.argv:
     run_onboarding()
     raise SystemExit(0)
 
-if "--chat" in sys.argv:
-    # Local CLI chat gateway: talk to the same agent (memory, tools, model picker,
-    # /commands, !shell) right in the terminal — no server, no window.
-    from namma_agent.comms.console import ConsoleInbound
-    from namma_agent.config import assistant_name, load_config
-    from namma_agent.service import NammaAgentService
+# Everything below --server is the terminal front end. `--chat` is kept as an
+# alias for the default action: it used to mean "the plain REPL", and it still
+# gets a REPL whenever the terminal UI can't run (no TTY, missing deps), so the
+# flag never breaks — it just gets nicer when it can.
+_CLI_SUBCOMMANDS = {
+    "chat", "gateway", "serve", "sessions", "model", "config", "skills",
+    "tools", "mcp", "memory", "status", "doctor", "logs", "setup", "version",
+}
+_CLI_FLAGS = {
+    "--tui", "--cli", "--chat", "-z", "--oneshot", "-c", "--continue",
+    "-r", "--resume", "-m", "--model", "--mode", "--yolo", "--skin",
+    "--no-color", "--ascii", "--gateway", "-h", "--help",
+}
 
-    _svc = NammaAgentService(config=load_config())
 
-    def _chat_turn(text, session_id, mode, askpass=None, model=None):
-        res = _svc.run_turn(text, session_id=session_id, mode=mode,
-                            askpass=askpass, model_id=model)
-        return res.content, res.session_id
+def _cli_argv(argv: list[str]):
+    """The argv to hand the CLI, or None when this isn't a CLI invocation."""
+    if not argv or "--server" in argv:
+        return None
+    if not (argv[0] in _CLI_SUBCOMMANDS or _CLI_FLAGS.intersection(argv)):
+        return None
+    # --chat predates the subcommand surface and carries no meaning of its own;
+    # dropping it leaves the default action, which is exactly what it asked for.
+    return [arg for arg in argv if arg != "--chat"]
 
-    ConsoleInbound(_chat_turn, get_models=_svc.configured_models,
-                   name=assistant_name(_svc.config)).run_blocking()
-    raise SystemExit(0)
+
+_argv = _cli_argv(sys.argv[1:])
+if _argv is not None:
+    from namma_agent.tui.cli import main as cli_main
+
+    raise SystemExit(cli_main(_argv))
 
 from namma_agent.app import main  # noqa: E402
 

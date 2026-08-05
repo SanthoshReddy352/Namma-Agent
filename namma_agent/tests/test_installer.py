@@ -105,6 +105,60 @@ def test_optional_tools_have_install_commands():
     assert core.install_dep_command("ffmpeg", "Darwin") == ["brew", "install", "ffmpeg"]
 
 
+def test_ollama_has_install_commands_and_a_linux_fallback():
+    """Ollama publishes no distro packages, so Linux must fall back to the
+    official script rather than silently doing nothing."""
+    assert "Ollama.Ollama" in core.install_dep_command("ollama", "Windows")
+    assert core.install_dep_command("ollama", "Darwin") == ["brew", "install", "ollama"]
+    assert core.OLLAMA_INSTALL_SH.startswith("https://ollama.com/")
+
+
+def test_embeddings_is_an_install_step_and_matches_the_shipped_config():
+    """The step must exist in the stepper, and the model it pulls must be the
+    one config.yaml points at — a mismatch would install 46 MB for nothing."""
+    import yaml
+    assert "embeddings" in [k for k, _ in core.INSTALL_STEPS]
+    root = Path(core.__file__).resolve().parents[1]
+    cfg = yaml.safe_load(
+        (root / "namma_agent" / "config.yaml").read_text(encoding="utf-8"))
+    assert cfg["memory"]["embeddings"]["model"] == core.EMBEDDING_MODEL
+
+
+def test_setup_embeddings_is_required_and_fails_the_install(monkeypatch):
+    """Embeddings are a real dependency: when Ollama cannot be provisioned the
+    install must STOP with instructions, not quietly ship an agent whose memory
+    can only do keyword search. StepReporter.step turns the raise into a red
+    step and propagates it."""
+    monkeypatch.delenv(core.SKIP_ENV, raising=False)
+    monkeypatch.setattr(core, "_has", lambda _c: False)
+    monkeypatch.setattr(core, "install_dep_command", lambda *_a, **_k: None)
+    monkeypatch.setattr(core.platform, "system", lambda: "Windows")
+    with pytest.raises(RuntimeError) as err:
+        core.setup_embeddings(lambda _m: None)
+    msg = str(err.value)
+    assert "Ollama" in msg and "ollama pull all-minilm" in msg
+    assert core.SKIP_ENV in msg          # the message names the way out
+
+
+def test_setup_embeddings_opt_out_env_skips_cleanly(monkeypatch):
+    """The documented escape for air-gapped / locked-down hosts."""
+    monkeypatch.setenv(core.SKIP_ENV, "1")
+    monkeypatch.setattr(core, "_has", lambda _c: False)
+    logs: list[str] = []
+    assert core.setup_embeddings(logs.append) is False      # no raise
+    assert any(core.SKIP_ENV in l for l in logs)
+
+
+def test_setup_embeddings_required_false_degrades_instead_of_raising(monkeypatch):
+    monkeypatch.delenv(core.SKIP_ENV, raising=False)
+    monkeypatch.setattr(core, "_has", lambda _c: False)
+    monkeypatch.setattr(core, "install_dep_command", lambda *_a, **_k: None)
+    monkeypatch.setattr(core.platform, "system", lambda: "Windows")
+    logs: list[str] = []
+    assert core.setup_embeddings(logs.append, required=False) is False
+    assert any("keyword-only" in l for l in logs)
+
+
 def test_ensure_optional_tools_never_raises(monkeypatch):
     # Pretend both are missing and no installer exists → it must log, not raise.
     monkeypatch.setattr(core, "_has", lambda _c: False)

@@ -1,0 +1,17 @@
+{
+  "id": "76b37c5ae933",
+  "session_id": "274b5896-e0a7-46e6-a242-1bd6f012706c",
+  "tool": "write_file",
+  "created_at": "2026-08-03T18:15:14+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\AppData\\Local\\Temp\\fix_table.py",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

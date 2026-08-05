@@ -83,6 +83,72 @@ def _app_url() -> str:
         or f"http://127.0.0.1:{os.environ.get('PORT', 8000)}"
 
 
+# The AUMID we show toasts under (see _WINDOWS_PS) — also the key Windows files
+# our per-app notification setting under.
+_WIN_AUMID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
+
+
+def _windows_toasts_enabled() -> tuple[bool, str]:
+    """Will Windows actually *render* a toast right now?
+
+    ``ToastNotification.Show()`` succeeds silently when the user has turned
+    notifications off, so spawning the helper tells us nothing. Read the same
+    switches the Settings app writes, so we can report the truth instead of a
+    false "sent":
+
+      • ``PushNotifications\\ToastEnabled`` = 0 → the master "Notifications"
+        switch in Settings → System → Notifications is off; nothing gets through.
+      • ``Notifications\\Settings\\<AUMID>\\Enabled`` = 0 → toasts are allowed,
+        but muted for the app we publish under.
+    """
+    try:
+        import winreg
+    except Exception:  # pragma: no cover - non-Windows
+        return True, ""
+
+    def _dword(root: str, name: str):
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, root) as k:
+                return winreg.QueryValueEx(k, name)[0]
+        except OSError:
+            return None  # key/value absent = Windows default = enabled
+
+    if _dword(r"SOFTWARE\Microsoft\Windows\CurrentVersion\PushNotifications",
+              "ToastEnabled") == 0:
+        return False, ("Windows notifications are turned off. Turn them on in "
+                       "Settings → System → Notifications.")
+    if _dword(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings"
+              "\\" + _WIN_AUMID, "Enabled") == 0:
+        return False, ("Windows has notifications muted for Windows PowerShell, "
+                       "which this app posts toasts through. Re-enable it in "
+                       "Settings → System → Notifications.")
+    return True, ""
+
+
+def notification_status() -> dict:
+    """Can this machine show a native desktop toast? ``{available, reason}``.
+
+    Used by ``/api/notify`` to answer honestly and by the UI to fall back to an
+    in-app banner rather than dropping the notification on the floor.
+    """
+    system = platform.system()
+    try:
+        if system == "Windows":
+            ok, reason = _windows_toasts_enabled()
+            return {"available": ok, "reason": reason, "platform": "windows"}
+        if system == "Darwin":
+            ok = bool(shutil.which("osascript"))
+            return {"available": ok, "platform": "macos",
+                    "reason": "" if ok else "osascript is unavailable on this Mac."}
+        ok = bool(shutil.which("notify-send"))
+        return {"available": ok, "platform": "linux",
+                "reason": "" if ok else
+                          "No notification daemon found — install libnotify "
+                          "(notify-send) to get desktop toasts."}
+    except Exception:
+        return {"available": False, "reason": "", "platform": system.lower()}
+
+
 def send_native_notification(title: str, body: str = "",
                              url: str | None = None) -> bool:
     """Show a native desktop notification. Returns True if one was dispatched.
@@ -90,10 +156,16 @@ def send_native_notification(title: str, body: str = "",
     ``url`` is what the toast's Open button (and the toast body) launches;
     defaults to the local web UI. Best-effort and non-blocking: the OS helper
     is spawned detached and we return immediately. Never raises.
+
+    Returns False *without spawning* when the OS is configured to swallow
+    toasts — spawning would "succeed" and show nothing, and the caller needs a
+    truthful answer so it can fall back to an in-app banner.
     """
     title = (title or "Namma Agent").strip() or "Namma Agent"
     body = (body or "").strip()
     system = platform.system()
+    if not notification_status().get("available"):
+        return False
     try:
         if system == "Windows":
             open_url = (url or _app_url()).strip()

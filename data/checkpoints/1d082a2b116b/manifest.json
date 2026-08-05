@@ -1,0 +1,17 @@
+{
+  "id": "1d082a2b116b",
+  "session_id": "fe83fbb6-239b-4534-91b6-53b6f6403e08",
+  "tool": "write_file",
+  "created_at": "2026-08-03T17:20:25+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\AppData\\Local\\Temp\\namma_pitch\\gen.py",
+      "kind": "file",
+      "stored": "files/0.py",
+      "size": 5332,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

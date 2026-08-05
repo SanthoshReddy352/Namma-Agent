@@ -4,6 +4,7 @@ graceful degradation when no embedder is configured. All offline (FakeEmbedder).
 from __future__ import annotations
 
 import json
+import time
 
 from namma_agent.core.engram import Engram
 from namma_agent.core.engram.embeddings import Embedder, cosine, from_blob, to_blob
@@ -54,6 +55,69 @@ def test_blob_roundtrip_and_cosine():
     assert cosine([1, 0], [1, 0]) == 1.0
     assert cosine([1, 0], [0, 1]) == 0.0
     assert cosine([], [1]) == 0.0
+
+
+def test_embedder_rewrites_localhost_to_ipv4():
+    """localhost resolves to ::1 first on Windows and local inference servers
+    bind IPv4 only, so every call paid a failed-connect penalty (measured
+    2154 ms vs 75 ms against the same server) — and the documented config
+    example used localhost."""
+    assert Embedder(base_url="http://localhost:11434/v1",
+                    model="m").base_url == "http://127.0.0.1:11434/v1"
+    # An explicit IPv6 literal is a deliberate choice — leave it alone.
+    assert Embedder(base_url="http://[::1]:11434/v1",
+                    model="m").base_url == "http://[::1]:11434/v1"
+    # Remote hosts untouched.
+    assert Embedder(base_url="https://api.openai.com/v1",
+                    model="m").base_url == "https://api.openai.com/v1"
+    # Still counts as local for the no-API-key rule after rewriting.
+    assert Embedder(base_url="http://localhost:11434/v1", model="m").available()
+
+
+def test_embedder_circuit_breaks_after_a_failure():
+    """Embeddings ship ON by default, so on a host without Ollama every recall
+    would retry a dead endpoint — and an unreachable port is not always cheap
+    (a closed loopback port measured 2.05 s at the OS level on Windows). One
+    failure must silence the channel for a while."""
+    e = Embedder(base_url="http://127.0.0.1:59999/v1", model="m", timeout_s=1)
+    assert e.configured() and e.available()
+    assert e.embed(["x"]) is None          # endpoint is dead
+    assert e.configured()                  # still configured …
+    assert not e.available()               # … but the circuit is open
+    assert e.last_error
+
+
+def test_embedder_backoff_grows_then_resets(monkeypatch):
+    e = Embedder(base_url="http://127.0.0.1:59999/v1", model="m", timeout_s=1)
+    e._note_failure("boom")
+    first = e._blocked_until
+    e._note_failure("boom")
+    assert e._blocked_until - first >= e.COOLDOWN_S      # doubling
+    for _ in range(20):
+        e._note_failure("boom")
+    assert e._blocked_until <= time.monotonic() + e.MAX_COOLDOWN_S + 1   # capped
+    e._note_success()
+    assert e.available() and e._failures == 0 and not e.last_error
+
+
+def test_recall_skips_a_broken_embedder_without_calling_it():
+    """The cooldown must short-circuit before any network work — recall checks
+    available(), so a cooling channel costs zero calls."""
+    store = EngramStore(Database(":memory:"))
+    store.add_item("Santhosh studies at KARE")
+    calls = []
+
+    class _Flaky(Embedder):
+        def embed(self, texts):
+            calls.append(texts)
+            return super().embed(texts)
+
+    e = _Flaky(base_url="http://127.0.0.1:59999/v1", model="m", timeout_s=1)
+    for _ in range(5):
+        recall(store, Database(":memory:"), "KARE", embedder=e)
+    assert len(calls) == 1                 # only the first attempt went out
+    assert any("KARE" in r["text"] for r in
+               recall(store, Database(":memory:"), "KARE", embedder=e))
 
 
 def test_embedder_available_needs_key_or_local(monkeypatch):

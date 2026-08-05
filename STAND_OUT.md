@@ -123,7 +123,7 @@ model must exist before we widen autonomy.*
 
 ### 1f — Publishable security posture doc — ✅ landed 2026-07-19
 - [x] `docs/SECURITY.md`: threat model (4 prioritized threats + explicit
-      out-of-scope), the six trust boundaries (per-channel sender trust, injection
+      out-of-scope), the trust boundaries (per-channel sender trust, injection
       screening, approval gate + decline auditing, shell sandbox, secrets vault +
       redaction, memory integrity), an honest "what Namma does NOT claim" section,
       and a responsible-disclosure note. Cross-referenced to the live Security tab
@@ -299,10 +299,14 @@ great on Windows" is an underserved niche we already live in. Small items, big f
     exited 0 in ~124 s via the offline path (no venv/pip), registered
     'Namma Agent' in Add/Remove; the relocated runtime booted the app
     (`/api/health` → 200). Full suite 814 passed.
-  - **Remaining (needs a publish):** the live v2.3.0 release asset is still the
-    OLD bootstrapper. Publish the new self-contained exe as a release asset
-    (recommend a 2.3.1 bump + CI release), regenerate the manifest against it,
-    then update/replace PR #404738.
+  - **Published + resubmitted 2026-07-20:** v2.3.1 released via CI with the
+    self-contained exe; manifest regenerated; fresh PR
+    [microsoft/winget-pkgs#404868](https://github.com/microsoft/winget-pkgs/pull/404868)
+    submitted (old #404738 superseded). **Validation PASSED** —
+    `Azure-Pipeline-Passed` + `Validation-Completed` (the offline unattended
+    install that failed #404738 now clears the sandbox); auto-merge (squash)
+    armed. Awaiting the routine new-package moderator approval → then
+    `winget install namma-agent` goes live. This unblocks the item.
 - [x] WSL awareness (Engram G8) — landed 2026-07-19: `detect_wsl()` (UTF-16
       parsing, graceful None), distros + default in the HOST prompt block,
       path assist translates `/mnt/<drive>/…` → `<Drive>:\…` and passes
@@ -439,6 +443,296 @@ real deploy) and wire the Docker-image smoke test into CI.**
 
 ---
 
+## Phase 7 — Close the last real Hermes gaps
+*Source: a 2026-07-29 pass over the Hermes Agent docs (overview, architecture,
+features/tools, features/memory, security) cross-checked against Namma's actual
+source. Parity was already closed in [Namma_Agent_Port.md](Namma_Agent_Port.md);
+this phase is the honest remainder — six things Hermes has that Namma verifiably
+does not. Ordered so the trust-surface items land first: they extend the Phase 1
+story the positioning is built on, rather than opening a new front.*
+
+> **Explicitly NOT in this phase** (Hermes has them; we still decline): image
+> generation, Modal/Daytona/Singularity execution backends, batch processing +
+> trajectory export + RL training (Atropos — Nous selling model training, not a
+> personal-agent need), ACP/IDE adapters, skins/themes, the 20-channel race, and
+> external memory providers (Honcho/Mem0 — Engram is the differentiator and it
+> has a *measured* recall number, which beats plugging in a black box).
+
+### 7a — SSRF guard on URL-taking tools — ✅ landed 2026-07-29
+*A hole, not a feature gap — and it matters MORE for Namma than for Hermes:
+Phase 6 made the server internet-exposable and Phase 1 accepts untrusted
+Slack/WhatsApp webhook input, so an untrusted sender could say "fetch
+`http://169.254.169.254/latest/meta-data/`" and it went straight through.*
+- [x] `core/urlguard.py` (stdlib only): resolve the host, then refuse loopback,
+      RFC1918 private, link-local (incl. the 169.254.169.254 metadata endpoint
+      and the Alibaba/ECS/IMDSv2 variants by name), CGNAT, reserved, multicast,
+      unspecified, and non-http(s) schemes. The check runs **after** DNS
+      resolution (a public hostname with a private `A` record is the actual
+      attack), refuses if **any** answer in a round-robin record is private,
+      unwraps IPv4-mapped / 6to4 / NAT64 IPv6 forms, and re-checks **every
+      redirect hop** via a `_GuardedRedirectHandler`.
+- [x] Wired into every tool that fetches a model- or remote-chosen URL:
+      `web_extract`, `web_crawl` (seed + each followed link), the `web_search`
+      DDG HTML fallback, `get_news` RSS feeds, and the `fetch_image` download
+      (that URL comes from the Openverse *response* — remote data choosing a
+      fetch target). Fixed-endpoint callers that are *meant* to reach localhost
+      (Ollama embeddings, signal-cli, Home Assistant) are deliberately untouched.
+- [x] Opt-out `security.allow_private_urls` (default **false**, logs a loud
+      warning when on) for home-lab users pointing the agent at their own NAS.
+      It widens the ADDRESS policy only — `file://` stays refused either way.
+- [x] Surfaced in the Phase 1e Security tab (new "Web fetch guard" card +
+      a plain-language line in the trust explainer), in
+      `GET /api/security/overview` (`urlguard` block), and as a 7th trust
+      boundary in `docs/SECURITY.md` — with the honest TOCTOU/DNS-rebinding
+      limitation written into "what Namma does NOT claim".
+- [x] Tests: `test_urlguard.py` (43) — every blocked class, IPv4-mapped/NAT64/
+      6to4 unwrapping, scheme refusals, hostname→private resolution, mixed
+      round-robin, redirect-hop enforcement, both opt-out paths, and tool-level
+      wiring (web_extract/web_crawl refuse; the happy path still fetches).
+      Two pre-existing tests that mocked `urlopen` with unresolvable fake hosts
+      were updated to stub the guard. Full suite **964 passed**.
+- [x] **Live-verified** on the real running app: `/api/security/overview`
+      returned the guard block, the Security tab rendered the card with live
+      data (zero console errors), and the real `web_extract` refused the
+      metadata endpoint, loopback (its own API port), and 192.168.1.1 while
+      `https://example.com` fetched normally.
+
+### 7b — Checkpoints + rollback — ✅ landed 2026-07-29
+*The best fit for the positioning in the whole phase: an agent that can UNDO
+itself is a stronger trust claim than the approval gate, because approval
+requires foresight and rollback does not.*
+- [x] `core/checkpoints.py`: before any destructive write-ish tool runs, the
+      paths it is about to touch (read off its arguments by NAME — `path` /
+      `source` / `dest` / … — never by sniffing values, so `write_file.content`
+      can't be mistaken for a path) are snapshotted to `data/checkpoints/<id>/`.
+      Three entry kinds: `file` (bytes copied), `absent` (the tool is CREATING
+      it → restore deletes it), `dir` (tree copied under the copy cap).
+      Reuses the write-ish toolset set from the Phase 8 verify-nudge
+      (file_ops / documents / authoring / convert).
+- [x] **Shell is deliberately excluded** — what an arbitrary command will touch
+      cannot be read off its arguments, and a half-promise of undo is worse
+      than none. Said plainly in the module docstring, the config, and the UI.
+- [x] `rollback` (approval-gated — restoring is itself a write) +
+      `list_checkpoints` chat tools; a bare "undo that" resolves to THIS chat's
+      last change via the existing `interactive.get_current_session()`
+      contextvar. REST: `GET /api/checkpoints`,
+      `POST /api/checkpoints/<id>/restore`, `DELETE /api/checkpoints/<id>`.
+- [x] **Partial restores are reported, never dressed up**: the report carries
+      `restored` / `deleted` / `failed` with a reason per path, and `ok` is
+      False if anything failed. An oversized folder degrades to a manifest —
+      files *moved* inside it (the `organize_dir` case) are still moved back,
+      and anything genuinely gone is named as unrestorable.
+- [x] UI: **Settings → System → Checkpoints** — restore points with tool, path
+      count, time, `restored`/`partial` badges, two-click Undo, Forget, and a
+      storage/budget line. Agent emits `checkpoint` on `tool_finished` (a
+      checkpoint for a call that then FAILED is discarded, so the list only
+      offers real changes).
+- [x] Retention: separate caps — `max_file_mb` is the COPY cap (largest single
+      file or folder tree duplicated), `max_total_mb` the RETENTION budget
+      (oldest pruned first), plus `max_age_days`. Keeping them separate matters:
+      one big folder must not evict every other restore point.
+      `NAMMA_DATA_DIR`-aware (Phase 6a).
+- [x] Tests: `test_checkpoints.py` (37) — path extraction (incl. the
+      content-is-not-a-path case and schema type-checking), all three entry
+      kinds, manifest-only move-undo, oversized-file honesty, pruning,
+      never-raises, the model tools (session scoping, bare rollback, partial
+      failure surfaced), and agent wiring (only destructive write-ish calls
+      snapshot; shell/read/comms do not) + 3 REST tests. Full suite
+      **1013 passed, 3 skipped**.
+- [x] **Live-verified** on the real running app: a real `write_file`-shaped call
+      snapshotted → file clobbered → restore returned it byte-for-byte; the
+      Checkpoints tab rendered the entry with live data, and clicking
+      **Undo → Restore?** in the UI restored a second clobber from the browser
+      (zero console errors).
+
+### 7c — Approval-gated memory writes — ✅ landed 2026-07-29
+*Hermes has `write_approval` + `/memory approve|reject`. Namma quarantines
+UNTRUSTED-channel writes (Phase 1a) but auto-ingested owner-channel facts with no
+review path — "a wrong fact persists forever" was the open failure mode.*
+- [x] `memory.write_approval` (config, default **false** — learning as you talk
+      IS the product): when on, facts the agent **extracted on its own** land
+      `screen_status='pending'` — never FTS-indexed, never embedded, never
+      recalled, and absent from the facts browser (showing them beside real
+      memory would misrepresent what the agent knows).
+- [x] **Explicit "remember this" is never gated** — approval is for what the
+      agent *inferred*, not for what the user told it to save.
+- [x] **A parked supersede is the subtle half**: when a pending fact would
+      REPLACE an existing one, the old fact is not expired — the target id is
+      parked in a new `pending_supersedes` column. Approving applies the
+      supersede; rejecting leaves the original exactly as it was. Without this,
+      a rejected "correction" would still have destroyed the fact it corrected.
+      The review queue shows *what it would replace* for that reason.
+- [x] Kept **separate from the security quarantine**: `pending` means "I
+      inferred this, is it right?"; `flagged`/`untrusted` mean "someone may be
+      attacking you". `quarantined_items()` excludes pending, `pending_items()`
+      excludes quarantine, and quarantined rows stay browsable exactly as before.
+- [x] UI: **Settings → Memory → "Review what I learn"** — the toggle plus a live
+      queue (Keep / Discard per fact, Approve all / Reject all, "would replace"
+      line, a note if facts are stranded from when the toggle was last on).
+      REST: `GET /api/memory/pending`, `POST /api/memory/pending/resolve`;
+      `write_approval` + `pending_count` added to `/api/memory/settings`.
+- [ ] Feeds Phase 3: the accept/reject ratio is a *precision* number for
+      auto-ingested facts — pair it with recall@k in the weekly report. Nobody
+      else publishes this. **(Deferred: the plumbing is in — `pending_count`
+      and the resolve endpoint — but wiring the ratio into the weekly snapshot
+      needs a run of real data first.)**
+- [x] Tests: `test_memory_write_approval.py` (21) — pending excluded from
+      recall/FTS/browser, the two queues kept apart, approve indexes + applies
+      the parked supersede, reject discards and leaves the original untouched,
+      bulk resolve, non-pending ids refused, writer flag plumbing, and
+      explicit-vs-inferred gating. Full suite **1034 passed, 3 skipped**.
+- [x] **Live-verified** on the real running app: toggling it on via
+      `/api/memory/settings` persisted and applied live; a seeded inferred fact
+      was invisible to recall and the facts browser, appeared in the UI queue,
+      and clicking **Keep** released it — it came back as the top hit for a
+      real `/api/memory/recall` query. Test fact removed and the flag restored
+      to `false` afterwards.
+
+### 7d — Docker + SSH shell execution backends — ✅ landed 2026-07-29
+*Hermes has six backends; Namma had local-with-sandbox. Two are worth it —
+**docker** completes Phase 1c's isolation story (real isolation, not just
+resource caps, for anything an untrusted channel can trigger) and **ssh** pairs
+with Phase 6 ("the agent runs on my Oracle box, executes on my dev machine").
+Modal/Daytona/Singularity stay declined: research infrastructure, not a
+personal-agent need.*
+- [x] `core/shell_backends.py` — `security.shell.backend: local | docker | ssh`
+      with per-backend config. **The driver protocol is unchanged**: the local
+      path returns byte-identically what `_spawn` always did, and remote
+      backends just make the per-command script visible on the far side via a
+      new `materialize()` hook (`docker cp` / `ssh cat`). The well-tested path
+      had to not regress to gain the new ones.
+- [x] Docker backend: attaches to a persistent named container, starts it if
+      stopped, and **creates it hardened** when an `image` is configured —
+      `--cap-drop ALL`, `--security-opt no-new-privileges`, `--pids-limit`,
+      memory/CPU caps, optional `--network none`, and ONLY the configured
+      workspace bind-mounted at `/workspace`. Always uses the POSIX driver
+      (the container is Linux even when the host is Windows — sending it the
+      PowerShell driver would be an instant, confusing failure).
+- [x] SSH backend: an existing key/agent only — `BatchMode=yes` so a
+      misconfiguration fails fast instead of hanging on a hidden prompt.
+      **Namma never handles SSH passwords.** Per-host user/port/key/cwd config.
+- [x] **No silent fallback** — the load-bearing safety property. A chosen
+      backend that can't start returns a clear, actionable error ("install
+      Docker, or set security.shell.backend back to 'local'") and the command
+      does NOT run on the user's machine instead.
+- [x] **Honest about what the sandbox covers**: on a remote backend the Phase 1c
+      caps bound the docker/ssh CLIENT, not the workload. Said in the module
+      docstring, the config, `status()`, and a line under the Security tab card
+      — rather than implying coverage it doesn't have.
+- [x] Surfaces: `shell_backend` in `/api/status` and
+      `/api/security/overview`; a second row on the Security tab's shell card
+      (which backend, container name + state or remote host, the caps).
+- [x] Tests: `test_shell_backends.py` (29) — selection incl. unknown-name
+      degradation, the local path proven identical to pre-Phase-7, docker
+      state/create-with-hardening/copy/materialize/failure paths, ssh
+      BatchMode + argv + probe + push, both missing-binary messages, the
+      status-never-raises contract, and a real `PersistentShell` proving a
+      broken backend fails the shell instead of running locally. Full suite
+      **1130 passed, 3 skipped**.
+- [x] **Live-verified**: the real local shell still spawns PowerShell and keeps
+      state across commands; a docker backend naming a missing container
+      produced the actionable error with **nothing executed locally** (real
+      `docker inspect` ran — the CLI is installed here); the real `ssh` binary
+      produced a correct "could not resolve hostname" refusal. **Not verified:
+      a live container run** — the Docker *daemon* won't start on this machine
+      (the known Docker Desktop AF_UNIX bug from Phase 6b, reboot still
+      pending), so the in-container execution path has unit coverage only.
+
+### 7e — Local extension points (user tools + lifecycle hooks) — ✅ landed 2026-07-29
+*Hermes discovers tools/hooks/commands from user dirs and pip entry points.
+NOT the marketplace the "Declined" list rejects — that's a network-effects play
+we lose by default. This is letting the user add one tool without forking.*
+> **Scope correction found while building:** user-tool loading from
+> `~/.namma_agent/tools/*.py` **already existed** — `tools/authoring.py`
+> (`load_user_tools`) has shipped it since `create_tool`, complete with
+> broken-module skipping and the `custom` toolset. So this item was really only
+> the hooks half plus visibility. Tests were added to pin the existing
+> behaviour rather than reimplement it.
+- [x] *(already shipped)* `~/.namma_agent/tools/*.py` with the same
+      `register(registry)` contract as the built-ins, loaded after the built-in
+      sweep, grouped under the `custom` toolset, broken modules logged + skipped.
+- [x] `core/hooks.py` — lifecycle hooks from `~/.namma_agent/hooks/*.py`:
+      `pre_tool` (may veto), `post_tool`, `post_turn`, `on_approval`. A module
+      implements any subset; one defining none of them is **rejected loudly**
+      rather than loaded as a silent no-op.
+- [x] **Only `pre_tool` can change behaviour, and only by refusing.** Letting
+      hooks rewrite args or fake results would make the audit trail lie about
+      what actually ran. The refusal message names which hook refused.
+- [x] **Never breaks a turn**: every dispatch is wrapped; a raising hook is
+      logged and swallowed. `pre_tool` deliberately fails OPEN on exception — a
+      buggy personal script must not brick the agent, while an intentional
+      refusal is an explicit returned string, which is unambiguous.
+- [x] **Zero cost when unused**: the dispatcher short-circuits on an empty hook
+      list, so the overwhelmingly common case pays nothing per tool call.
+- [x] Visibility: `extensions` block in `/api/security/overview` (hooks + their
+      events, load errors, and the loaded `custom` tools) and a **"Your
+      extensions"** card on the Security tab — user-supplied in-process code
+      must never be invisible, even though the user put it there.
+- [x] Tests: `test_hooks.py` (23) — discovery, per-module event detection,
+      broken/empty module handling, reload semantics, veto (incl. first-veto-
+      wins and the fail-open-on-raise contract), `post_tool` on both success and
+      exception paths, `on_approval` for approve AND decline (and not at all for
+      safe tools), `post_turn`, the zero-cost path, plus two tests pinning the
+      pre-existing user-tool loader. Full suite **1153 passed, 3 skipped**.
+- [x] **Live-verified**: a real hook file in `~/.namma_agent/hooks/` loaded on a
+      real registry, allowed `read_file`, and vetoed a destructive
+      `delete_path` (nothing executed); the Security tab rendered it under
+      "Your extensions" with its three events. Demo hook removed afterwards.
+
+### 7f — OpenAI-compatible API endpoint — ✅ landed 2026-07-29
+*Highest leverage-per-line item in the phase: one route wrapping the existing
+agent loop makes Namma the backend for any third-party chat frontend — and it's
+the cheap substitute for Hermes's entire ACP/IDE adapter, which we are not
+building.*
+- [x] `server/openai_api.py`: `POST /v1/chat/completions` (non-stream + SSE
+      stream) and `GET /v1/models` (the configured `models:` list), mapping the
+      OpenAI shapes onto a **real agent turn** — tools, memory, persona and all.
+      Registered before the SPA catch-all, which would otherwise swallow `/v1`.
+- [x] **The last user message is the turn**, not the replayed history: Namma
+      keeps its own session state (history window, compaction, memory), so
+      re-feeding the client's `messages` would double the history and fight
+      compaction. A `system` message rides along as a one-off instruction (the
+      persona is Namma's own). Both content shapes (string / parts list) handled.
+- [x] Sessions come from the `user` field, so a third-party frontend gets real
+      continuity instead of an amnesiac chat per request — and the mapping is
+      recovered from the session title (`API · <user>`) after a restart rather
+      than stranding the conversation.
+- [x] **Destructive tools are declined here** — an HTTP caller has no approval
+      channel, the same contract routines (Phase 8) and watchers (Phase 2) run
+      under. Running them because the request arrived over REST would be the
+      wrong default.
+- [x] **Auth**: the Phase 6a middleware now guards `/v1/*` as well as `/api/*`.
+      `/v1` executes real tools, so an open `/v1` would be a bigger hole than
+      any read-only API route.
+- [x] Sampling knobs (`temperature`, `max_tokens`) are accepted and ignored —
+      they don't map onto an agent turn, and 400ing would break otherwise-fine
+      clients. An additive `namma` block carries `session_id` + `tools_used`
+      (compliant clients ignore it).
+- [x] Tests: `test_openai_api.py` (16) — content flattening, turn selection,
+      response/chunk shapes, `/v1/models`, session reuse + per-user isolation +
+      restart recovery, destructive-declined vs safe-tools-run, and the token
+      guard on `/v1`. Full suite **1171 passed, 3 skipped**.
+- [x] **Live-verified with the real OpenAI SDK** (`openai` 2.43.0) against the
+      running server: `models.list()` returned the configured brains; a
+      non-streaming completion came back in-shape with real usage numbers; a
+      streaming call yielded proper `chat.completion.chunk` frames; and a
+      follow-up request with the same `user` **remembered the previous
+      exchange** — proving the session mapping delivers continuity, not
+      amnesia. (Auth on `/v1` is unit-verified through the real middleware.)
+
+**Phase 7 complete — the last verified Hermes gaps are closed. Namma now has
+trust surfaces Hermes doesn't (rollback, memory approval, SSRF guard) on top of
+matching it on isolation backends, extensibility, and third-party access.**
+
+**Smaller follow-ons (same source pass, lower value — do only if the six land):**
+- [ ] Context-file discovery (`AGENTS.md` / `CLAUDE.md` / `.namma.md` picked up
+      from the working directory — verified absent; Projects + docindex solve a
+      different problem).
+- [ ] Credential pools (multi-key rotation per provider; fallback chains exist,
+      round-robin doesn't).
+
+---
+
 ## Declined / deliberately not chasing
 - [✗] **Skills marketplace / plugin ecosystem** — network-effects play; incumbents win by default. Namma's answer is the self-review loop *drafting* personal skills (Phase 3).
 - [✗] **Channel-count race** (iMessage, WeChat, 29 channels) — current five + CLI cover the owner-user; each new channel is surface area against Phase 1.
@@ -454,3 +748,6 @@ real deploy) and wire the Docker-image smoke test into CI.**
 5. **Windows polish** — the niche nobody serves; small items, compounding feel.
 6. **Deployability** — makes "always-on" real on a $0 VPS; needs Phase 1's trust
    model landed before any remote exposure; guides double as Phase 4 material.
+7. **Last real Hermes gaps** — the honest remainder after a docs cross-check;
+   trust-surface items (SSRF, rollback, memory approval) first because they
+   extend Phase 1 rather than opening a new front.

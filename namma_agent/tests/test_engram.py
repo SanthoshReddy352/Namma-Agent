@@ -15,7 +15,7 @@ from namma_agent.core.builtins import register_memory_tools
 from namma_agent.core.engram import Engram
 from namma_agent.core.engram.core_memory import CoreMemory
 from namma_agent.core.engram.environment import EnvironmentMemory, probe
-from namma_agent.core.engram.recall import recall, render_block
+from namma_agent.core.engram.recall import _fts_query, recall, render_block
 from namma_agent.core.engram.store import EngramStore
 from namma_agent.core.memory import Database
 from namma_agent.core.providers.base import LLMResponse, Provider
@@ -194,6 +194,64 @@ def test_recall_excludes_expired_by_default():
                for h in recall(store, db, "OldCorp", include_expired=True))
 
 
+def test_fts_query_keeps_two_char_tokens():
+    """`len(w) > 2` deleted OS/VM/AI/ML/DB, so "what OS do I use?" searched for
+    "what OR use" and could never reach the fact that says Windows."""
+    q = _fts_query("what OS do I use?")
+    assert '"os"' in q
+    assert '"vm"' in _fts_query("do I have a VM?")
+
+
+def test_fts_query_drops_stopwords():
+    """Left in an OR-query, question scaffolding matches nearly every row and
+    BM25 ends up ranking on noise."""
+    q = _fts_query("what is my mother tongue?")
+    assert '"mother"' in q and '"tongue"' in q
+    for junk in ('"what"', '"is"', '"my"'):
+        assert junk not in q
+
+
+def test_fts_query_survives_an_all_stopword_question():
+    assert _fts_query("what is that?").strip()          # never empty
+
+
+def test_fts_query_quotes_tokens_so_operators_cannot_break_match():
+    db = Database(":memory:")
+    store = EngramStore(db)
+    store.add_item("the near and far protocol was chosen")
+    # 'near'/'and' are FTS5 operators; unquoted they'd raise OperationalError.
+    assert recall(store, db, "near and or not") is not None
+
+
+def test_recall_ranks_curated_fact_above_raw_transcript():
+    """Every channel's rank-1 used to score an identical 1/61, so a verbatim
+    chat line tied with the fact that answers the question."""
+    db = Database(":memory:")
+    store = EngramStore(db)
+    store.add_item("Santhosh is allergic to shellfish", kind="preference",
+                   importance=0.9)
+    sid = db.create_session()
+    for _ in range(3):
+        db.add_turn(sid, "user", "is shellfish ok in this shellfish recipe?")
+    hits = recall(store, db, "allergic to shellfish")
+    assert hits[0]["kind"] == "preference"
+    top_episode = next((h for h in hits if h["kind"] == "episode"), None)
+    if top_episode is not None:
+        assert hits[0]["score"] > top_episode["score"]
+
+
+def test_prefetch_floor_excludes_bare_transcript():
+    """The floor is the gate: raw episodes must not be auto-injected on their
+    own (they stay reachable through the memory_search tool, which has no
+    floor). Before, 40/40 real turns injected 5 memories, a third transcript."""
+    db = Database(":memory:")
+    eng = Engram(db, config={"database": {"path": ":memory:"}},
+                 provider_getter=lambda: None)
+    sid = db.create_session()
+    db.add_turn(sid, "user", "the quokka migration plan needs review")
+    assert eng.prefetch_block("quokka migration") == ""
+
+
 def test_render_block_frames_memory_as_data():
     block = render_block([{"text": "likes tea", "kind": "preference",
                            "created_at": "2026-07-15T00:00:00", "score": 1.0}])
@@ -265,6 +323,31 @@ def test_pipeline_quarantines_injection():
     applied = eng.writer.process("remember this note for me")
     assert applied[0]["op"] == "QUARANTINE"
     assert eng.store.search_items("admin") == []     # never recallable
+
+
+def test_explicit_write_survives_a_dead_resolver():
+    """An explicit remember must never vanish. `_call_json` returns None both
+    when the model DECLINES and when it is simply unreachable, and treating the
+    second as NOOP silently dropped writes: any candidate sharing a keyword
+    with an existing memory has a neighbour, so the resolver runs, so a
+    provider outage lost the fact. Four of twelve eval facts were being
+    swallowed exactly this way."""
+    eng, db, _ = _engram()                      # scripted provider, no payloads
+    eng.writer.process("My dog is called Bruno", source="t", explicit=True)
+    eng.writer.process("I use VS Code as my main editor", source="t", explicit=True)
+    eng.writer.process("I bank with SBI in Krishnankoil", source="t", explicit=True)
+    texts = " | ".join(i["text"] for i in eng.store.list_items())
+    assert "Bruno" in texts and "VS Code" in texts and "SBI" in texts
+
+
+def test_implicit_write_still_defaults_to_noop_without_a_resolver():
+    """Chat-derived candidates keep the conservative bias — an unreachable
+    model must not turn every passing remark into a stored fact."""
+    eng, db, _ = _engram()
+    eng.store.add_item("Santhosh likes filter coffee")
+    before = len(eng.store.list_items())
+    eng.writer.process("Santhosh likes coffee in the morning", source="chat")
+    assert len(eng.store.list_items()) == before
 
 
 def test_salience_gate_skips_commands_and_short_text():
@@ -340,6 +423,35 @@ def test_memory_save_core_and_search_roundtrip():
     assert r.ok and "core memory" in r.content
     r = reg.execute("memory_search", {"query": "Santhosh"})
     assert r.ok and "Santhosh" in r.content
+
+
+def test_auto_save_promotes_safety_critical_fact_to_core_memory():
+    """An allergy saved with the default block='auto' must land in always-visible
+    core memory (memory_block), not the background graph where recall depends on
+    the query matching — the shellfish-recipe failure mode."""
+    eng, _, _ = _engram()
+    reg = _registry_with_tools(eng)
+
+    # Default block (auto) — the model doesn't have to know to pass block='user'.
+    r = reg.execute("memory_save", {"text": "Allergic to shellfish"})
+    assert r.ok and "core memory" in r.content.lower()
+
+    # It now rides EVERY turn via the always-in-context core block — including a
+    # dinner query that shares no keywords with "shellfish".
+    entries = [e["text"] for e in eng.store.core_entries("user")]
+    assert "Allergic to shellfish" in entries
+    assert "shellfish" in eng.memory_block().lower()
+
+
+def test_auto_save_keeps_non_safety_facts_in_background_pipeline():
+    """A neutral preference is NOT promoted — it goes to the semantic pipeline,
+    keeping the tiny core-memory budget for facts that truly need it."""
+    eng, _, _ = _engram()
+    reg = _registry_with_tools(eng)
+
+    r = reg.execute("memory_save", {"text": "Prefers metric units"})
+    assert r.ok and "long-term memory" in r.content.lower()
+    assert eng.store.core_entries("user") == []
 
 
 def test_memory_forget_invalidates():

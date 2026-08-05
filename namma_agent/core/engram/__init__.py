@@ -65,6 +65,8 @@ class Engram:
             min_chars=int(write_cfg.get("salience_min_chars", 24)),
             budget_per_hour=int(write_cfg.get("budget_per_hour", 60)),
             embedder=self.embedder,
+            # Phase 7c: hold auto-extracted facts for the user's yes/no.
+            write_approval=bool(cfg.get("write_approval", False)),
         )
         self.prefetch_enabled = bool(recall_cfg.get("prefetch", True))
         self.prefetch_k = int(recall_cfg.get("k", 5))
@@ -82,6 +84,7 @@ class Engram:
             half_life_days=float(cons_cfg.get("half_life_days", 30)),
             archive_floor=float(cons_cfg.get("archive_floor", 0.05)),
             event_horizon_days=float(cons_cfg.get("event_horizon_days", 90)),
+            quality_batch=int(cons_cfg.get("quality_batch", 30)),
         )
         self.consolidate_background = bool(cons_cfg.get("background", True))
         self.scheduler = ConsolidationScheduler(
@@ -158,6 +161,9 @@ class Engram:
                 "core_user": self.core.usage("user"),
                 "core_agent": self.core.usage("agent"),
                 "pending_writes": self.writer.pending(),
+                # Storage quality (what memory CONTAINS, as opposed to what it
+                # can retrieve) — the audit pass's headline figures.
+                **self.store.quality_stats(),
                 # Persisted report card + slider range for the Memory tab.
                 "last_consolidation": self.store.latest_consolidation(),
                 "since": self.store.first_memory_at()}

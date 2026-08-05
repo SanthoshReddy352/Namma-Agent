@@ -20,6 +20,7 @@ import urllib.request
 from namma_agent.core.docscan import screen_web_text
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
+from namma_agent.core.urlguard import BlockedURL, guarded_opener, check_url
 
 _FETCH_CAP = 512 * 1024  # bytes read off the wire
 _USER_AGENT = (
@@ -82,8 +83,12 @@ def _html_to_text(raw_html: str) -> tuple[str, list[str]]:
 
 
 def _fetch_url(url: str, timeout: int = 10) -> str:
+    # Phase 7a: refuse loopback/private/link-local/metadata targets before any
+    # socket opens, and re-check every redirect hop (a public URL that 302s into
+    # the metadata service is the standard bypass). Raises BlockedURL.
+    url = check_url(url)
     req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310
+    with guarded_opener().open(req, timeout=timeout) as resp:
         raw = resp.read(_FETCH_CAP)
         charset = "utf-8"
         ct = resp.headers.get("Content-Type", "")
@@ -196,6 +201,10 @@ def _extract(args: dict) -> ToolResult:
     cap = max(500, min(cap, 8000))
     try:
         text, _ = _html_to_text(_fetch_url(url))
+    except BlockedURL as exc:
+        # Its own branch so the model gets the policy reason verbatim (and does
+        # not retry the same URL as if it were a transient network error).
+        return ToolResult(ok=False, content="", error=str(exc))
     except Exception as exc:  # noqa: BLE001
         return ToolResult(ok=False, content="", error=f"couldn't fetch {url}: {exc}")
     if len(text) > cap:
@@ -218,6 +227,10 @@ def _crawl(args: dict) -> ToolResult:
     depth = max(1, min(int(args.get("depth", 1)), 2))
     visited: set[str] = set()
     collected: list[str] = []
+    try:
+        check_url(url)
+    except BlockedURL as exc:
+        return ToolResult(ok=False, content="", error=str(exc))
     _crawl_page(url, depth, visited, collected)
     if not collected:
         return ToolResult(ok=False, content="", error="couldn't extract content from that site")
@@ -231,6 +244,11 @@ def _crawl_page(url: str, depth: int, visited: set, collected: list) -> None:
     visited.add(url)
     try:
         text, links = _html_to_text(_fetch_url(url, timeout=8))
+    except BlockedURL as exc:
+        # A crawl follows links the PAGE chose, so a blocked hop is expected
+        # traffic, not an error — skip it and keep crawling the rest.
+        logger.info("[web_crawl] skipped %s: %s", url, exc)
+        return
     except Exception as exc:  # noqa: BLE001
         logger.warning("[web_crawl] failed to fetch %s: %s", url, exc)
         return

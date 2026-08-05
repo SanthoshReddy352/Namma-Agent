@@ -118,7 +118,15 @@ class MemoryCoreBody(BaseModel):
 
 
 class MemorySettingsBody(BaseModel):
-    settings: dict = {}      # prefetch, k, salience_min_chars, budget_per_hour
+    settings: dict = {}      # prefetch, k, salience_min_chars, budget_per_hour,
+                             # write_approval
+
+
+class MemoryPendingBody(BaseModel):
+    """Phase 7c: resolve the write-approval queue."""
+    item_id: str = ""
+    approve: bool = True
+    all: bool = False        # resolve every pending fact the same way
 
 
 class MemoryClearBody(BaseModel):
@@ -156,6 +164,10 @@ class SkillToggleBody(BaseModel):
     enabled: bool = True
 
 
+class SkillNameBody(BaseModel):
+    name: str = ""
+
+
 class ToolToggleBody(BaseModel):
     name: str = ""
     enabled: bool = True
@@ -186,6 +198,12 @@ class ScopeMemoryBody(BaseModel):
 class LearningBody(BaseModel):
     topic: str = ""
     depth: str = "solid"
+
+
+class LearningSettingsBody(BaseModel):
+    # {"self_review": {enabled, weekday, at}, "learning": {notify_progress,
+    #  nudge_after_days}} — only the keys present are changed.
+    settings: dict = {}
 
 
 class PlanBody(BaseModel):
@@ -342,9 +360,14 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     # When a token is configured (server.auth_token / NAMMA_AUTH_TOKEN), every
     # /api/* request must present it — Authorization: Bearer, X-Namma-Token, or
     # ?token= — compared constant-time. Exempt: /api/health (Docker/systemd
-    # healthchecks) and everything outside /api (the static UI shell is data-free;
-    # /webhooks/* carry their own platform verification). The websocket enforces
-    # the same token itself (middleware doesn't see WS upgrades).
+    # healthchecks) and everything outside the guarded prefixes (the static UI
+    # shell is data-free; /webhooks/* carry their own platform verification).
+    # The websocket enforces the same token itself (middleware doesn't see WS
+    # upgrades).
+    #
+    # Phase 7f: /v1/* (the OpenAI-compatible surface) is guarded too. It runs
+    # real agent turns with real tools — leaving it open would be a far bigger
+    # hole than any /api route, since third-party clients point straight at it.
     def _auth_token() -> str:
         from namma_agent.config import auth_token
         return auth_token(service.config)
@@ -358,7 +381,8 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.middleware("http")
     async def _require_token(request: Request, call_next):
         path = request.url.path
-        if _auth_token() and path.startswith("/api") and path != "/api/health":
+        guarded = path.startswith("/api") or path.startswith("/v1")
+        if _auth_token() and guarded and path != "/api/health":
             supplied = request.headers.get("x-namma-token") or \
                 request.query_params.get("token")
             authz = request.headers.get("authorization", "")
@@ -953,10 +977,23 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def notify(body: NotifyBody):
         """Show a native OS desktop notification (reliable inside the pywebview
         desktop window, where the browser Notification API doesn't surface toasts).
-        The frontend gates on the user's master + per-event toggles before calling."""
-        from namma_agent.core.notifications import send_native_notification
+        The frontend gates on the user's master + per-event toggles before calling.
+
+        ``ok`` is False when the OS won't render toasts (e.g. Windows
+        notifications switched off) — the UI then shows an in-app banner instead,
+        so the notification still reaches the user in both the browser tab and
+        the desktop window."""
+        from namma_agent.core.notifications import (notification_status,
+                                                    send_native_notification)
         ok = send_native_notification(body.title, body.body)
-        return {"ok": ok}
+        return {"ok": ok, "reason": "" if ok else notification_status().get("reason", "")}
+
+    @app.get("/api/notify/status")
+    def notify_status():
+        """Whether native desktop toasts can actually be displayed here, and why
+        not when they can't. Drives the Settings hint + the in-app fallback."""
+        from namma_agent.core.notifications import notification_status
+        return notification_status()
 
     @app.get("/api/autostart")
     def autostart_status():
@@ -1062,8 +1099,17 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/skills/toggle")
     def toggle_skill(body: SkillToggleBody):
-        """Enable/disable a skill; persists to config.local.yaml (skills.disabled)."""
+        """Enable/disable a skill; persists to config.local.yaml (skills.disabled).
+
+        Approving a draft from the review queue is just this with enabled=true —
+        the skill joins the catalog and stops being a proposal."""
         return service.set_skill_enabled(body.name, body.enabled)
+
+    @app.post("/api/skills/delete")
+    def delete_skill(body: SkillNameBody):
+        """Discard a learned skill (the review queue's "no thanks"). Bundled
+        skills are refused — those are turned off, never deleted."""
+        return service.delete_skill(body.name)
 
     # -- toolsets (Settings → Toolsets tab) ---------------------------------
 
@@ -1137,6 +1183,27 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """The facts browser: live (or all) memory items with lifecycle fields."""
         return service.memory_items(kind=kind, include_expired=include_expired)
 
+    @app.get("/api/memory/pending")
+    def memory_pending(limit: int = 100):
+        """Phase 7c: facts the agent extracted on its own that are waiting for
+        the user's yes/no (memory.write_approval). These are NOT memory yet —
+        never indexed, never embedded, never recalled."""
+        return service.memory_pending(limit=limit)
+
+    @app.post("/api/memory/pending/resolve")
+    def memory_resolve_pending(body: MemoryPendingBody):
+        """Approve (release into memory) or reject (discard) a pending fact —
+        or all of them at once."""
+        return service.memory_resolve_pending(item_id=body.item_id,
+                                              approve=body.approve,
+                                              all_items=body.all)
+
+    @app.get("/api/memory/low_quality")
+    def memory_low_quality(limit: int = 50):
+        """Facts the quality audit scored poorly (worst first) + the aggregate
+        Memory Quality figures — the review queue for pruning noise."""
+        return service.memory_low_quality(limit=limit)
+
     @app.get("/api/memory/core")
     def memory_core():
         """The two L1 core-memory blocks (entries + usage) for the editor."""
@@ -1180,6 +1247,23 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """One payload for the Settings → Security tab: trust levels, sandbox,
         secrets inventory (names only), quarantine log, audit trail."""
         return service.security_overview()
+
+    # -- checkpoints (Phase 7b): undo a turn's file changes -------------------
+
+    @app.get("/api/checkpoints")
+    def checkpoints_list(session_id: str = "", limit: int = 50):
+        return service.checkpoints_overview(session_id=session_id, limit=limit)
+
+    @app.post("/api/checkpoints/{checkpoint_id}/restore")
+    def checkpoint_restore(checkpoint_id: str):
+        """Restore the files as they were before that tool ran. The response
+        lists what was restored, what was deleted, and what could NOT be put
+        back — a partial restore is never reported as a clean one."""
+        return service.restore_checkpoint(checkpoint_id)
+
+    @app.delete("/api/checkpoints/{checkpoint_id}")
+    def checkpoint_delete(checkpoint_id: str):
+        return service.delete_checkpoint(checkpoint_id)
 
     # -- secrets vault (Phase 1d): inventory is names-only, never values ------
 
@@ -1260,6 +1344,21 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def watchers_run(watcher_id: int):
         res = service.run_watcher_now(watcher_id)
         return {"ok": res is not None, **(res or {})}
+
+    # -- learning settings (Settings → System → Learning) ---------------------
+    # Deliberately NOT under /api/learning/… — that prefix is the Learning Room's
+    # topic namespace, where GET /api/learning/{topic_id} would swallow "settings".
+
+    @app.get("/api/learning_settings")
+    def learning_settings():
+        """The weekly-review schedule + Learning-Room knobs, with the live state
+        of both background threads."""
+        return service.learning_settings()
+
+    @app.post("/api/learning_settings")
+    def learning_settings_save(body: LearningSettingsBody):
+        """Persist to config.local.yaml and apply live (runners start/stop now)."""
+        return service.save_learning_settings(body.settings)
 
     # -- weekly self-review (measured self-improvement) -----------------------
 
@@ -1557,6 +1656,12 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         finally:
             push(None)
             await sender_task
+
+    # OpenAI-compatible surface (Phase 7f): /v1/chat/completions + /v1/models,
+    # so any OpenAI-speaking client can drive the whole agent. Registered BEFORE
+    # the SPA catch-all below, which would otherwise swallow /v1 GETs.
+    from namma_agent.server.openai_api import register_openai_api
+    register_openai_api(app, service)
 
     # Serve generated artifacts (diagrams / images / simulations) as downloadable
     # static files so the chat/Learning-Room UI can render and download them.

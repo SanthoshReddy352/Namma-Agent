@@ -85,6 +85,17 @@ class ProviderChain(Provider):
     def active(self) -> Provider:
         return self._providers[0]
 
+    def is_available(self) -> bool:
+        """A chain is usable when ANY link is. The base implementation reads
+        ``self._api_key``, which a chain never has (it holds providers, not
+        credentials) — inheriting it raised AttributeError on every caller."""
+        return any(p.is_available() for p in self._providers)
+
+    def unavailable_reason(self) -> str:
+        if self.is_available():
+            return ""
+        return "; ".join(f"{p.name}: {p.unavailable_reason()}" for p in self._providers)
+
     def generate(
         self,
         messages: list[dict],

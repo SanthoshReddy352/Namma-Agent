@@ -1,0 +1,183 @@
+﻿pptx cell
+--------------
+Parent: row
+Paths: /slide[N]/table[M]/tr[R]/tc[C]
+Operations: add set get query remove
+
+Usage:
+  officecli add <file> /slide[N]/table[M]/tr[R] --type cell [--prop key=val ...]
+  officecli set <file> /slide[N]/table[M]/tr[R]/tc[C] --prop key=val ...
+  officecli get <file> /slide[N]/table[M]/tr[R]/tc[C]
+  officecli query <file> cell
+  officecli remove <file> /slide[N]/table[M]/tr[R]/tc[C]
+
+Properties:
+  text   string   [set/get]
+    description: single-run text content. pptx-only override: prefer set tc[C] for cell text in pptx; standalone Add cell rarely has room to land within a rectangular table grid. Set + Get unchanged.
+    example: --prop text="Hello"
+    readback: string concatenated from all <a:r>/<a:t> in the cell paragraphs
+  colspan   number   [set/get]   aliases: gridspan
+    description: horizontal cell span (a:tc @gridSpan) — number of grid columns this cell spans (>=2 means merged across). Setting colspan=N also stamps hMerge=true on the next (N-1) cells in the same row, matching the convenience prop merge.right. Surfaces on Get only when the cell spans more than one column. Canonical name matches docx; alias: gridspan.
+    example: --prop colspan=3
+    readback: integer ≥ 2
+  rowspan   number   [set/get]
+    description: vertical cell span (a:tc @rowSpan). Settable: rowspan=N writes rowSpan=N on this anchor cell and vMerge=true on the (N-1) continuation cells directly below. Surfaces on Get only when the cell spans more than one row.
+    example: --prop rowspan=2
+    readback: integer ≥ 2
+  padding.left   string   [get]
+    description: left cell padding (a:tcPr @marL). Read-only readback; emitted as a unit-qualified length (cm/in/pt).
+    readback: unit-qualified length, e.g. '0.25cm'
+  padding.right   string   [get]
+    description: right cell padding (a:tcPr @marR). Read-only readback; emitted as a unit-qualified length.
+    readback: unit-qualified length, e.g. '0.25cm'
+  padding.top   string   [get]
+    description: top cell padding (a:tcPr @marT). Read-only readback; emitted as a unit-qualified length.
+    readback: unit-qualified length, e.g. '0.13cm'
+  padding.bottom   string   [set/get]   aliases: margin.bottom
+    description: bottom cell padding (a:tcPr @marB). Read-only readback; emitted as a unit-qualified length.
+    example: --prop padding.bottom=0.25cm
+    readback: unit-qualified length, e.g. '0.13cm'
+  padding   string   [set]   aliases: margin
+    description: shorthand to set all four cell paddings at once (a:tcPr @marL/@marR/@marT/@marB). Accepts a unit-qualified length applied to every edge.
+    example: --prop padding=0.2cm
+  valign   string   [add/set/get]
+    description: vertical text anchor (a:tcPr @anchor). top|center|bottom.
+    example: --prop valign=center
+    readback: top|center|bottom
+  wrap   bool   [set/get]   aliases: wordwrap
+    description: cell text wrap (a:txBody/a:bodyPr @wrap). true=square (wrap), false=none (clip to cell). Set on the cell's body properties.
+    example: --prop wrap=false
+    readback: true|false
+  textdirection   string   [set/get]   aliases: textdir, vert
+    description: cell text rotation (a:tcPr @vert). horizontal|vertical90|vertical270|stacked. Round-trips through the same canonical vocabulary.
+    example: --prop textdirection=vertical270
+    example: --prop textdirection=stacked
+    readback: horizontal|vertical90|vertical270|stacked
+  direction   string   [set/get]   aliases: dir, rtl
+    description: first-paragraph reading direction (a:pPr @rtl). ltr|rtl. Fans out to every paragraph in the cell's text body; readback reflects the first paragraph only.
+    example: --prop direction=rtl
+    readback: ltr|rtl
+  merge.right   number   [set]
+    description: convenience for horizontal merge — merges N neighbor cells to the right into this one, so the total span becomes N+1 (writes gridSpan=N+1 on this cell and hMerge=true on the next N cells in the same row).
+    example: --prop merge.right=2
+  merge.down   number   [set]
+    description: convenience for vertical merge — stamps rowSpan=N on this cell and vMerge=true on the same column in the next N-1 rows.
+    example: --prop merge.down=2
+  bevel   string   [set]   aliases: cell3d
+    description: 3-D cell bevel (a:tcPr/a:cell3D). 'none' to clear, or a preset name (circle, slope, cross, angle, softRound, convex, coolSlant, divot, riblet, hardEdge, artDeco, …). Optional 'NAME;Wpt;Hpt' to set width/height.
+    example: --prop bevel=circle
+    example: --prop bevel="circle;6pt;6pt"
+  opacity   number   [set]   aliases: fill.opacity, alpha, fill.alpha
+    description: fill alpha as a 0–1 fraction or 0–100 percent (post-applied to the cell's solid/gradient fill).
+    example: --prop opacity=0.5
+    example: --prop opacity=50%
+  image   string   [set]   aliases: imagefill
+    description: embed an image file as the cell's blip fill (a:tcPr/a:blipFill). Path to a local image; relationship is added to the slide. Replaces any prior fill.
+    example: --prop image=logo.png
+  linespacing   string   [set/get]
+    description: line spacing applied to every paragraph in the cell. Accepts multiplier ('1.5x', '150%') or fixed points ('18pt').
+    example: --prop linespacing=1.5x
+    example: --prop linespacing=18pt
+    readback: multiplier (e.g. '1.5x') or unit-qualified length (e.g. '18pt')
+  spacebefore   string   [set/get]
+    description: space before every paragraph in the cell. Unit-qualified length ('12pt', '0.5cm').
+    example: --prop spacebefore=6pt
+    readback: unit-qualified length
+  spaceafter   string   [set/get]
+    description: space after every paragraph in the cell. Unit-qualified length ('12pt', '0.5cm').
+    example: --prop spaceafter=6pt
+    readback: unit-qualified length
+  align   string   [set/get]   aliases: alignment, halign
+    description: first-paragraph horizontal alignment applied to every paragraph in the cell (a:pPr @algn). left|center|right|justify. Readback reflects the first paragraph only.
+    example: --prop align=center
+    readback: left|center|right|justify
+  font   string   [set/get]   aliases: font.name, font.latin
+    description: Latin (and East Asian fallback) font typeface for every run in the cell. Fans out to a:rPr/a:latin + a:ea on every existing run.
+    example: --prop font=Calibri
+    readback: typeface name
+  size   string   [set/get]   aliases: font.size, fontsize
+    description: font size for every run in the cell (a:rPr @sz). Unit-qualified ('14pt') or bare number (points).
+    example: --prop size=14pt
+    example: --prop size=10.5
+    readback: unit-qualified length, e.g. '14pt'
+  bold   bool   [set/get]   aliases: font.bold
+    description: bold for every run in the cell (a:rPr @b).
+    example: --prop bold=true
+    readback: true|false
+  italic   bool   [set/get]   aliases: font.italic
+    description: italic for every run in the cell (a:rPr @i).
+    example: --prop italic=true
+    readback: true|false
+  underline   string   [set/get]   aliases: font.underline
+    description: underline style for every run in the cell (a:rPr @u). single|double|none or any OOXML underline value.
+    example: --prop underline=single
+    example: --prop underline=double
+    readback: single|double|… (OOXML token)
+  strike   string   [set/get]   aliases: strikethrough, font.strike, font.strikethrough
+    description: strikethrough for every run in the cell (a:rPr @strike). single|double|none.
+    example: --prop strike=single
+    readback: single|double|none
+  color   color   [set/get]   aliases: font.color
+    description: font color for every run in the cell (a:rPr/a:solidFill).
+    example: --prop color=FF0000
+    example: --prop color=red
+    readback: #RRGGBB uppercase or scheme color name
+  fill   color   [add/set/get]   aliases: background, shd, shading
+    description: cell background fill. Accepts a solid color (hex, named, rgb(...)), scheme color name (accent1–accent6, dk1, dk2, lt1, lt2, hyperlink), 'none' for explicit no-fill, or a gradient string 'COLOR1-COLOR2[-ANGLE]' (e.g. 'FF0000-0000FF-90'). Stored as a:solidFill/a:noFill/a:gradFill on a:tcPr.
+    example: --prop fill=FFFF00
+    example: --prop fill=#FF0000
+    example: --prop fill=red
+    example: --prop background=accent1
+    example: --prop fill=none
+    example: --prop fill="FF0000-0000FF-90"
+    readback: #RRGGBB uppercase, 'gradient' (with separate 'gradient' key), or 'image' for picture fill
+  baseline   number   [get]
+    description: first run baseline offset for the cell text (percent units; positive=raised).
+    readback: percent (e.g. 30)
+  hmerge   bool   [get]
+    description: true on cells continued from a horizontal merge anchor (CT_TableCell @hMerge).
+    readback: true on continuation cells
+  vmerge   bool   [get]
+    description: true on cells continued from a vertical merge anchor (CT_TableCell @vMerge). Surfaced by Query for table cells.
+    readback: true on continuation cells
+  image.relId   string   [get]
+    description: relationship id of an embedded image used as the cell's blip fill.
+    readback: relationship id token
+  border.all   string   [add/set/get]   aliases: border
+    description: all four cell edges. Format: 'WIDTH[ DASH][ COLOR]' (e.g. '1pt solid FF0000') or 'STYLE;WIDTH;COLOR[;DASH]' (style ignored — kept for docx parity). DASH ∈ solid|dot|dash|lgDash|dashDot|sysDot|sysDash. Use 'none' to clear. Alias: border. Stored as a:lnL/lnR/lnT/lnB on a:tcPr. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.
+    example: --prop border.all="1pt solid FF0000"
+    example: --prop border=none
+    example: --prop border.all="single;4;FF0000"
+    readback: edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')
+  border.bottom   string   [set/get]
+    description: bottom border. Format: STYLE[;SIZE[;COLOR[;SPACE]]]. Cross-format note: pptx accepts a space-separated 'WIDTH DASH COLOR' form; docx only accepts the semicolon form 'STYLE;SIZE;COLOR' (SIZE is in 1/8 pt units).
+    example: --prop border.bottom="1pt solid 808080"
+    example: --prop border.bottom="double;6;0000FF"
+    readback: edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')
+  border.left   string   [set/get]
+    description: left border. Format: STYLE[;SIZE[;COLOR[;SPACE]]]. Cross-format note: pptx accepts a space-separated 'WIDTH DASH COLOR' form; docx only accepts the semicolon form 'STYLE;SIZE;COLOR' (SIZE is in 1/8 pt units).
+    example: --prop border.left="1pt solid 808080"
+    example: --prop border.left="single;4"
+    readback: edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')
+  border.right   string   [set/get]
+    description: right border. Format: STYLE[;SIZE[;COLOR[;SPACE]]]. Cross-format note: pptx accepts a space-separated 'WIDTH DASH COLOR' form; docx only accepts the semicolon form 'STYLE;SIZE;COLOR' (SIZE is in 1/8 pt units).
+    example: --prop border.right="1pt solid 808080"
+    example: --prop border.right="single;4"
+    readback: edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')
+  border.tl2br   string   [add/set/get]
+    description: diagonal from top-left to bottom-right (a:lnTlToBr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Get returns sub-keys border.tl2br.color, border.tl2br.width, border.tl2br.dash, and a summary border.tl2br key.
+    example: --prop border.tl2br="1pt solid FF0000"
+    example: --prop border.tl2br="single;4;FF0000"
+    readback: summary 'WIDTH DASH #COLOR' plus border.tl2br.color/.width/.dash sub-keys
+  border.top   string   [set/get]
+    description: top border. Format: STYLE[;SIZE[;COLOR[;SPACE]]]. Cross-format note: pptx accepts a space-separated 'WIDTH DASH COLOR' form; docx only accepts the semicolon form 'STYLE;SIZE;COLOR' (SIZE is in 1/8 pt units).
+    example: --prop border.top="2pt solid 000000"
+    example: --prop border.top="single;4;000000"
+    readback: edge descriptor 'WIDTH DASH #COLOR' (e.g. '2pt solid #FF0000')
+  border.tr2bl   string   [add/set/get]
+    description: diagonal from top-right to bottom-left (a:lnBlToTr). Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient. Get returns sub-keys border.tr2bl.color, border.tr2bl.width, border.tr2bl.dash, and a summary border.tr2bl key.
+    example: --prop border.tr2bl="1pt solid FF0000"
+    example: --prop border.tr2bl="single;4;FF0000"
+    readback: summary 'WIDTH DASH #COLOR' plus border.tr2bl.color/.width/.dash sub-keys
+
+Note: Appending a cell to a row is unusual — normally cells are seeded at row-Add time. This op exists for completeness; pptx tables are strictly rectangular, so a standalone Add cell only succeeds when the row currently has fewer cells than the table grid (an OOXML-illegal state).

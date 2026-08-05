@@ -93,6 +93,11 @@ full_after.txt
 
 # Runtime state the app rewrites (regenerated on launch — never commit)
 data/*.json
+# Weekly self-review output (report, snapshots, proposals) — a USER's learning
+# data. It was tracked, so `git archive` shipped one machine's report + pending
+# proposals into every fresh install. Never commit it.
+data/self_review/
+officecli-demo
 
 # Secrets backups (e.g. produced during an env-var migration)
 .env.bak

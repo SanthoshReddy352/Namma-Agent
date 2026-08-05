@@ -1,0 +1,17 @@
+{
+  "id": "229613089594",
+  "session_id": "b49c2360-2e87-4cec-b16f-2ea09809b03c",
+  "tool": "write_file",
+  "created_at": "2026-07-29T10:10:39+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\Desktop\\Sripa Aqua\\check_bytes.ps1",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

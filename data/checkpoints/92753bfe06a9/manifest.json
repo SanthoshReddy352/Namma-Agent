@@ -1,0 +1,17 @@
+{
+  "id": "92753bfe06a9",
+  "session_id": "b49c2360-2e87-4cec-b16f-2ea09809b03c",
+  "tool": "delete_path",
+  "created_at": "2026-07-29T10:24:44+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\Desktop\\Sripa Aqua\\facebook_page_2.png",
+      "kind": "file",
+      "stored": "files/0.png",
+      "size": 117677,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

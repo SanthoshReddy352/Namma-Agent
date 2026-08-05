@@ -61,6 +61,120 @@ def test_user_overrides_bundled(tmp_path):
     assert "Overridden body" in store.render("deep-research")
 
 
+# The two real duplicate pairs from the user's catalog, verbatim — one skill
+# saved twice because dedup only ever compared exact slugs.
+_SHELL_A = ("windows-safe-shell",
+            "Execute shell commands safely on Windows with proper syntax "
+            "adaptation and pre-checks.")
+_SHELL_B = ("robust-windows-shell",
+            "Enhances shell command execution on Windows by providing procedures "
+            "to ensure command compatibility, error handling, and avoidance of "
+            "common pitfalls.")
+_DELEGATE_A = ("delegate-task-completion",
+               "Provides a framework for receiving, executing, and reporting "
+               "delegated tasks to ensure all sub-tasks are addressed and "
+               "results are delivered.")
+_DELEGATE_B = ("robust-task-delegation",
+               "A skill for effectively delegating and completing sub-tasks, "
+               "particularly in research or agent roles, with built-in error "
+               "handling and retry mechanisms to improve success rates.")
+
+
+class _FakeEmbedder:
+    """Stand-in for the Engram embedder. Vectors are one-hot over a topic, so
+    two blurbs about the same topic score 1.0 and everything else 0.0 — enough
+    to exercise the semantic branch without a live endpoint."""
+
+    TOPICS = {"shell": ("shell", "windows", "command"),
+              "delegate": ("delegat", "sub-task", "sub-tasks"),
+              "draw": ("diagram", "excalidraw", "visual")}
+
+    def __init__(self, up=True):
+        self.up = up
+        self.calls = 0
+
+    def available(self):
+        return self.up
+
+    def embed(self, texts):
+        self.calls += 1
+        if not self.up:
+            return None
+        out = []
+        for t in texts:
+            low = (t or "").lower()
+            out.append([1.0 if any(w in low for w in words) else 0.0
+                        for words in self.TOPICS.values()])
+        return out
+
+
+def test_find_similar_semantic_catches_a_rename(tmp_path):
+    # Word overlap cannot see that these two are the same skill (measured over
+    # the real catalog it separated duplicates from unrelated skills by 0.03);
+    # the embedding channel can.
+    store = SkillStore(user_dir=tmp_path / "skills", embedder=_FakeEmbedder())
+    store.create(*_DELEGATE_A, "# Body")
+    hit = store.find_similar(*_DELEGATE_B)
+    assert hit is not None and hit.name == "delegate-task-completion"
+    assert store.find_similar(
+        "backup-postgres",
+        "Dump a Postgres database to a timestamped archive and verify it") is None
+
+
+def test_find_similar_lexical_fallback_when_embeddings_are_down(tmp_path):
+    down = _FakeEmbedder(up=False)
+    store = SkillStore(user_dir=tmp_path / "skills", embedder=down)
+    store.create(*_SHELL_A, "# Body")
+    # The narrow offline rule still catches the obvious rename…
+    hit = store.find_similar(*_SHELL_B)
+    assert hit is not None and hit.name == "windows-safe-shell"
+    # …and does not fire on a skill that merely shares a word.
+    assert store.find_similar(
+        "robust-task-delegation",
+        "Delegate sub-tasks with error handling and retries") is None
+    assert down.calls == 0          # circuit-broken channel is never called
+
+
+def test_find_similar_exact_name_needs_no_embedder(tmp_path):
+    store = SkillStore(user_dir=tmp_path / "skills")
+    store.create(*_SHELL_A, "# Body")
+    assert store.find_similar("windows-safe-shell").name == "windows-safe-shell"
+    # An exact name always matches — including a bundled skill, so a "new" skill
+    # can never shadow one that ships with the app.
+    assert store.find_similar("quiz-design").name == "quiz-design"
+    assert store.find_similar(
+        "backup-postgres",
+        "Dump a Postgres database to a timestamped archive and verify it") is None
+
+
+def test_drafts_are_flagged_and_listed(tmp_path):
+    store = SkillStore(user_dir=tmp_path / "skills")
+    store.create("proposed", "when to use", "# Body", category="draft",
+                 tags=["draft", "capture"])
+    store.create("approved", "when to use", "# Body", category="general")
+    assert store.get("proposed").is_draft is True
+    assert store.get("approved").is_draft is False
+    assert [s.name for s in store.drafts()] == ["proposed"]
+
+
+def test_delete_removes_a_learned_skill_but_never_a_bundled_one(tmp_path):
+    store = SkillStore(user_dir=tmp_path / "skills", disabled=["temp"])
+    store.create("temp", "desc", "# Body")
+    assert store.get("temp").enabled is False
+    ok, detail = store.delete("temp")
+    assert ok and "temp" in detail
+    assert store.get("temp") is None
+    assert not (tmp_path / "skills" / "temp").exists()
+    # discarding also clears it from the disabled-set (no ghost entry in config)
+    assert "temp" not in store.disabled_names()
+    # bundled skills are turned off, never deleted — they'd be unrecoverable
+    ok, detail = store.delete("deep-research")
+    assert not ok and "bundled" in detail
+    assert store.get("deep-research") is not None
+    ok, detail = store.delete("nope")
+    assert not ok and "no skill" in detail
+
+
 def test_update_skill(tmp_path):
     store = SkillStore(user_dir=tmp_path / "skills")
     store.create("temp", "desc", "# Old")

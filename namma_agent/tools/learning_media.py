@@ -25,6 +25,7 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from namma_agent.core import urlguard
 from namma_agent.core.interactive import record_artifact
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
@@ -475,8 +476,12 @@ def _fetch_image(args: dict) -> ToolResult:
     creator = hit.get("creator") or "unknown"
     lic = (hit.get("license") or "").upper()
     try:
-        ireq = urllib.request.Request(img_url, headers={"User-Agent": "Namma Agent-LearningRoom/2.0"})
-        with urllib.request.urlopen(ireq, timeout=_TIMEOUT) as r:
+        # img_url comes from the Openverse RESPONSE, not from us — remote data
+        # choosing a fetch target is exactly the SSRF case, so it goes through
+        # the Phase 7a guard (and its redirects do too).
+        ireq = urllib.request.Request(urlguard.check_url(img_url),
+                                      headers={"User-Agent": "Namma Agent-LearningRoom/2.0"})
+        with urlguard.guarded_opener().open(ireq, timeout=_TIMEOUT) as r:
             data = r.read()
             ext = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp",
                    "image/gif": "gif"}.get(r.headers.get("Content-Type", "").split(";")[0], "jpg")

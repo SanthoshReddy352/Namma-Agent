@@ -73,6 +73,48 @@ _RESEARCH_TOOLS = (
 )
 
 
+class _UnscopedProvider:
+    """The turn's provider with its per-model tool allow-list dropped.
+
+    A model profile can carry ``tools_allow`` to scope what the MAIN agent sees
+    (small local brains). A sub-agent's registry is already its scope, and that
+    allow-list names main-agent tools — inheriting it can leave the sub-agent
+    with no tools at all. Everything else proxies straight through.
+    """
+
+    tool_allow: list = []
+
+    def __init__(self, inner):
+        self._inner = inner
+
+    def __getattr__(self, name):  # everything but tool_allow comes from the real one
+        return getattr(self._inner, name)
+
+
+#: Safety-critical personal facts (allergies, medical constraints, hard dietary
+#: limits) that MUST ride every turn. A block='auto' save whose text matches this
+#: is promoted into always-visible core memory instead of the background graph,
+#: where recall would depend on the query happening to match — unsafe for an
+#: allergy. Kept high-precision on purpose: core memory is a small budget.
+_SAFETY_MEMORY_RE = _re.compile(
+    r"\b("
+    r"allerg(?:y|ic|ies)|anaphyla|"                             # allergies
+    r"intoleran(?:t|ce)|coeliac|celiac|"                        # intolerances
+    r"diabet(?:es|ic)|asthma(?:tic)?|epilep(?:sy|tic)|seizures?|"  # conditions
+    r"medications?|prescrib(?:ed|es|ing)?|"                     # medication
+    r"can(?:'|no)?t\s+(?:eat|have|take)|"                       # hard limits
+    r"must\s+(?:not|never)\s+(?:eat|have|take)|must\s+avoid|"
+    r"pacemaker|blood\s+thinners?"
+    r")\b",
+    _re.IGNORECASE,
+)
+
+
+def _is_safety_critical(text: str) -> bool:
+    """True for personal facts too important to leave to query-matched recall."""
+    return bool(_SAFETY_MEMORY_RE.search(text or ""))
+
+
 def register_memory_tools(registry: ToolRegistry, db: Database,
                           get_plugin_ingestor=None, get_engram=None) -> None:
     """Register memory tools. **Engram is THE memory** (docs/MEMORY_SYSTEM_DESIGN.md):
@@ -130,21 +172,40 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
                     if r.get("ok") else ToolResult(ok=False, content="", error=r.get("error")))
         if not text:
             return ToolResult(ok=False, content="", error="'text' is required")
+        promoted = False
         if block == "auto":
-            # Not identity-grade → straight to the semantic pipeline (extraction,
-            # dedup, contradiction handling happen there, in the background).
-            eng.writer.ingest_text(text)
-            return ToolResult(ok=True, content="Remembering (queued into long-term memory).")
+            # Safety-critical facts (allergies, medical constraints) MUST ride
+            # every turn — routing them to the background graph, where recall
+            # depends on the query happening to match, is unsafe. Promote them
+            # into always-visible core memory; everything else goes to the
+            # semantic pipeline (extraction, dedup, contradiction handling
+            # happen there, in the background).
+            if _is_safety_critical(text):
+                block, promoted = "user", True
+            else:
+                eng.writer.ingest_text(text)
+                return ToolResult(ok=True, content="Remembering (queued into long-term memory).")
         r = (eng.core.replace(block, old, text) if action == "replace"
              else eng.core.add(block, text))
         if not r.get("ok"):
+            # A promoted safety-critical fact must never be silently dropped: if
+            # core memory is full, fall back to the semantic pipeline so it is at
+            # least stored, and say so (the user can trim core memory to re-pin it).
+            if promoted:
+                eng.writer.ingest_text(text)
+                return ToolResult(ok=True, content=(
+                    "Core memory is full, so I saved this to long-term memory instead. "
+                    "Trim core memory (memory_save action=remove) so this safety-critical "
+                    "fact stays always-visible."))
             return ToolResult(ok=False, content="", error=r.get("error"))
         # Core entries are also durable facts — stored directly (not through the
         # background pipeline) so an explicit save is recallable immediately and
         # survives even when no model is reachable.
         eng.store.add_item(text, kind="preference", importance=0.9, source="core")
         note = f" ({r.get('note')})" if r.get("note") else ""
-        return ToolResult(ok=True, content=f"Saved to core memory — '{r['block']}' now "
+        prefix = ("Pinned to always-visible core memory" if promoted
+                  else "Saved to core memory")
+        return ToolResult(ok=True, content=f"{prefix} — '{r['block']}' now "
                                            f"{r['pct']}% full{note}.")
 
     registry.register(
@@ -452,6 +513,69 @@ def register_project_tools(registry: ToolRegistry, db: Database) -> None:
             lines.append(f"- {d['name']} ({d['chunk_count']} chunks, {d['bytes']} bytes){note}")
         return ToolResult(ok=True, content="\n".join(lines), data={"count": len(docs)})
 
+    def index_document(args: dict) -> ToolResult:
+        from pathlib import Path
+
+        from namma_agent.core.docindex import (
+            MAX_FILE_BYTES, MAX_FILES_PER_PROJECT, ingest_document)
+        from namma_agent.core.safety import check_path
+
+        pid = _project_id()
+        if not pid:
+            # Indexing is project-scoped (the chunk store is keyed by project). Be
+            # honest about that instead of pretending — memory_save is NOT indexing.
+            return ToolResult(ok=False, content="", error=(
+                "Indexing needs a project, and this chat isn't in one — there's "
+                "nowhere to index into. Open or create a project first, then index. "
+                "To just read a file into this conversation (without making it "
+                "searchable later), use read_document instead."))
+        path = (args.get("path") or "").strip()
+        if not path:
+            return ToolResult(ok=False, content="", error="'path' is required")
+        ok, reason = check_path(path)
+        if not ok:
+            return ToolResult(ok=False, content="", error=reason)
+        p = Path(path).expanduser()
+        if not p.is_file():
+            return ToolResult(ok=False, content="", error=f"not a file: {path}")
+        size = p.stat().st_size
+        if size > MAX_FILE_BYTES:
+            return ToolResult(ok=False, content="", error=(
+                f"{p.name} is {size} bytes; the per-file index limit is "
+                f"{MAX_FILE_BYTES} bytes."))
+        if db.count_project_documents(pid) >= MAX_FILES_PER_PROJECT:
+            return ToolResult(ok=False, content="", error=(
+                f"this project already holds {MAX_FILES_PER_PROJECT} documents (the "
+                "max) — remove one before indexing another."))
+        doc = ingest_document(db, pid, str(p), name=p.name)
+        status = doc.get("status")
+        chunks = doc.get("chunk_count", 0)
+        if status == "error":
+            why = "; ".join(doc.get("flag_reasons") or []) or "extraction failed"
+            return ToolResult(ok=False, content="", error=f"could not index {p.name}: {why}")
+        if status == "flagged":
+            return ToolResult(ok=True, content=(
+                f"Indexed {p.name} ({chunks} chunks) but QUARANTINED it — the document "
+                "tripped prompt-injection screening, so it's held OUT of retrieval until "
+                "you trust it (Security tab)."))
+        return ToolResult(ok=True, content=(
+            f"Indexed {p.name} — {chunks} chunk(s), searchable now via "
+            "search_project_documents."))
+
+    registry.register(
+        name="index_document",
+        description=("Index a document FILE into the CURRENT project's searchable memory "
+                     "(chunked + retrievable with search_project_documents). Use this for a "
+                     "file you want to keep and query later; for a one-off read, use "
+                     "read_document. Only works inside a project chat."),
+        parameters={
+            "type": "object",
+            "properties": {"path": {"type": "string",
+                                    "description": "path to the document file to index"}},
+            "required": ["path"],
+        },
+        handler=index_document,
+    )
     registry.register(
         name="search_project_documents",
         description=("Search the CURRENT project's uploaded documents and get the most "
@@ -955,7 +1079,8 @@ def register_skill_tools(registry: ToolRegistry, store) -> None:
 
 
 def register_agent_tools(registry: ToolRegistry, agent, provider, db,
-                         get_comms=None, bg_store_path=None) -> dict:
+                         get_comms=None, bg_store_path=None,
+                         provider_getter=None) -> dict:
     """Register delegate_task + background-task + persona tools. Needs the live
     agent/provider/db. Returns handles for the service's status surface
     (``{"background_tasks": callable}``).
@@ -1027,24 +1152,67 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
                 if tool.name in wanted or (tool.category or "general") in wanted:
                     sub_registry.add(tool)
         if len(sub_registry) == 0:
+            if wanted:  # asked for toolsets, got none — say so instead of guessing
+                from namma_agent.core.logger import logger
+                logger.warning("[delegate] no non-destructive tool matched %s — "
+                               "falling back to the research set",
+                               ", ".join(sorted(wanted)))
             for name in _RESEARCH_TOOLS:
                 tool = registry.get(name)
-                if tool is not None:
+                if tool is not None and tool.enabled:
                     sub_registry.add(tool)
         return sub_registry
 
-    def _run_subagent(task: str, toolsets: Optional[list] = None):
+    def _subagent_provider():
+        """The brain a sub-agent runs on, resolved LIVE at call time.
+
+        Order: the provider of the turn that called us (the model the user picked
+        for this chat) → the service's live getter (their first configured model)
+        → the positional ``provider``. That last one is the legacy config
+        ``provider:`` chain captured at boot: on a profile-only setup it holds no
+        credentials at all, so every delegation died instantly with "No LLM
+        provider is available" and left an empty sub-session behind. Unavailable
+        candidates are skipped so a dead link never takes the sub-agent down."""
+        from namma_agent.core.interactive import get_current_provider
+
+        candidates = [get_current_provider()]
+        if provider_getter is not None:
+            try:
+                candidates.append(provider_getter())
+            except Exception:  # noqa: BLE001 — never break delegation on lookup
+                pass
+        candidates.append(provider)
+        for cand in candidates:
+            if cand is None:
+                continue
+            try:
+                if not cand.is_available():
+                    continue
+            except Exception:  # noqa: BLE001 — can't tell → assume usable
+                pass
+            return cand
+        return provider
+
+    def _run_subagent(task: str, toolsets: Optional[list] = None, prov=None):
+        prov = prov if prov is not None else _subagent_provider()
+        if getattr(prov, "tool_allow", None):
+            prov = _UnscopedProvider(prov)
         # Inherit the main agent's tool-step budget so an unlimited config
         # (tool_loop_limit <= 0) lets deep research run to completion instead of
         # being capped at a hidden sub-agent limit.
-        sub = Agent(provider, _sub_registry(toolsets), db, persona=agent.persona,
+        sub = Agent(prov, _sub_registry(toolsets), db, persona=agent.persona,
                     tool_loop_limit=agent.tool_loop_limit, max_history_turns=4)
         instruction = (
             "You are a focused sub-task/research agent. Use your tools to actually "
             "complete the task below, then report concise findings (with source URLs "
             "where relevant). Do not ask follow-up questions.\n\nTASK: " + task
         )
-        return sub.process_turn(instruction, session_id=sub.new_session())
+        # A sub-agent's transcript is bookkeeping, not a conversation: give it its
+        # own session KIND so it never surfaces in the user's chat sidebar (a plain
+        # session showed up there as a phantom chat titled "You are a focused
+        # sub-task/research agent…" for every delegation).
+        session_id = db.create_session_in(kind="subagent", persona=agent.persona.id)
+        return sub.process_turn(instruction, session_id=session_id)
 
     def delegate_task(args: dict) -> ToolResult:
         task = (args.get("task") or "").strip()
@@ -1069,16 +1237,19 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
         with _bg_lock:
             _bg_tasks[task_id] = entry
         _bg_save()
+        # Resolve the brain HERE, on the turn's thread: the current provider is a
+        # contextvar, and a new thread does not inherit it.
+        prov = _subagent_provider()
 
         def _work() -> None:
             try:
-                res = _run_subagent(task, args.get("toolsets"))
-                entry["result"] = res.content or "(no findings)"
-                entry["status"] = "done"
+                res = _run_subagent(task, args.get("toolsets"), prov=prov)
+                result, status, error = res.content or "(no findings)", "done", ""
             except Exception as exc:  # noqa: BLE001
-                entry["error"] = str(exc)
-                entry["status"] = "failed"
-            entry["finished_at"] = _time.time()
+                result, status, error = "", "failed", str(exc)
+            with _bg_lock:  # the reader (check_background_task) holds this too
+                entry.update(result=result, status=status, error=error,
+                             finished_at=_time.time())
             _bg_save()
             # Ping the user over comms when a channel is configured — the whole
             # point of a background task is not having to sit and wait for it.
@@ -1133,6 +1304,18 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
                                            if not k.startswith("_")}
                                           for e in entries.values()]})
 
+    def _summarize_provider():
+        """The brain that writes session summaries. Resolved LIVE through the
+        service's getter (the user's configured model profile) — the positional
+        ``provider`` is the legacy config chain and may hold no credentials at
+        all on a profile-only setup, which silently killed every summary."""
+        if provider_getter is None:
+            return provider
+        try:
+            return provider_getter() or provider
+        except Exception:  # noqa: BLE001 — never break summarization on lookup
+            return provider
+
     def _summarize_turns(turns: list[dict]) -> str:
         convo = "\n".join(f"{t['role']}: {t['content']}" for t in turns
                           if t.get("role") in ("user", "assistant"))[:12000]
@@ -1143,7 +1326,7 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
                 "facts or preferences. Be specific and terse. No preamble.")},
             {"role": "user", "content": convo},
         ]
-        resp = provider.generate(prompt, tools=None, stream=False)
+        resp = _summarize_provider().generate(prompt, tools=None, stream=False)
         return (resp.content or "").strip()
 
     def summarize_session(args: dict) -> ToolResult:

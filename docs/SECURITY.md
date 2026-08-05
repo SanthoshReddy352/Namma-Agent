@@ -117,7 +117,27 @@ process is capped by the OS (`core/sandbox.py`, on by default,
 - The API's secrets surface (`/api/secrets*`) returns **names only, never
   values**.
 
-### 6. Memory integrity
+### 6. Outbound fetch guard (SSRF)
+
+- Tools that fetch a URL the **model** chose (`web_extract`, `web_crawl`, the
+  `web_search` HTML fallback, RSS feeds, image downloads) refuse targets that
+  resolve into loopback, private, link-local, CGNAT, reserved or multicast
+  space — above all the **cloud instance-metadata service**
+  (`169.254.169.254`), which on a VPS hands server credentials to anything that
+  can make an HTTP request.
+- The check runs on the **resolved addresses**, not the URL text — a public
+  hostname with a private `A` record is the actual attack — and on **every
+  redirect hop**, since a public URL that 302s inward is the standard bypass.
+  IPv4-mapped/6to4/NAT64 IPv6 forms are unwrapped before the check.
+- Only `http`/`https` are fetchable; `file://`, `gopher://` and friends are
+  refused outright.
+- This matters because fetching a page is *not* destructive, so an `untrusted`
+  sender's turn keeps these tools (boundary 1 does not strip them).
+- Home-lab opt-out: `security.allow_private_urls: true` lets the agent reach
+  your own LAN devices. Off by default — reaching into the private network has
+  to be a deliberate choice, not an omission.
+
+### 7. Memory integrity
 
 - Every memory write — from any source — is injection-screened before storage;
   flagged text is stored for audit but never indexed for recall.
@@ -137,6 +157,11 @@ process is capped by the OS (`core/sandbox.py`, on by default,
   encryption.
 - An `owner`-level channel is only as safe as the account behind it — protect
   your Telegram/Signal account accordingly.
+- The fetch guard is **not TOCTOU-proof**: between our DNS check and the actual
+  connect, a hostile resolver could answer differently (classic DNS rebinding).
+  Closing that needs pinning the checked IP and owning the HTTP stack. What
+  ships blocks the attack *class* — model- or sender-supplied URLs reaching
+  internal services — which is the realistic threat here.
 
 ## Reporting a vulnerability
 

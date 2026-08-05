@@ -164,6 +164,9 @@ class PersistentShell:
         # Phase 1c: the OS-level sandbox around the current shell child (Windows
         # Job Object handle wrapper; None on POSIX / when unavailable).
         self._sandbox = None
+        # Phase 7d: the execution backend this shell was spawned on (set in
+        # _spawn; local unless security.shell.backend says otherwise).
+        self._backend = None
 
     # -- lifecycle -----------------------------------------------------------
 
@@ -174,26 +177,36 @@ class PersistentShell:
     def _spawn(self) -> None:
         if not os.path.isdir(self.cwd):  # last cwd was deleted — fall back home
             self.cwd = os.path.expanduser("~")
-        argv = _find_shell()
-        ext = ".ps1" if IS_WINDOWS else ".sh"
+        from namma_agent.core import shell_backends as _backends
+
+        # Phase 7d: `local` returns exactly what this method always did; docker
+        # and ssh swap the driver/argv and ship scripts to the far side.
+        # check() raises BackendError — an explicitly chosen backend that can't
+        # start must FAIL, never silently run on this machine instead.
+        backend = _backends.current_backend()
+        backend.check()
+        ext = backend.script_ext()
         driver = os.path.join(self._tmpdir, "driver" + ext)
-        # utf-8-sig: Windows PowerShell 5.1 needs the BOM to parse UTF-8 scripts.
-        with open(driver, "w", encoding="utf-8-sig" if IS_WINDOWS else "utf-8") as fh:
-            fh.write(_PS_DRIVER if IS_WINDOWS else _POSIX_DRIVER)
+        with open(driver, "w", encoding=backend.script_encoding()) as fh:
+            fh.write(backend.driver_text())
+        backend.prepare(driver)
+        argv = backend.argv(driver)
         from namma_agent.core import sandbox as _sandboxmod
 
         kwargs: dict = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, cwd=self.cwd,
-                            env=_shell_env())
+                            stderr=subprocess.STDOUT)
+        kwargs.update(backend.popen_kwargs(self.cwd))
         if IS_WINDOWS:
             kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         else:
             kwargs["start_new_session"] = True
         # Phase 1c: POSIX rlimits ride the spawn (preexec_fn); the Windows Job
         # Object is attached right after. Both degrade gracefully to today's
-        # behavior when the OS refuses.
+        # behavior when the OS refuses. NOTE: on a remote backend these bound
+        # the docker/ssh CLIENT, not the workload — see shell_backends.
         kwargs.update(_sandboxmod.popen_extras())
-        self._proc = subprocess.Popen(argv + [driver], **kwargs)
+        self._backend = backend
+        self._proc = subprocess.Popen(argv, **kwargs)
         self._sandbox = _sandboxmod.attach(self._proc)
         self._queue = queue.Queue()
         threading.Thread(target=self._reader, args=(self._proc, self._queue),
@@ -258,15 +271,32 @@ class PersistentShell:
             self.last_used = time.time()
             if not self.alive:
                 self._kill()
-                self._spawn()
+                try:
+                    self._spawn()
+                except Exception as exc:  # noqa: BLE001 — incl. BackendError
+                    # A configured-but-unusable backend is a clear, actionable
+                    # error, not a crash — and NOT a quiet fallback to local.
+                    logger.warning("[shell] couldn't start the shell: %s", exc)
+                    return ShellResult(ok=False, exit_code=-1, output=str(exc),
+                                       cwd=self.cwd, died=True)
             nonce = uuid.uuid4().hex[:12]
-            ext = ".ps1" if IS_WINDOWS else ".sh"
+            backend = self._backend
+            ext = backend.script_ext()
             script = os.path.join(self._tmpdir, f"cmd_{nonce}{ext}")
-            with open(script, "w", encoding="utf-8-sig" if IS_WINDOWS else "utf-8") as fh:
+            with open(script, "w", encoding=backend.script_encoding()) as fh:
                 fh.write(command)
                 fh.write("\n")
+            # Phase 7d: on a remote backend the driver can't see our temp dir —
+            # materialize() ships the script over and returns the far-side path.
+            # Locally this is the identity function.
             try:
-                self._proc.stdin.write(f"{nonce} {script}\n".encode("utf-8"))
+                script_path = backend.materialize(script)
+            except Exception as exc:  # noqa: BLE001 — surfaced as a shell failure
+                logger.warning("[shell] couldn't stage the command: %s", exc)
+                return ShellResult(ok=False, exit_code=-1, output=str(exc),
+                                   cwd=self.cwd, died=False)
+            try:
+                self._proc.stdin.write(f"{nonce} {script_path}\n".encode("utf-8"))
                 self._proc.stdin.flush()
                 if stdin_data:
                     self._proc.stdin.write(stdin_data.encode("utf-8"))

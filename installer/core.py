@@ -246,14 +246,16 @@ def install_dep_command(tool: str, system: Optional[str] = None) -> Optional[lis
     system = system or platform.system()
     if system == "Windows":
         ids = {"python": "Python.Python.3.12", "git": "Git.Git", "node": "OpenJS.NodeJS.LTS",
-               "ripgrep": "BurntSushi.ripgrep.MSVC", "ffmpeg": "Gyan.FFmpeg"}
+               "ripgrep": "BurntSushi.ripgrep.MSVC", "ffmpeg": "Gyan.FFmpeg",
+               "ollama": "Ollama.Ollama"}
         if tool not in ids:
             return None
         return ["winget", "install", "-e", "--id", ids[tool], "--silent",
                 "--accept-source-agreements", "--accept-package-agreements"]
     if system == "Darwin":
         pkg = {"python": "python", "git": "git", "node": "node",
-               "ripgrep": "ripgrep", "ffmpeg": "ffmpeg"}.get(tool)
+               "ripgrep": "ripgrep", "ffmpeg": "ffmpeg",
+               "ollama": "ollama"}.get(tool)
         return ["brew", "install", pkg] if pkg else None
     # Linux: choose by available package manager.
     matrix = {
@@ -287,6 +289,7 @@ INSTALL_STEPS: list[tuple[str, str]] = [
     ("source", "Getting the app files"),
     ("venv", "Creating the Python environment"),
     ("deps", "Installing Python dependencies"),
+    ("embeddings", "Setting up memory embeddings"),
     ("ui", "Building the interface"),
     ("shortcuts", "Creating shortcuts"),
     ("path", "Adding the namma command to PATH"),
@@ -408,6 +411,108 @@ def ensure_optional_tools(log: Log) -> None:
         log(f"  Installing {tool} ({' '.join(cmd[:3])} …)")
         with suppress(Exception):
             _run(cmd, log=log, check=False)
+
+
+#: The embedding model that powers semantic memory recall. 46 MB / 384-dim,
+#: ~150 MB resident, ~10 ms a query — small enough for a 1 GB VPS. Must match
+#: ``memory.embeddings.model`` in namma_agent/config.yaml.
+EMBEDDING_MODEL = "all-minilm"
+
+#: Ollama publishes no distro packages; Linux uses its official install script.
+OLLAMA_INSTALL_SH = "https://ollama.com/install.sh"
+
+
+#: Set to 1 to opt out of the required embeddings step. For genuinely
+#: constrained hosts only (air-gapped, locked-down, unsupported arch) — the app
+#: then runs with keyword-only memory recall.
+SKIP_ENV = "NAMMA_NO_EMBEDDINGS"
+
+_EMBED_FAILURE_HELP = (
+    "Namma Agent's memory needs a local embedding model for semantic recall.\n"
+    "  Install Ollama manually, then re-run this installer:\n"
+    "    Windows: winget install -e --id Ollama.Ollama\n"
+    "    macOS:   brew install ollama\n"
+    "    Linux:   curl -fsSL https://ollama.com/install.sh | sh\n"
+    "  Then:      ollama pull all-minilm\n"
+    f"  To install without it anyway, set {SKIP_ENV}=1 (memory recall becomes "
+    "keyword-only)."
+)
+
+
+def embeddings_opted_out() -> bool:
+    return os.environ.get(SKIP_ENV, "").strip().lower() in ("1", "true", "yes")
+
+
+def setup_embeddings(log: Log, required: bool = True) -> bool:
+    """Install Ollama + the embedding model. **Required by default.**
+
+    This powers the memory's semantic recall — without it, memory search is
+    keyword-only and misses paraphrases ("what is my mother tongue?" never
+    reaches the fact that says Telugu), so it is treated as a real dependency
+    alongside Python, not a nicety.
+
+    Raises :class:`RuntimeError` when it can't be provisioned (the GUI stepper
+    turns that into a red step and stops the install). Hosts that genuinely
+    cannot have it set :data:`SKIP_ENV`, or pass ``required=False``.
+    """
+    if embeddings_opted_out():
+        log(f"  {SKIP_ENV} is set — skipping (memory recall stays keyword-only).")
+        return False
+
+    def _fail(reason: str) -> bool:
+        if required:
+            raise RuntimeError(f"{reason}\n{_EMBED_FAILURE_HELP}")
+        log(f"  ! {reason} — memory recall stays keyword-only.")
+        return False
+
+    if not _has("ollama"):
+        log("  Installing Ollama …")
+        cmd = install_dep_command("ollama")
+        if cmd:
+            with suppress(Exception):
+                _run(cmd, log=log, check=False)
+        elif platform.system() == "Linux":
+            with suppress(Exception):
+                _run(["sh", "-c", f"curl -fsSL {OLLAMA_INSTALL_SH} | sh"],
+                     log=log, check=False)
+        if not _has("ollama"):
+            return _fail("Ollama could not be installed automatically")
+
+    def _ollama(args: list[str], timeout: int = 600):
+        return subprocess.run(["ollama", *args], capture_output=True, text=True,
+                              encoding="utf-8", errors="replace", timeout=timeout,
+                              creationflags=_NO_WINDOW, startupinfo=_startupinfo())
+
+    try:
+        listing = _ollama(["list"], timeout=30)
+    except Exception:  # noqa: BLE001
+        listing = None
+    if listing is None or listing.returncode != 0:
+        # A fresh install may not have started the service yet.
+        with suppress(Exception):
+            subprocess.Popen(["ollama", "serve"], creationflags=_NO_WINDOW,
+                             startupinfo=_startupinfo(), stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        time.sleep(3)
+        try:
+            listing = _ollama(["list"], timeout=30)
+        except Exception:  # noqa: BLE001
+            listing = None
+    if listing is None or listing.returncode != 0:
+        return _fail("Ollama is installed but its service is not responding")
+    if EMBEDDING_MODEL in (listing.stdout or ""):
+        log(f"  {EMBEDDING_MODEL} already installed.")
+        return True
+
+    log(f"  Downloading the {EMBEDDING_MODEL} embedding model (46 MB) …")
+    try:
+        pulled = _ollama(["pull", EMBEDDING_MODEL])
+    except Exception as exc:  # noqa: BLE001
+        return _fail(f"Downloading {EMBEDDING_MODEL} failed ({exc})")
+    if pulled.returncode == 0:
+        log("  Semantic memory recall enabled.")
+        return True
+    return _fail(f"Downloading {EMBEDDING_MODEL} failed")
 
 
 def _prepare_install_dir(install_dir: Path) -> None:
@@ -824,6 +929,13 @@ def bootstrap(install_dir: Path, reporter: "StepReporter | Log") -> Path:
     with rep.step("deps") as log:
         install_requirements(install_dir, log)
 
+    with rep.step("embeddings") as log:
+        # Required: a failure raises, which the reporter turns into a red step
+        # and propagates — the install stops rather than quietly shipping an
+        # agent whose memory can only do keyword search.
+        if not setup_embeddings(log):
+            rep.skip("embeddings")      # only reached via the opt-out env var
+
     built = False
     with rep.step("ui") as log:
         built = build_ui(install_dir, log)
@@ -854,6 +966,17 @@ def _bootstrap_offline(install_dir: Path, rep: StepReporter) -> Path:
 
     with rep.step("deps") as log:
         copy_runtime(install_dir, log)
+
+    # Embeddings are the one online step the offline path still attempts: the
+    # model can't be bundled (winget's unattended sandbox has to finish fast and
+    # the payload would triple), and failing costs nothing — recall falls back
+    # to keyword search and the user can enable it later from Settings.
+    with rep.step("embeddings") as log:
+        # Required: a failure raises, which the reporter turns into a red step
+        # and propagates — the install stops rather than quietly shipping an
+        # agent whose memory can only do keyword search.
+        if not setup_embeddings(log):
+            rep.skip("embeddings")      # only reached via the opt-out env var
 
     for done in ("venv", "ui"):
         rep.skip(done)

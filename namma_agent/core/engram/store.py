@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from namma_agent.core.memory import Database
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS memory_items (
     expired_at    TEXT,
     superseded_by TEXT,
     source        TEXT DEFAULT '',
-    screen_status TEXT DEFAULT 'ok'         -- ok | flagged (injection) | untrusted (sender)
+    screen_status TEXT DEFAULT 'ok'         -- ok | flagged (injection) | untrusted (sender) | pending (awaiting approval)
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS memory_items_fts USING fts5(text, subject, object);
 
@@ -107,7 +107,19 @@ CREATE INDEX IF NOT EXISTS idx_memory_relations_dst ON memory_relations(dst);
 #: Columns added after first release — applied with ALTER TABLE when missing
 #: (CREATE TABLE IF NOT EXISTS never upgrades an existing table).
 _MIGRATIONS = {
-    "memory_items": {"archived_at": "TEXT"},   # decay: out of recall, still browsable
+    "memory_items": {
+        "archived_at": "TEXT",   # decay: out of recall, still browsable
+        # Storage-quality score (0..1) from the consolidator's audit pass — how
+        # much this row is worth keeping as durable knowledge about the user.
+        # NULL = never audited. See Consolidator._step_memory_quality.
+        "quality": "REAL",
+        "quality_at": "TEXT",
+        # Phase 7c (memory.write_approval): when a pending fact was going to
+        # SUPERSEDE an existing one, the old item's id is parked here instead of
+        # being expired immediately — approving applies the supersede, rejecting
+        # leaves the original fact untouched.
+        "pending_supersedes": "TEXT",
+    },
 }
 
 
@@ -117,6 +129,36 @@ def _now() -> str:
 
 def _norm(name: str) -> str:
     return " ".join((name or "").strip().lower().split())
+
+
+#: Filler words that two unrelated sentences share anyway — excluded so overlap
+#: measures actual content, not grammar.
+_FILLER = frozenset("""
+a an the is are was were be been being and or but not of in on at to for from by
+with about into over under after before as that this these those there their they
+them who which what when where why how user users assistant it its his her he she
+also more most very much many such own same other than then so if
+""".split())
+
+
+def _content_words(text: str) -> set:
+    return {w for w in "".join(c if c.isalnum() else " " for c in
+                               (text or "").lower()).split()
+            if len(w) > 2 and w not in _FILLER}
+
+
+def _overlap(a: set, b: set) -> float:
+    """Overlap coefficient — shared words over the SHORTER side.
+
+    Jaccard is wrong for this job: reflection tends to restate an insight as a
+    longer, more elaborate sentence, and the extra words inflate the union so
+    two clear restatements score no higher than unrelated pairs. Measured on
+    real data, overlap separates cleanly (duplicates 0.71-0.79, unrelated
+    <=0.25) where Jaccard did not (0.50 vs 0.43).
+    """
+    if not a or not b:
+        return 0.0
+    return len(a & b) / min(len(a), len(b))
 
 
 class EngramStore:
@@ -142,17 +184,18 @@ class EngramStore:
     def add_item(self, text: str, kind: str = "fact", subject: str = "",
                  predicate: str = "", object: str = "", importance: float = 0.5,
                  valid_from: Optional[str] = None, source: str = "",
-                 screen_status: str = "ok") -> str:
+                 screen_status: str = "ok",
+                 pending_supersedes: Optional[str] = None) -> str:
         item_id = str(uuid.uuid4())
         now = _now()
         with self._lock:
             self.conn.execute(
                 "INSERT INTO memory_items (id, text, kind, subject, predicate, object, "
                 "importance, frequency, last_seen, valid_from, created_at, source, "
-                "screen_status) VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?)",
+                "screen_status, pending_supersedes) VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
                 (item_id, text.strip(), kind, subject.strip(), predicate.strip(),
                  object.strip(), float(importance), now, valid_from, now, source,
-                 screen_status),
+                 screen_status, pending_supersedes),
             )
             # Flagged items are stored (quarantined) but never indexed for recall.
             if screen_status == "ok":
@@ -227,8 +270,14 @@ class EngramStore:
 
     def list_items(self, kind: Optional[str] = None, include_expired: bool = False,
                    limit: int = 500) -> list[dict]:
-        """Live items; ``include_expired`` also returns superseded AND archived."""
-        where, params = [], []
+        """Live items; ``include_expired`` also returns superseded AND archived.
+
+        Quarantined rows ('flagged'/'untrusted') ARE listed — they're kept
+        browsable for audit, just never recalled. Facts merely awaiting the
+        user's approval are not: they aren't memory yet, so showing them beside
+        real ones would misrepresent what the agent knows (see
+        :meth:`pending_items`)."""
+        where, params = ["screen_status != 'pending'"], []
         if not include_expired:
             where.append("expired_at IS NULL")
             where.append("archived_at IS NULL")
@@ -243,15 +292,88 @@ class EngramStore:
         return [dict(r) for r in rows]
 
     def quarantined_items(self, limit: int = 100) -> list[dict]:
-        """Memory items held out of recall by screening: injection-flagged
+        """Memory items held out of recall by SCREENING: injection-flagged
         ('flagged') and untrusted-sender ('untrusted') writes, newest first —
-        the Security tab's memory-quarantine section."""
+        the Security tab's memory-quarantine section. Facts merely awaiting the
+        user's approval ('pending') are a different queue — see
+        :meth:`pending_items` — and are deliberately not mixed in here."""
         with self._lock:
             rows = self.conn.execute(
                 "SELECT id, text, kind, source, screen_status, created_at "
-                "FROM memory_items WHERE screen_status != 'ok' "
+                "FROM memory_items WHERE screen_status NOT IN ('ok', 'pending') "
                 "ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
         return [dict(r) for r in rows]
+
+    # -- write approval (Phase 7c) --------------------------------------------
+
+    def pending_items(self, limit: int = 100) -> list[dict]:
+        """Auto-extracted facts waiting for the user's yes/no
+        (``memory.write_approval``), newest first. These are NOT memory yet:
+        never FTS-indexed, never embedded, never recalled."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, text, kind, source, created_at, pending_supersedes "
+                "FROM memory_items WHERE screen_status = 'pending' "
+                "ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+        out = []
+        for row in rows:
+            item = dict(row)
+            old = item.pop("pending_supersedes", None)
+            if old:
+                existing = self.get_item(old)
+                # Show WHAT it would replace — approving a supersede is a
+                # different decision from approving a brand-new fact.
+                item["replaces"] = (existing or {}).get("text", "")
+                item["replaces_id"] = old
+            out.append(item)
+        return out
+
+    def pending_count(self) -> int:
+        with self._lock:
+            return self.conn.execute(
+                "SELECT count(*) AS c FROM memory_items "
+                "WHERE screen_status = 'pending'").fetchone()["c"]
+
+    def approve_item(self, item_id: str) -> bool:
+        """Release a pending fact into memory: index it for recall and, if it
+        was going to supersede an older fact, apply that supersede now."""
+        item = self.get_item(item_id)
+        if not item or item.get("screen_status") != "pending":
+            return False
+        with self._lock:
+            self.conn.execute(
+                "UPDATE memory_items SET screen_status='ok', pending_supersedes=NULL "
+                "WHERE id=?", (item_id,))
+            self.conn.execute(
+                "INSERT INTO memory_items_fts (rowid, text, subject, object) "
+                "VALUES ((SELECT rowid FROM memory_items WHERE id=?),?,?,?)",
+                (item_id, item.get("text") or "", item.get("subject") or "",
+                 item.get("object") or ""))
+            self.conn.commit()
+        old = item.get("pending_supersedes")
+        if old:
+            self.invalidate(old, superseded_by=item_id)
+        return True
+
+    def reject_item(self, item_id: str) -> bool:
+        """Throw a pending fact away. The item it would have superseded is left
+        exactly as it was — rejecting must never change existing memory."""
+        item = self.get_item(item_id)
+        if not item or item.get("screen_status") != "pending":
+            return False
+        with self._lock:
+            self.conn.execute("DELETE FROM memory_items WHERE id=?", (item_id,))
+            self.conn.commit()
+        return True
+
+    def resolve_all_pending(self, approve: bool) -> int:
+        """Approve or reject every pending fact; returns how many were resolved."""
+        count = 0
+        for item in self.pending_items(limit=10_000):
+            if (self.approve_item(item["id"]) if approve
+                    else self.reject_item(item["id"])):
+                count += 1
+        return count
 
     def counts(self) -> dict:
         with self._lock:
@@ -445,6 +567,102 @@ class EngramStore:
             for d in rest:
                 self.invalidate(d["id"], superseded_by=keeper["id"])
                 merged += 1
+        return merged
+
+    # -- storage quality (the audit pass) ----------------------------------------
+
+    def unaudited_items(self, limit: int = 30, max_age_days: float = 30.0) -> list[dict]:
+        """Live items that have never been quality-scored, or whose score is
+        older than ``max_age_days`` — the audit work list, newest first so a
+        regression in the write pipeline shows up fast."""
+        cutoff = (datetime.now(timezone.utc)
+                  - timedelta(days=float(max_age_days))).isoformat()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT * FROM memory_items WHERE expired_at IS NULL "
+                "AND archived_at IS NULL AND screen_status = 'ok' "
+                "AND (quality IS NULL OR quality_at IS NULL OR quality_at < ?) "
+                "ORDER BY created_at DESC LIMIT ?", (cutoff, max(1, int(limit)))).fetchall()
+        return [dict(r) for r in rows]
+
+    def set_quality(self, item_id: str, score: float) -> None:
+        with self._lock:
+            self.conn.execute(
+                "UPDATE memory_items SET quality=?, quality_at=? WHERE id=?",
+                (max(0.0, min(1.0, float(score))), _now(), item_id))
+            self.conn.commit()
+
+    def quality_stats(self) -> dict:
+        """Aggregate storage quality over live, audited rows.
+
+        ``memory_quality`` is the paper-comparable mean score (0..1);
+        ``junk`` counts rows an audit judged worthless (score 0) — those are the
+        ones actively crowding real answers out of recall.
+        """
+        with self._lock:
+            row = self.conn.execute(
+                "SELECT count(*) AS scored, avg(quality) AS mq, "
+                "sum(CASE WHEN quality <= 0.01 THEN 1 ELSE 0 END) AS junk "
+                "FROM memory_items WHERE expired_at IS NULL AND archived_at IS NULL "
+                "AND quality IS NOT NULL").fetchone()
+            live = self.conn.execute(
+                "SELECT count(*) AS c, "
+                "sum(CASE WHEN frequency > 1 THEN 1 ELSE 0 END) AS reinforced "
+                "FROM memory_items WHERE expired_at IS NULL AND archived_at IS NULL"
+            ).fetchone()
+        scored = int(row["scored"] or 0)
+        total = int(live["c"] or 0)
+        return {
+            "scored": scored,
+            "memory_quality": round(float(row["mq"]), 3) if scored else None,
+            "junk": int(row["junk"] or 0),
+            # Maintenance signal (design §R_memory): what fraction of memory has
+            # ever been seen twice. All-1s means nothing is being reinforced.
+            "reinforced_pct": (round(int(live["reinforced"] or 0) / total, 3)
+                               if total else None),
+        }
+
+    def low_quality_items(self, limit: int = 50) -> list[dict]:
+        """Audited rows worth reviewing or forgetting, worst first."""
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT id, text, kind, source, quality, importance FROM memory_items "
+                "WHERE expired_at IS NULL AND archived_at IS NULL "
+                "AND quality IS NOT NULL AND quality < 0.5 "
+                "ORDER BY quality ASC, importance DESC LIMIT ?",
+                (max(1, int(limit)),)).fetchall()
+        return [dict(r) for r in rows]
+
+    def merge_similar_insights(self, threshold: float = 0.6) -> int:
+        """Fold near-duplicate `insight` items into one.
+
+        Insights fall through BOTH other merge paths by construction:
+        ``merge_exact_duplicates`` needs byte-identical text, and
+        ``merge_triple_duplicates`` needs a subject/predicate/object triple that
+        reflection never produces. So a reworded restatement of the same
+        observation ("deeply invested in AI/AGI development…") accumulated
+        forever. Compared on content-word overlap; the newest survives with the
+        summed frequency, the rest are invalidated (history kept).
+        """
+        rows = self.list_items(kind="insight", limit=500)
+        keepers: list[tuple[set, dict]] = []
+        merged = 0
+        for r in rows:            # list_items is newest-first: the first wins
+            words = _content_words(r["text"])
+            if not words:
+                continue
+            dupe_of = next((k for kw, k in keepers
+                            if _overlap(words, kw) >= threshold), None)
+            if dupe_of is None:
+                keepers.append((words, r))
+                continue
+            with self._lock:
+                self.conn.execute(
+                    "UPDATE memory_items SET frequency=frequency+? WHERE id=?",
+                    (int(r.get("frequency") or 1), dupe_of["id"]))
+                self.conn.commit()
+            self.invalidate(r["id"], superseded_by=dupe_of["id"])
+            merged += 1
         return merged
 
     def record_consolidation(self, report: dict, reason: str = "manual") -> None:

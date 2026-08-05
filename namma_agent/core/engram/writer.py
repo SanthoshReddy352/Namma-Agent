@@ -15,6 +15,13 @@ goes through the provider getter — i.e. **whatever model the user selected in
 Settings**, never a hardcoded one — with strict JSON prompts and a NOOP bias
 (when unsure, don't write). Every write is injection-screened; flagged text is
 quarantined out of recall. A per-hour budget caps runaway usage.
+
+The NOOP bias applies to *the model's judgement*, never to its absence. An
+**explicit** remember is a promise and cannot silently vanish: if extraction
+returns nothing the raw text is stored, and if the resolver gets no usable
+answer (provider down, rate-limited, unparseable) the candidate is ADDed rather
+than dropped. A duplicate is recoverable — the consolidator's merge pass folds
+it — whereas a fact the user asked to keep is not.
 """
 from __future__ import annotations
 
@@ -35,7 +42,24 @@ _EXTRACT_SYSTEM = """You maintain the long-term memory of a personal AI assistan
 From the conversation exchange, extract durable facts worth remembering about the
 USER's world: identity, preferences, people, projects, plans, decisions, standing
 instructions. NOT: small talk, one-off commands, questions, code dumps, or anything
-easily re-derived. The assistant's reply is context only — never a fact source.
+easily re-derived.
+
+The USER's message is the ONLY fact source. The assistant's reply is shown purely
+to resolve pronouns. NEVER record:
+- what the assistant did, produced, delivered, saved or was permitted to do
+  ("the assistant delivered 8 diagrams", "the user granted admin privileges") —
+  that is session bookkeeping, not knowledge about the user;
+- machine/tool output the assistant merely printed (hostnames, CPU models, disk
+  sizes, package versions, file listings, command results);
+- transient details of a file or config the assistant just edited.
+If the natural subject of the sentence is the assistant, a tool, or a command's
+output rather than the user or something in the user's life, leave it out.
+
+Set importance by how much answering FUTURE questions depends on it:
+  0.9-1.0 identity, safety-critical facts (allergies, medical), standing rules
+  0.7-0.8 durable preferences, people, long-lived projects, their environment
+  0.4-0.6 useful background that may change
+  0.1-0.3 incidental detail  (prefer omitting it entirely over storing it)
 
 Return ONLY a JSON array (no prose, no markdown). Each element:
 {"text": "<one self-contained sentence, third person>",
@@ -67,9 +91,14 @@ class EngramWriter:
     def __init__(self, store: EngramStore, core: CoreMemory,
                  provider_getter: Callable[[], object],
                  min_chars: int = 24, budget_per_hour: int = 60,
-                 embedder=None):
+                 embedder=None, write_approval: bool = False):
         self.store = store
         self.core = core
+        # Phase 7c (memory.write_approval): when True, facts the agent EXTRACTED
+        # on its own land 'pending' and are only real memory once the user says
+        # yes. Explicit "remember this" writes are unaffected — they are already
+        # the user's decision.
+        self.write_approval = bool(write_approval)
         # Optional vector channel: new facts are embedded as they land (best
         # effort; the consolidator backfills anything missed).
         self.embedder = embedder
@@ -194,12 +223,13 @@ class EngramWriter:
             candidates = [{"text": text[:400], "kind": "fact", "importance": 0.7}]
         applied: list[dict] = []
         for cand in candidates:
-            result = self.apply_candidate(cand, source)
+            result = self.apply_candidate(cand, source, explicit=explicit)
             if result is not None:
                 applied.append(result)
         return applied
 
-    def apply_candidate(self, cand: dict, source: str = "consolidator") -> Optional[dict]:
+    def apply_candidate(self, cand: dict, source: str = "consolidator",
+                        explicit: bool = False) -> Optional[dict]:
         """Run ONE already-structured candidate fact through screen →
         retrieve-similar → resolve → apply, skipping extraction. The
         consolidator's promote step uses this directly — its candidates come
@@ -214,11 +244,14 @@ class EngramWriter:
                                 source=source, screen_status="flagged")
             return {"op": "QUARANTINE", "text": ctext}
         neighbours = self.store.similar_items(ctext, limit=8)
-        decision = self._resolve(cand, ctext, neighbours)
-        return self._apply(cand, ctext, decision, neighbours, source)
+        decision = self._resolve(cand, ctext, neighbours, explicit=explicit)
+        # An EXPLICIT remember is already the user's decision — approval gates
+        # what the agent inferred on its own, not what it was told to save.
+        pending = bool(self.write_approval and not explicit)
+        return self._apply(cand, ctext, decision, neighbours, source, pending=pending)
 
     def _apply(self, cand: dict, ctext: str, decision: dict,
-               neighbours: list[dict], source: str) -> dict:
+               neighbours: list[dict], source: str, pending: bool = False) -> dict:
         op = str(decision.get("op") or "NOOP").upper()
         target = decision.get("target")
         target_item = None
@@ -235,19 +268,30 @@ class EngramWriter:
             return {"op": "DELETE", "text": ctext}
 
         # ADD / UPDATE both create the new fact; UPDATE also expires the old one.
+        # Phase 7c: with write_approval on, an AUTO-extracted fact lands
+        # 'pending' instead — not indexed, not embedded, not recalled, and a
+        # supersede is PARKED rather than applied (rejecting must never change
+        # memory that already existed).
+        supersede_id = target_item["id"] if (op == "UPDATE" and target_item) else None
         item_id = self.store.add_item(
             ctext, kind=str(cand.get("kind") or "fact"),
             subject=str(cand.get("subject") or ""),
             predicate=str(cand.get("predicate") or ""),
             object=str(cand.get("object") or ""),
             importance=float(cand.get("importance") or 0.5),
-            source=source)
+            source=source,
+            screen_status="pending" if pending else "ok",
+            pending_supersedes=supersede_id if pending else None)
+        if pending:
+            logger.info("[engram] fact held for your approval: %s", ctext[:80])
+            return {"op": "PENDING", "id": item_id, "text": ctext}
+
         if cand.get("subject") and cand.get("object") and cand.get("predicate"):
             self.store.add_relation(str(cand["subject"]), str(cand["predicate"]),
                                     str(cand["object"]), item_id=item_id)
         self._embed_item(item_id, ctext)
-        if op == "UPDATE" and target_item:
-            self.store.invalidate(target_item["id"], superseded_by=item_id)
+        if supersede_id:
+            self.store.invalidate(supersede_id, superseded_by=item_id)
 
         core = decision.get("core")
         if isinstance(core, dict) and core.get("text"):
@@ -272,13 +316,18 @@ class EngramWriter:
     # -- model calls -----------------------------------------------------------------
 
     def _extract(self, text: str, reply: str) -> list[dict]:
-        user = f"USER: {text[:2000]}"
+        user = f"USER (the only fact source): {text[:2000]}"
         if reply:
-            user += f"\nASSISTANT (context only): {reply}"
+            # Trimmed hard: a long reply is mostly the assistant's own work and
+            # tool output, and the extractor kept mining it for "facts" despite
+            # the instruction. A short head is enough to resolve pronouns.
+            user += ("\nASSISTANT (pronoun context ONLY — never extract facts "
+                     f"from this): {reply[:200]}")
         data = self._call_json(_EXTRACT_SYSTEM, user)
         return [c for c in data if isinstance(c, dict)] if isinstance(data, list) else []
 
-    def _resolve(self, cand: dict, ctext: str, neighbours: list[dict]) -> dict:
+    def _resolve(self, cand: dict, ctext: str, neighbours: list[dict],
+                 explicit: bool = False) -> dict:
         if not neighbours:
             return {"op": "ADD", "target": None,
                     # Identity-grade facts may still patch core memory on first sight.
@@ -288,7 +337,18 @@ class EngramWriter:
         data = self._call_json(_RESOLVE_SYSTEM, user)
         if not isinstance(data, dict) or str(data.get("op", "")).upper() not in (
                 "ADD", "UPDATE", "DELETE", "NOOP"):
-            return {"op": "NOOP", "target": None, "core": None}  # unparseable → don't write
+            # No usable answer — the model is down, rate-limited, or produced
+            # junk. That is NOT the same as the model deciding "duplicate", and
+            # conflating the two silently threw writes away: any candidate that
+            # merely shared a keyword with an existing memory got a neighbour,
+            # so the resolver ran, so an outage dropped the fact entirely.
+            if explicit:
+                # An explicit remember is a promise. Storing a possible
+                # duplicate is recoverable (the consolidator's merge pass folds
+                # it); losing what the user asked to keep is not.
+                return {"op": "ADD", "target": None,
+                        "core": self._default_core_patch(cand, ctext)}
+            return {"op": "NOOP", "target": None, "core": None}
         return data
 
     @staticmethod

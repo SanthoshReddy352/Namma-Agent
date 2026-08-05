@@ -101,6 +101,17 @@ export const toggleWatcher = (id, enabled) =>
 export const deleteWatcher = (id) => j(`/api/watchers/${id}`, { method: "DELETE" });
 export const runWatcher = (id) => j(`/api/watchers/${id}/run`, { method: "POST" });
 
+// ── Checkpoints (Phase 7b): undo what a tool did to your files ──────────────
+export const listCheckpoints = (sessionId = "") =>
+  j(`/api/checkpoints${sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ""}`);
+export const restoreCheckpoint = (id) => j(`/api/checkpoints/${id}/restore`, { method: "POST" });
+export const deleteCheckpoint = (id) => j(`/api/checkpoints/${id}`, { method: "DELETE" });
+
+// ── Learning settings (weekly-review schedule + Learning-Room knobs) ─────────
+export const fetchLearningSettings = () => j("/api/learning_settings");
+export const saveLearningSettings = (settings) =>
+  j("/api/learning_settings", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ settings }) });
+
 // ── Weekly self-review (report + metric trend + proposals) ────────────────────
 export const fetchSelfReview = () => j("/api/self_review");
 export const runSelfReview = () => j("/api/self_review/run", { method: "POST" });
@@ -217,6 +228,8 @@ export async function installPack(file, { approvedTools = [], skills = null, ove
 // ── Skills (Settings → Skills tab) ───────────────────────────────────────────
 export const listSkills = () => j("/api/skills");
 export const toggleSkill = (name, enabled) => jpost("/api/skills/toggle", { name, enabled });
+// Discard a learned skill — used by the drafts review queue's "Discard".
+export const deleteSkill = (name) => jpost("/api/skills/delete", { name });
 
 // ── Tools / toolsets (Settings → Toolsets tab) ───────────────────────────────
 export const listTools = () => j("/api/tools");
@@ -239,12 +252,19 @@ export const memoryGraph = (includeExpired = false, asOf = "") =>
   j(`/api/memory/graph?include_expired=${includeExpired}&as_of=${encodeURIComponent(asOf)}`);
 export const memoryItems = (kind = "", includeExpired = false) =>
   j(`/api/memory/items?kind=${encodeURIComponent(kind)}&include_expired=${includeExpired}`);
+export const memoryLowQuality = (limit = 50) =>
+  j(`/api/memory/low_quality?limit=${limit}`);
 export const memoryCore = () => j("/api/memory/core");
 export const saveMemoryCore = (body) => jpost("/api/memory/core", body);
 export const memoryEnvironment = (refresh = false) =>
   j(`/api/memory/environment?refresh=${refresh}`);
 
 // ── Memory settings (the single Settings → Memory section) ───────────────────
+// Phase 7c — the write-approval queue (facts the agent inferred on its own).
+export const memoryPending = (limit = 100) => j(`/api/memory/pending?limit=${limit}`);
+export const resolveMemoryPending = (opts = {}) =>
+  jpost("/api/memory/pending/resolve", opts);
+
 export const fetchMemorySettings = () => j("/api/memory/settings");
 export const saveMemorySettings = (settings) => jpost("/api/memory/settings", { settings });
 

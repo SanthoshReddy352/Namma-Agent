@@ -123,6 +123,79 @@ def test_delegate_task_requires_task(wired):
     assert not reg.execute("delegate_task", {"task": ""}).ok
 
 
+class _DeadProvider(Provider):
+    """Stands in for the legacy `provider:` chain on a profile-only setup: no
+    credentials, so it refuses before any request goes out."""
+
+    name = "dead"
+
+    def __init__(self):
+        super().__init__(model="dead")
+
+    def is_available(self):
+        return False
+
+    def generate(self, *a, **k):
+        raise RuntimeError("No LLM provider is available")
+
+
+def test_delegate_runs_on_the_turns_model_not_the_boot_provider(wired):
+    """The sub-agent must use the brain the user picked for THIS chat. Wiring it
+    to the boot-time provider made every delegation fail instantly on any setup
+    where the legacy `provider:` chain has no key."""
+    from namma_agent.core.interactive import reset_current_provider, set_current_provider
+
+    reg, db, agent = wired
+    register_agent_tools(reg, agent, _DeadProvider(), db)
+    turn_provider = ScriptedProvider([LLMResponse(content="Finding: from the turn's model.")])
+    token = set_current_provider(turn_provider)
+    try:
+        r = reg.execute("delegate_task", {"task": "x"})
+    finally:
+        reset_current_provider(token)
+    assert r.ok and "from the turn's model" in r.content
+
+
+def test_delegate_falls_back_to_the_live_provider_getter(wired):
+    """No turn provider (a routine, a comms turn) → the service's live getter,
+    still never the dead boot-time chain."""
+    reg, db, agent = wired
+    live = ScriptedProvider([LLMResponse(content="Finding: from the live getter.")])
+    register_agent_tools(reg, agent, _DeadProvider(), db, provider_getter=lambda: live)
+    r = reg.execute("delegate_task", {"task": "x"})
+    assert r.ok and "from the live getter" in r.content
+
+
+def test_delegate_session_stays_out_of_the_chat_list(wired):
+    """A sub-agent transcript is bookkeeping — it must not show up as a chat."""
+    reg, db, agent = wired
+    agent.provider._responses = [LLMResponse(content="done")]
+    before = len(db.list_sessions())
+    assert reg.execute("delegate_task", {"task": "x"}).ok
+    assert len(db.list_sessions()) == before
+
+
+def test_delegate_drops_per_model_tool_scoping(wired):
+    """A model profile's `tools_allow` scopes the MAIN agent. Inheriting it would
+    filter the sub-agent's already-scoped registry down to nothing."""
+    reg, db, agent = wired
+    captured = {}
+
+    class _Capture(Provider):
+        name = "cap"
+        def __init__(self): super().__init__(model="cap")
+        def is_available(self): return True
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
+            captured["tools"] = [t["name"] for t in (tools or [])]
+            return LLMResponse(content="done")
+
+    scoped = _Capture()
+    scoped.tool_allow = ["send_message"]  # a tool the sub-agent doesn't have
+    register_agent_tools(reg, agent, scoped, db)
+    reg.execute("delegate_task", {"task": "x"})
+    assert "system_info" in captured["tools"]
+
+
 def test_delegate_inherits_main_tool_loop_limit(wired):
     """The research sub-agent must honour the main agent's tool-step budget — not a
     hidden hardcoded cap — so an unlimited config lets deep research finish."""

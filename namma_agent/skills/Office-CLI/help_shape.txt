@@ -1,0 +1,476 @@
+﻿pptx shape
+--------------
+Paths: /slide[N]/shape[@id=ID]  /slide[N]/shape[N]
+Operations: add set get query remove
+
+Usage:
+  officecli add <file> /slide[N] --type shape [--prop key=val ...]
+  officecli set <file> /slide[N]/shape[N] --prop key=val ...
+  officecli get <file> /slide[N]/shape[N]
+  officecli query <file> shape
+  officecli remove <file> /slide[N]/shape[N]
+
+Properties:
+  size   font-size   [add/set/get]   aliases: fontSize, fontsize, font.size
+    description: font size — Add/Set forwards to the first run; Get returns the bare size when every run shares the same explicit FontSize (non-mixed). When sizes are mixed or no run carries an explicit size, bare size is suppressed and the inheritance-resolved effective.size is emitted instead.
+    example: --prop size=14
+    example: --prop size=14pt
+    example: --prop size=10.5pt
+    readback: unit-qualified pt (e.g. "32pt") when all runs share one explicit FontSize; suppressed when sizes are mixed (read per-run size on the inner run) or absent (read effective.size)
+  evaluated   bool   [get]
+    description: cross-handler protocol flag — emitted on shapes whose body contains an <a:fld> dynamic field (slide number, date-time, footer, etc.). True when every dynamic field has cached text the renderer can show; false when at least one is empty (view text substitutes #OCLI_NOTEVAL!{type}; view issues emits subtype slide_field_not_evaluated). PowerPoint always re-renders fields on open, so there is no cache_stale equivalent. Read this via get --json instead of pattern-matching the sentinel.
+    readback: true|false (true ⇒ all <a:fld> shapes on this node carry display text)
+  isTitle   bool   [get]
+    description: true when this shape is the slide title placeholder (or a content placeholder configured as title). Always emitted on every shape so query selectors like `shape[isTitle=true]` and `shape[isTitle=false]` resolve uniformly. Read-only — title-ness is determined by placeholder type at Add time, not as a settable property.
+    readback: true|false (always present)
+  opacity   number   [add/set/get]
+    description: fill opacity (0.0 - 1.0). Requires a fill to attach to — opacity alone (without fill/gradient/pattern) has no effect in OOXML.
+    example: --prop opacity=0.5 --prop fill=FF0000
+    readback: number in [0, 1]
+  geometry   string   [add/set/get]   aliases: preset, shape
+    description: Preset shape geometry (default: rect). The values list below is illustrative, not exhaustive — many more OOXML presets are accepted (handler-as-truth): pie, arc, chord, the directional arrows (leftArrow, upArrow, downArrow), star4/star6/star8/star10, hexagon/heptagon/octagon/decagon/dodecagon, cloud, plus the callout* family, etc. Any preset the handler recognizes round-trips.
+    values: rect, roundRect, ellipse, triangle, diamond, parallelogram, rightArrow, star5
+    example: --prop geometry=ellipse
+    example: --prop preset=roundRect
+    readback: preset name (e.g. "ellipse", "roundRect")
+  adj   string   [add/set/get]
+    description: Preset adjust handles (a:prstGeom/a:avLst/a:gd). Controls the parametric proportions of a preset (arrow tail/head size, roundRect corner radius, star inner ratio, etc.). Format is "name:formula" where formula is an OOXML guide formula such as "val 6000". Multiple handles are comma-separated.
+    example: --prop geometry=leftArrow --prop adj=adj1:val 80000
+    example: --prop geometry=roundRect --prop adj=adj:val 16667
+    example: --prop adj="adj1:val 6000,adj2:val 12000"
+    readback: comma-separated name:formula handles (e.g. "adj1:val 80000")
+  textFill   string   [add/set/get]   aliases: textGradient
+    description: Fill applied to the text glyphs (a:rPr fill). Accepts a color (solid glyph fill) or round-trips a gradient. The legacy alias 'textGradient' canonicalizes to 'textFill' on readback.
+    example: --prop textFill=FF0000
+    readback: canonical textFill value
+  textWarp   string   [set/get]
+    description: WordArt text warp preset applied to the shape's text body (a:bodyPr/a:prstTxWarp @prst). Use 'none' to remove. The HTML preview surfaces the active warp as a data-textwarp attribute + a 'text-warp' marker class on the shape; real PowerPoint renders the per-glyph warp path.
+    values: none, textNoShape, textPlain, textArchUp, textArchDown, textCircle, textWave1, textWave2, textInflate, textDeflate, textCanUp, textCanDown
+    example: --prop textWarp=textArchUp
+    example: --prop textWarp=textWave1
+    readback: warp preset name (e.g. "textArchUp")
+  font.latin   string   [add/set/get]
+    description: Latin-script font slot only (a:latin). Use to target ASCII/European text without overwriting CJK / complex-script slots.
+    example: --prop font.latin=Calibri
+    readback: typeface (only emitted when it differs from the bare 'font' slot)
+  font.ea   string   [add/set/get]   aliases: font.eastasia, font.eastasian
+    description: East-Asian font slot (a:ea) — Chinese / Japanese / Korean text.
+    example: --prop font.ea="メイリオ"
+    readback: typeface (only emitted when it differs from the bare 'font' slot)
+  font.cs   string   [add/set/get]   aliases: font.complexscript, font.complex
+    description: Complex-script font slot (a:cs) — Arabic / Hebrew / Thai etc.
+    example: --prop font.cs="Arabic Typesetting"
+    readback: typeface
+  direction   enum   [add/set/get]   aliases: dir, rtl
+    description: paragraph reading direction (a:pPr rtl). Use 'rtl' for Arabic / Hebrew layouts.
+    values: ltr, rtl
+    example: --prop direction=rtl
+    readback: rtl, or ltr. Set direction=ltr pins ltr explicitly by writing rtl="0" so the paragraph overrides any inherited master/layout RTL; Add omits rtl when ltr (relies on the default). Clearing direction removes the attribute.
+  margin   length   [add/set/get]
+    description: uniform internal padding (text inset) for shape body (a:bodyPr lIns/tIns/rIns/bIns). Also accepts a 4-value 'l,t,r,b' form on Set.
+    example: --prop margin=4
+    example: --prop margin=0.1in
+    readback: unit-qualified length (e.g. '14.4pt' / '0.36cm') when all four insets are equal; otherwise 'l,t,r,b' with '-' for unset sides
+  textDirection   string   [add/set/get]   aliases: textdir, vert
+    description: shape text rotation (a:bodyPr @vert) — works on shapes/textboxes, not just table cells. horizontal|vertical90|vertical270|eaVert|stacked. Round-trips through the same canonical vocabulary as table-cell textDirection. Note: the Get readback key is lowercase 'textdirection'.
+    example: --prop textDirection=vertical270
+    example: --prop textDirection=stacked
+    readback: horizontal|vertical90|vertical270|stacked
+  strike   enum   [add/set/get]   aliases: strikethrough, font.strike, font.strikethrough
+    description: strikethrough on shape text. Single and double are distinct OOXML tokens (sngStrike / dblStrike); Word splits these into `strike` + `dstrike`, PowerPoint folds both into one attribute.
+    values: none, single, double
+    example: --prop strike=single
+    example: --prop strike=double
+    example: --prop strike=true
+    readback: single | double | none. Boolean `true` on add/set is accepted as an alias for `single`.
+  highlight   color   [add/set/get]
+    description: text highlight color behind the glyphs (a:highlight). Unlike Word's fixed named-color list, accepts any color (hex, named, rgb(), scheme names like accent1). 'none'/'false' removes the highlight.
+    example: --prop highlight=FFFF00
+    example: --prop highlight=accent1
+    example: --prop highlight=none
+    readback: #RRGGBB hex (or scheme color name) read from the first run's a:highlight
+  cap   enum   [add/set/get]   aliases: allCaps, allcaps, smallCaps, smallcaps
+    description: letter-case rendering mode for shape text (rPr/cap).
+    values: none, small, all
+    example: --prop cap=all
+    example: --prop allCaps=true
+    readback: none | small | all
+  lang   string   [add/set]   aliases: altLang, altlang
+    description: BCP-47 language tag. lang lives per-run (drawingML a:rPr/@lang) — a shape has no language of its own, only an aggregate of differently-tongued runs. add/set on a shape is a convenience that writes the FIRST run's rPr; read it back at run scope (/shape[N]/paragraph[P]/run[R]). Not surfaced at shape level: a first-run projection cannot say which language each run is, and a newly added run would not inherit it.
+    example: --prop lang=en-US
+    readback: run scope only (/shape[N]/paragraph[P]/run[R])
+  spacing   number   [add/set/get]   aliases: spc, charspacing, letterspacing
+    description: character spacing in 1/100 pt (drawingML rPr/@spc).
+    example: --prop spacing=200
+    readback: integer
+  kern   number   [add/set/get]
+    description: minimum kerning size in 1/100 pt (drawingML rPr/@kern). Get surfaces the raw integer via long-tail rPr attribute readback.
+    example: --prop kern=1200
+    readback: integer
+  autoFit   enum   [add/set/get]   aliases: autofit
+    description: text body auto-fit mode. 'normal'/'shrink' shrinks text to fit (normAutofit); 'shape' resizes the shape to fit text; 'none' overflows. Aliases (Add+Set): true/shrink → normal, resize → shape, false → none.
+    values: normal, shrink, shape, none
+    example: --prop autoFit=normal
+    example: --prop autoFit=shrink
+    example: --prop autoFit=shape
+    example: --prop autoFit=none
+    readback: normal | shape | none
+  fontScale   string   [add/set/get]   aliases: fontscale
+    description: normAutofit font-scale (shrink-to-fit text ratio). Input as a percent: bare integer 0-100 (75 → 75%) or N% form ('75%'). Stored as OOXML thousandths-of-percent (75000); readback emits the raw OOXML integer.
+    example: --prop fontScale=75
+    example: --prop fontScale=75%
+    readback: OOXML thousandths-of-percent (e.g. 75000)
+  lnSpcReduction   string   [add/set/get]   aliases: lnspcreduction, lineSpaceReduction, linespacereduction, lineSpacingReduction, linespacingreduction
+    description: normAutofit line-space reduction (shrink-to-fit spacing ratio). Input as a percent: bare integer 0-100 (20 → 20%) or N% form ('20%'). Stored as OOXML thousandths-of-percent (20000); readback emits the raw OOXML integer.
+    example: --prop lnSpcReduction=20
+    example: --prop lineSpaceReduction=20%
+    readback: OOXML thousandths-of-percent (e.g. 20000)
+  lineSpacing   string   [add/set/get]   aliases: linespacing
+    description: line spacing for shape paragraphs (multiplier or pt).
+    example: --prop lineSpacing=1.5x
+    readback: 1.5x or 18pt
+  spaceBefore   length   [add/set/get]   aliases: spacebefore
+    example: --prop spaceBefore=6pt
+    readback: unit-qualified pt
+  spaceAfter   length   [add/set/get]   aliases: spaceafter
+    example: --prop spaceAfter=6pt
+    readback: unit-qualified pt
+  gradient   string   [add/set/get]
+    description: gradient fill spec. Linear: 'C1-C2[-ANGLE]' or 'LINEAR;C1;C2;ANGLE'. Radial: 'radial:C1-C2[-FOCUS]' (focus: tl/tr/bl/br/center). Path: 'path:C1-C2[-FOCUS]'. Per-stop position: 'C@PCT' (e.g. 'FF0000@0-0000FF@100').
+    example: --prop gradient="FF0000-0000FF"
+    example: --prop gradient="FF0000-0000FF-90"
+    example: --prop gradient="LINEAR;FF0000;0000FF;45"
+    example: --prop gradient="radial:4B0082-1E90FF-center"
+    readback: linear: 'linear;C1;C2;ANGLE' (semicolon-separated, degree integer). radial/path: 'radial:C1-C2-FOCUS' / 'path:C1-C2-FOCUS'. When gradient is present, 'fill' reads back as 'gradient' unless a solidFill also exists.
+  pattern   string   [add/set/get]
+    description: pattern fill: 'preset' or 'preset:fg' or 'preset:fg:bg' (defaults: fg=000000, bg=FFFFFF).
+    example: --prop pattern="diagBrick:FF0000:FFFFFF"
+    readback: preset:fg_color[:bg_color] e.g. diagBrick:#FF0000:#FFFFFF
+  image   string   [add/set/get]   aliases: imagefill
+    description: image (blip) fill: path to a local image file used as the shape fill.
+    example: --prop image=/path/to/photo.png
+    readback: "true" when shape has an image (blipFill) fill
+  fillRect   string   [add/set/get]   aliases: fillrect
+    description: image-fill stretch insets as "l,t,r,b" in thousandths of a percent (perMille). Positive insets letterbox the image inside the shape; negative insets oversize it (cover-style framing). Applies to an image (blipFill) shape; consumed alongside image=.
+    example: --prop image=/path/photo.png --prop fillRect=0,-36364,0,-85860
+    readback: "l,t,r,b" perMille when the shape's blipFill stretch carries non-zero insets
+  srcRect   string   [add/set/get]   aliases: srcrect
+    description: image-fill source crop as "l,t,r,b" in thousandths of a percent (perMille) — the fraction trimmed from each edge of the source image before it fills the shape. Applies to an image (blipFill) shape; consumed alongside image=.
+    example: --prop image=/path/photo.png --prop srcRect=10000,0,10000,0
+    readback: "l,t,r,b" perMille when the shape's blipFill carries a srcRect crop
+  lineWidth   length   [add/set/get]   aliases: linewidth
+    description: outline width.
+    example: --prop lineWidth=1pt
+    readback: length in pt (e.g. "1pt")
+  lineDash   enum   [add/set/get]   aliases: linedash, line.dash
+    description: outline dash pattern (drawingML prstDash). Also reachable as the third segment of the compound line='color:width:style' form.
+    values: solid, dot, dash, dashDot, lgDash, lgDashDot, lgDashDotDot, sysDot, sysDash, sysDashDot, sysDashDotDot, longdash, longdashdot
+    example: --prop lineDash=dash
+    example: --prop lineDash=dashDot
+    example: --prop lineDash=sysDash
+    example: --prop line=FF0000:1.5:dash
+    readback: canonical OOXML prstDash token (solid | dot | dash | dashDot | lgDash | lgDashDot | lgDashDotDot | sysDot | sysDash | sysDashDot | sysDashDotDot). 'longdash'/'longdashdot' are accepted on input as aliases for lgDash/lgDashDot. 'dashDotDot' has no native enum member; it is accepted as an alias for sysDashDotDot (Get readback returns sysDashDotDot).
+  lineGradient   string   [add/set/get]   aliases: linegradient, line.gradient
+    description: gradient outline (drawingML <a:ln>/<a:gradFill>). Accepts a stop list 'color@pos,color@pos,...' (pos in percent) with an optional 'angle=Ndeg' segment, mirroring the fill gradient form. Set/Add replace any solid outline color. Get readback is emitted under the canonical key 'line.gradient'.
+    example: --prop lineGradient="FF0000@0,0000FF@100"
+    example: --prop lineGradient="FF0000@0,00FF00@50,0000FF@100,angle=90deg"
+    readback: gradient stop string (canonical key line.gradient)
+  lineCap   enum   [add/set/get]   aliases: linecap, line.cap
+    description: line end cap style (drawingML <a:ln @cap>). Affects how the stroke terminates at endpoints (and dash gaps for dashed strokes).
+    values: round, flat, square
+    example: --prop lineCap=round
+    readback: round | flat | square
+  lineJoin   enum   [add/set/get]   aliases: linejoin, line.join
+    description: line join style at shape corners (drawingML <a:ln> child <a:round/> | <a:bevel/> | <a:miter/>). Accepts compound 'miter:<lim>' to also set the miter limit in one key.
+    values: round, bevel, miter
+    example: --prop lineJoin=miter
+    example: --prop lineJoin=miter:800000
+    readback: round | bevel | miter
+  miterLimit   number   [add/set/get]   aliases: miterlimit, miter.limit, line.miterlimit
+    description: miter join limit (drawingML <a:miter @lim>) in 1000ths of a percent (e.g. 800000 = 800%). Implies lineJoin=miter when set without an explicit lineJoin.
+    example: --prop miterLimit=800000
+    readback: integer (1000ths of a percent)
+  cmpd   enum   [add/set/get]   aliases: compoundLine, compoundline, line.compound
+    description: compound line style (drawingML <a:ln @cmpd>) for double/triple/asymmetric strokes.
+    values: sng, dbl, thickThin, thinThick, tri
+    example: --prop cmpd=dbl
+    example: --prop cmpd=thickThin
+    readback: canonical OOXML token (sng | dbl | thickThin | thinThick | tri)
+  lineAlign   enum   [add/set/get]   aliases: linealign, line.align
+    description: stroke alignment relative to the path (drawingML <a:ln @algn>). 'ctr' centers the stroke on the path; 'in' insets it inside the shape boundary.
+    values: ctr, in
+    example: --prop lineAlign=ctr
+    readback: ctr | in
+  headEnd   enum   [add/set/get]   aliases: headend, arrowStart, arrowstart
+    description: arrowhead at the line's start (drawingML <a:headEnd type=...>). Supported on any outline (shape or connector), not connector-only.
+    values: none, triangle, stealth, diamond, oval, arrow
+    example: --prop headEnd=triangle
+    readback: canonical OOXML token (none | triangle | stealth | diamond | oval | arrow)
+  tailEnd   enum   [add/set/get]   aliases: tailend, arrowEnd, arrowend
+    description: arrowhead at the line's end (drawingML <a:tailEnd type=...>). Supported on any outline (shape or connector).
+    values: none, triangle, stealth, diamond, oval, arrow
+    example: --prop tailEnd=arrow
+    readback: canonical OOXML token (none | triangle | stealth | diamond | oval | arrow)
+  list   string   [add/set/get]   aliases: liststyle
+    description: list style for shape paragraphs (bullet|numbered|alpha|roman|none|<char>).
+    example: --prop list=bullet
+    readback: list style token of the first paragraph
+  link   string   [add/set/get]
+    description: click-action target for the shape. Accepts an absolute URI (https://, mailto:, tel:, …), slide[N] for an in-deck jump (1-based; the target slide must already exist), or a named navigation action (firstslide, lastslide, nextslide, previousslide, endshow). Pass 'none' or empty to clear.
+    example: --prop link=https://example.com
+    example: --prop link=slide[3]
+    example: --prop link=nextslide
+    readback: URL / slide[N] / named action
+  tooltip   string   [add/set/get]
+    description: tooltip / screen-tip text for hyperlink. Applied together with `link` in a single set/add call; standalone tooltip without link is not supported (no hyperlink relationship to attach to). Set-side may update an existing hyperlink's tooltip in-place without re-supplying link.
+    example: --prop link=https://example.com --prop tooltip="click here"
+    readback: hyperlink screen-tip text
+  animation   string   [add/set/get]   aliases: animate
+    description: animation effect spec.
+    example: --prop animation=fade
+    readback: synthesized effect spec of the form "effect-class-durationMs" (e.g. "fade-entrance-400"), resolved from the slide Timing tree; absent when the shape has no animation
+  effective.direction   enum   [get]
+    description: resolved reading direction inherited from placeholder→layout→master→presentation defaults. Suppressed when 'direction' is set directly on the shape.
+    values: rtl, ltr
+    readback: rtl | ltr
+  effective.size   length   [get]
+    description: resolved font size inherited from placeholder→layout→master→presentation defaults. Suppressed when 'size' is set directly on the shape.
+    readback: unit-qualified pt (e.g. "18pt")
+  effective.font   string   [get]
+    description: resolved font name inherited from placeholder→layout→master→presentation defaults. Suppressed when 'font' is set directly on the shape.
+    readback: font name
+  effective.color   color   [get]
+    description: resolved text color inherited from placeholder→layout→master→presentation defaults. Suppressed when 'color' is set directly on the shape.
+    readback: #-prefixed uppercase hex (scheme colors pass through)
+  effective.bold   bool   [get]
+    description: resolved bold inherited from placeholder→layout→master→presentation defaults. Suppressed when 'bold' is set directly on the shape.
+    readback: true/false
+  effective.italic   bool   [get]
+    description: resolved italic via cascade.
+    readback: true/false
+  effective.underline   string   [get]
+    description: resolved underline via cascade.
+    readback: single/double/none
+  effective.strike   string   [get]
+    description: resolved strike via cascade.
+    readback: single/double/none
+  effective.font.latin   string   [get]
+    description: resolved Latin font via cascade.
+    readback: font name
+  effective.font.ea   string   [get]
+    description: resolved East Asian font via cascade.
+    readback: font name
+  effective.font.cs   string   [get]
+    description: resolved complex script font via cascade.
+    readback: font name
+  effective.align   string   [get]
+    description: resolved paragraph alignment via cascade.
+    readback: left/center/right/justify
+  effective.lineSpacing   string   [get]
+    description: resolved line spacing via cascade.
+    readback: multiplier (e.g. 1.5x) or fixed pt
+  effective.spaceBefore   length   [get]
+    description: resolved spaceBefore via cascade.
+    readback: unit-qualified pt
+  effective.spaceAfter   length   [get]
+    description: resolved spaceAfter via cascade.
+    readback: unit-qualified pt
+  effective.size.src   string   [get]
+    description: path of the cascade layer that wrote effective.size.
+    readback: path string
+  effective.font.src   string   [get]
+    description: path of the cascade layer that wrote effective.font.
+    readback: path string
+  effective.font.latin.src   string   [get]
+    description: path of the cascade layer that wrote effective.font.latin.
+    readback: path string
+  effective.font.ea.src   string   [get]
+    description: path of the cascade layer that wrote effective.font.ea.
+    readback: path string
+  effective.font.cs.src   string   [get]
+    description: path of the cascade layer that wrote effective.font.cs.
+    readback: path string
+  effective.color.src   string   [get]
+    description: path of the cascade layer that wrote effective.color.
+    readback: path string
+  effective.bold.src   string   [get]
+    description: path of the cascade layer that wrote effective.bold.
+    readback: path string
+  effective.italic.src   string   [get]
+    description: path of the cascade layer that wrote effective.italic.
+    readback: path string
+  effective.underline.src   string   [get]
+    description: path of the cascade layer that wrote effective.underline.
+    readback: path string
+  effective.strike.src   string   [get]
+    description: path of the cascade layer that wrote effective.strike.
+    readback: path string
+  effective.align.src   string   [get]
+    description: path of the cascade layer that wrote effective.align.
+    readback: path string
+  effective.lineSpacing.src   string   [get]
+    description: path of the cascade layer that wrote effective.lineSpacing.
+    readback: path string
+  effective.spaceBefore.src   string   [get]
+    description: path of the cascade layer that wrote effective.spaceBefore.
+    readback: path string
+  effective.spaceAfter.src   string   [get]
+    description: path of the cascade layer that wrote effective.spaceAfter.
+    readback: path string
+  id   number   [add/get]
+    description: cNvPr shape id; @id in /shape[@id=ID]. add honors a caller-supplied id so dump-replay keeps it stable for spTgt animation refs; immutable after creation.
+    readback: integer shape id
+  zorder   number   [add/set/get]   aliases: z-order, order
+    description: 1-based z-order in slide shape tree. On add/set, repositions the shape within the shape tree (1 = back).
+    example: --prop zorder=1
+    readback: 1-based integer (1 = back)
+  bevel   string   [add/set/get]
+    description: 3-D top bevel descriptor (sp3d.bevelT). Form: 'preset[-width[-height]]' with width/height in points; height defaults to width. Preset values: angle, artDeco, circle, convex, coolSlant, cross, divot, hardEdge, relaxedInset, riblet, slope, softRound. Example: 'circle-6-6'.
+    example: --prop bevel=circle
+    example: --prop bevel=circle-6
+    example: --prop bevel=angle-8-4
+    readback: 'preset' alone when width=height=6pt (OOXML default — 'circle-6' reads back as 'circle'), 'preset-N' when width=height=N (symmetric, e.g. 'circle-4'), or 'preset-widthPt-heightPt' when width≠height. Surfaces when sp3d.bevelT is present.
+  bevelBottom   string   [add/set/get]
+    description: 3-D bottom bevel descriptor (sp3d.bevelB). Same grammar as 'bevel'. Single-size shorthand 'preset-N' sets width=height=N.
+    example: --prop bevelBottom=circle-4
+    example: --prop bevelBottom=circle-4-4
+    readback: 'preset' alone when default size (6pt), 'preset-N' when width=height=N (symmetric), or 'preset-widthPt-heightPt' when width≠height.
+  depth   length   [add/set/get]
+    description: 3-D extrusion height (sp3d @extrusionH). Accepts the canonical length input forms — bare number is points, also accepts pt/cm/in/px/emu suffix. 'none' or '0' clears.
+    example: --prop depth=10
+    example: --prop depth=10pt
+    example: --prop depth=0.5cm
+    example: --prop depth=none
+    readback: bare numeric points (e.g. '10', '14.17').
+  lighting   string   [add/set/get]
+    description: 3-D scene lighting rig name (scene3d.lightRig @rig). OOXML preset rig values: threePt, balanced, soft, harsh, flood, contrasting, morning, sunrise, sunset, chilly, freezing, flat, twoPt, glow, brightRoom.
+    example: --prop lighting=threePt
+    example: --prop lighting=balanced
+    readback: OOXML preset light rig token.
+  material   string   [add/set/get]
+    description: 3-D preset material (sp3d.prstMaterial). Accepted tokens (case-insensitive): clear, darkEdge (alias dkEdge), flat, matte, metal, plastic, powder, softEdge, softMetal, translucentPowder, warmMatte, wireframe (alias wire).
+    example: --prop material=metal
+    example: --prop material=plastic
+    readback: OOXML preset material token.
+  reflection   string   [add/set/get]
+    description: reflection effect. Accepts 'true' / 'tight' / 'half' / 'full' to enable a reflection of varying length, or 'none' to clear.
+    example: --prop reflection=true
+    example: --prop reflection=half
+    example: --prop reflection=full
+    readback: tight | half | full (mapped from a:reflection @endPos: <70000=tight, <95000=half, else=full).
+  shadow   string   [add/set/get]
+    description: outer shadow. Pass a color (e.g. '000000') or 'true' (defaults to black). Routed to text-level rPr for text-only shapes.
+    example: --prop shadow=#808080
+    example: --prop shadow=none
+    example: --prop shadow=000000
+    example: --prop shadow=true
+    readback: compound '#RRGGBB-blurPt-angleDeg-distPt-opacityPct' (e.g. '#000000-4-45-3-40'). Color is a '#'-prefixed 6-digit hex (the alpha is carried solely by the trailing opacity field, never double-encoded as an alpha byte); blur, distance in pt; angle in degrees; opacity in percent (0-100).
+  innerShadow   string   [add/set/get]   aliases: innershadow
+    description: inner shadow (a:innerShdw) as `color-blur-angle-dist-opacity` (mirrors `shadow`). Input color is hex (with or without `#`, 6- or 8-digit `RRGGBBAA`) or a scheme name (with optional +lumMod/+shade transforms); blur/dist in points; angle in degrees; opacity 0-100. Rendered as a CSS inset box-shadow in the HTML preview.
+    example: --prop innerShadow=000000
+    example: --prop innerShadow=FF0000-4-45-3-60
+    readback: compound '#RRGGBB-blurPt-angleDeg-distPt-opacityPct' (e.g. '#FF0000-4-45-3-60'). Color is a '#'-prefixed 6-digit hex (alpha carried solely by the trailing opacity field); blur, distance in pt; angle in degrees; opacity in percent (0-100).
+  glow   string   [add/set/get]
+    description: glow effect. Pass a color (e.g. '4472C4') or 'true' (defaults to accent blue).
+    example: --prop glow=#4472C4
+    example: --prop glow=4472C4
+    example: --prop glow=true
+    readback: compound '#RRGGBBAA-radiusPt-opacityPct' (e.g. '#4472C4BF-8-75'). Color is CSS-form 8-digit hex with leading # (alpha last); radius in pt; opacity in percent.
+  flipH   bool   [add/set/get]   aliases: flipHorizontal
+    description: Flip horizontally (Office-API alias of flip=h).
+    example: --prop flipH=true
+    readback: true when the shape carries a horizontal flip
+  flipV   bool   [add/set/get]   aliases: flipVertical
+    description: Flip vertically (Office-API alias of flip=v).
+    example: --prop flipV=true
+    readback: true when the shape carries a vertical flip
+  lineOpacity   number   [add/set/get]
+    description: shape outline alpha as fraction (0..1). Requires an outline (line/lineColor) to attach to. Surfaces when the outline carries an a:alpha child.
+    example: --prop line=FF0000:2:solid --prop lineOpacity=0.5
+    readback: fraction 0..1
+  x   length   [add/set/get]   aliases: left
+    description: x in EMU/length form (e.g. 2cm). pptx absolute positioning.
+    example: --prop x=2
+    example: --prop x=2cm
+    example: --prop x=1in
+    example: --prop x=72pt
+    readback: length string (FormatEmu)
+  y   string   [add/set/get]   aliases: top
+    description: y in EMU/length form (e.g. 2cm). pptx absolute positioning.
+    example: --prop y=3
+    example: --prop y=3cm
+    readback: length string (FormatEmu)
+  width   string   [add/set/get]   aliases: w
+    description: width in EMU/length form (e.g. 2cm). pptx absolute positioning.
+    example: --prop width=4
+    example: --prop width=6cm
+    example: --prop width=5cm
+    readback: length string (FormatEmu)
+  height   string   [add/set/get]   aliases: h
+    description: height in EMU/length form (e.g. 2cm). pptx absolute positioning.
+    example: --prop height=3
+    example: --prop height=3cm
+    readback: length string (FormatEmu)
+  align   string   [add/set/get]
+    description: Paragraph alignment: 'left' / 'center' (c/ctr) / 'right' (r) / 'justify'.
+    example: --prop align=center
+  bold   bool   [add/set/get]   aliases: font.bold
+    description: Bold runs. Bare alias of font.bold.
+    example: --prop bold=true
+    readback: as emitted by handler (per-format details vary)
+  color   color   [add/set/get]   aliases: font.color
+    description: Text color. Bare alias of font.color.
+    example: --prop color=#FF0000
+    example: --prop color=0000FF
+    readback: as emitted by handler (per-format details vary)
+  fill   color   [add/set/get]   aliases: background
+    description: Solid fill color, or 'none' for no fill (text-only shapes route effects to text-level rPr). Accepts color-transform modifiers appended with '+': '+lumMod<N>' / '+lumOff<N>' (luminance, percent), '+tint<N>' / '+shade<N>', '+alpha<N>' (e.g. 'accent1+lumMod75', 'FF0000+lumMod50', 'accent2+shade60+alpha80'). Modifiers apply to both scheme and srgb base colors and round-trip in Get.
+    example: --prop fill=#FFFF00
+    example: --prop fill=none
+    example: --prop fill=FF0000
+    example: --prop fill=#FF0000
+    example: --prop fill=red
+    example: --prop fill=accent1
+    readback: #-prefixed uppercase hex
+  font   string   [add/set/get]   aliases: font.name
+    description: default font family for shape text. Bare 'font' targets Latin + EastAsian; for per-script control (Japanese / Korean / Arabic) use font.latin, font.ea, or font.cs.
+    example: --prop font=Arial
+    readback: font name
+  italic   bool   [add/set/get]   aliases: font.italic
+    description: Italic runs. Bare alias of font.italic.
+    example: --prop italic=true
+    readback: as emitted by handler (per-format details vary)
+  line   string   [add/set/get]   aliases: border, linecolor, lineColor
+    description: Outline color (or 'none'). Form: 'color[:width[:style]]', e.g. 'FF0000:1.5:dash'. width in points; style: solid|dash|dot|dashdot|longdash.
+    example: --prop line=#000000
+    example: --prop line=FF0000:1.5
+    example: --prop line=none
+    example: --prop line=000000
+    readback: color or color:width
+  name   string   [add/set/get]
+    description: Override the auto-generated 'Shape {id}' label on cNvPr @name.
+    example: --prop name="banner"
+    example: --prop name=MyShape
+    readback: shape name string (cNvPr @name)
+  rotation   string   [add/set/get]   aliases: rot, rotate
+    description: Rotation in degrees (positive = clockwise). Stored OOXML-internal as 60000ths of a degree on Transform2D @rot.
+    example: --prop rotation=45
+    readback: as emitted by handler (per-format details vary)
+  softEdge   string   [add/set/get]   aliases: softedge
+    description: Soft edge radius, or 'none' to clear.
+    example: --prop softEdge=5
+    example: --prop softEdge=4pt
+    readback: unit-qualified string in points, e.g. "5pt"
+  text   string   [add/set/get]
+    example: --prop text="Note"
+    example: --prop text="Hello"
+    readback: plain text content of the shape
+  underline   string   [add/set/get]   aliases: font.underline
+    description: Underline style: 'true'/'single'/'sng', 'double'/'dbl', 'none'/'false'. Bare alias of font.underline.
+    example: --prop underline=single
+    readback: as emitted by handler (per-format details vary)
+  valign   string   [add/set/get]
+    description: Vertical anchor: 'top' (t) / 'center' (ctr/middle/c/m) / 'bottom' (b).
+    example: --prop valign=middle
+
+Note: Positional /shape[N] enumerates ALL shapes on the slide including layout-inherited placeholders — new shapes typically land at the end, not at /shape[1]. `add` echoes the canonical /shape[@id=ID] path; prefer that for follow-up Set/Get. effective.* keys (direction, size, font, color, bold) are read-only inheritance-resolved values walked up the placeholder→layout→master→defaults chain; suppressed when the corresponding direct key is set. Each pairs with effective.*.src naming the writing layer. Cross-format note: `color=` on pptx shapes unambiguously sets text/run color. The same bare `color=` key is rejected on xlsx cells (ambiguous with fill) — use `font.color` for text or `fill` for background when working with xlsx cells.

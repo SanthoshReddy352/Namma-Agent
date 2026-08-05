@@ -122,6 +122,32 @@ def test_background_task_requires_task(wired):
     assert not reg.execute("background_task", {"task": " "}).ok
 
 
+def test_background_task_uses_the_turns_model(wired, tmp_path):
+    """The brain is resolved on the TURN's thread — the worker thread does not
+    inherit the current-provider contextvar, and the boot-time provider may hold
+    no credentials at all."""
+    from namma_agent.core.interactive import reset_current_provider, set_current_provider
+    from namma_agent.core.memory import Database as _Db
+
+    reg, agent, comms = wired
+
+    class _Dead(Provider):
+        name = "dead"
+        def __init__(self): super().__init__(model="dead")
+        def is_available(self): return False
+        def generate(self, *a, **k): raise RuntimeError("No LLM provider is available")
+
+    register_agent_tools(reg, agent, _Dead(), _Db(":memory:"),
+                         get_comms=lambda: comms, bg_store_path=tmp_path / "bg4.json")
+    token = set_current_provider(ScriptedProvider([LLMResponse(content="Finding: 42.")]))
+    try:
+        r = reg.execute("background_task", {"task": "compute", "name": "answer"})
+    finally:
+        reset_current_provider(token)
+    done = _wait_done(reg, r.data["id"])
+    assert done.data["status"] == "done" and "42" in done.content
+
+
 def test_subagent_toolsets_scope_excludes_destructive(wired, tmp_path):
     """A requested toolset widens the sub-agent's surface but NEVER lets a
     destructive tool through (sub-agents have no approval channel)."""

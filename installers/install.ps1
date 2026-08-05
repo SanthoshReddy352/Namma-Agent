@@ -7,10 +7,12 @@
 # it. Then: venv, dependencies, the web UI, the first AI provider + onboarding, a
 # shortcut, and launch.
 #
-#   -NoSetup     skip the interactive first-provider / onboarding prompts (app onboards)
-#   -NoLaunch    set up only, don't launch (used by the native .exe installer)
-#   -NoShortcut  don't create shortcuts (the native installer manages them)
-param([switch]$NoLaunch, [switch]$NoSetup, [switch]$NoShortcut)
+#   -NoSetup       skip the interactive first-provider / onboarding prompts (app onboards)
+#   -NoLaunch      set up only, don't launch (used by the native .exe installer)
+#   -NoShortcut    don't create shortcuts (the native installer manages them)
+#   -NoEmbeddings  skip Ollama + the all-minilm model (memory recall stays
+#                  keyword-only; use this on a box that must stay minimal)
+param([switch]$NoLaunch, [switch]$NoSetup, [switch]$NoShortcut, [switch]$NoEmbeddings)
 $ErrorActionPreference = "Stop"
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Root = Split-Path -Parent $Here
@@ -56,7 +58,7 @@ function Find-Py {
 }
 
 # 1. Python 3.10+ (auto-install if missing) ----------------------------------
-Write-Host "[1/8] Ensuring Python 3.10+ ..."
+Write-Host "[1/9] Ensuring Python 3.10+ ..."
 $py = Find-Py
 if (-not $py) {
     Ensure-Tool "python" "Python.Python.3.12" "python" "Python 3.12" | Out-Null
@@ -71,7 +73,7 @@ $PyHead = $py[0]; $PyTail = $py[1]
 Write-Host "      Using $(& $PyHead @PyTail --version)"
 
 # 2. Git + Node.js (auto-install if missing) ---------------------------------
-Write-Host "[2/8] Ensuring Git + Node.js ..."
+Write-Host "[2/9] Ensuring Git + Node.js ..."
 Ensure-Tool "git" "Git.Git" "git" "Git" | Out-Null
 Ensure-Tool "npm" "OpenJS.NodeJS.LTS" "nodejs-lts" "Node.js" | Out-Null
 # Optional tools (richer search/media; the app degrades gracefully without them).
@@ -81,41 +83,89 @@ Ensure-Tool "ffmpeg" "Gyan.FFmpeg" "ffmpeg" "ffmpeg" | Out-Null
 # 3. virtual environment -----------------------------------------------------
 $VenvPy = Join-Path $Root ".venv\Scripts\python.exe"
 if (-not (Test-Path $VenvPy)) {
-    Write-Host "[3/8] Creating .venv ..."
+    Write-Host "[3/9] Creating .venv ..."
     & $PyHead @PyTail -m venv .venv
 } else {
-    Write-Host "[3/8] Reusing existing .venv"
+    Write-Host "[3/9] Reusing existing .venv"
 }
 
 # 4. dependencies ------------------------------------------------------------
-Write-Host "[4/8] Installing dependencies (a few minutes on first run) ..."
+Write-Host "[4/9] Installing dependencies (a few minutes on first run) ..."
 & $VenvPy -m pip install --upgrade pip --no-cache-dir | Out-Null
 & $VenvPy -m pip install --no-cache-dir -r namma_agent\requirements.txt
 
-# 5. web UI ------------------------------------------------------------------
-if (Test-Path "namma_agent\webui\dist\index.html") {
-    Write-Host "[5/8] Web UI already built - skipping"
-} elseif (Get-Command npm -ErrorAction SilentlyContinue) {
-    Write-Host "[5/8] Building the web UI ..."
-    Push-Location namma_agent\webui; npm install; npm run build; Pop-Location
-} else {
-    Write-Host "[5/8] WARNING: web UI not built and Node/npm not found."
+# 5. local memory embeddings -------------------------------------------------
+# The memory's semantic recall channel. Without it, memory search is keyword-only
+# and misses paraphrases ("what is my mother tongue?" never reaches the fact that
+# says Telugu). all-minilm is 46 MB / 384-dim, ~150 MB resident, ~10 ms a query.
+# Best-effort throughout: if Ollama can't be installed the app works exactly as
+# before (BM25 recall) and the embedder circuit-breaks, so a missing endpoint
+# costs nothing per turn.
+function Embed-Fail($reason) {
+    Write-Host ""
+    Write-Host "ERROR: $reason"
+    Write-Host "  Namma Agent's memory needs a local embedding model for semantic recall."
+    Write-Host "  Install Ollama manually, then re-run this installer:"
+    Write-Host "    winget install -e --id Ollama.Ollama"
+    Write-Host "  Then: ollama pull all-minilm"
+    Write-Host ""
+    Write-Host "  To install without it anyway (memory recall becomes keyword-only):"
+    Write-Host "    powershell -ExecutionPolicy Bypass -File installers\install.ps1 -NoEmbeddings"
+    Read-Host "Press Enter to exit"; exit 1
 }
 
-# 6. first provider + onboarding ---------------------------------------------
-if ($NoSetup) {
-    Write-Host "[6/8] Skipping provider/onboarding - configure it in the app."
+if ($NoEmbeddings) {
+    Write-Host "[5/9] Skipping local memory embeddings (-NoEmbeddings) - recall will be keyword-only."
 } else {
-    Write-Host "[6/8] Configuring the first AI provider + a few questions ..."
+    Write-Host "[5/9] Setting up local memory embeddings ..."
+    if (-not (Ensure-Tool "ollama" "Ollama.Ollama" "ollama" "Ollama")) {
+        Embed-Fail "Ollama could not be installed automatically."
+    }
+    # `pull` needs the background service; a fresh install may not have started
+    # it yet, so nudge it and give it a moment to bind.
+    ollama list *> $null
+    if ($LASTEXITCODE -ne 0) {
+        Start-Process -FilePath "ollama" -ArgumentList "serve" -WindowStyle Hidden -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 3
+    }
+    $models = (ollama list 2>$null | Out-String)
+    if ($LASTEXITCODE -ne 0) {
+        Embed-Fail "Ollama is installed but its service is not responding."
+    }
+    if ($models -match "all-minilm") {
+        Write-Host "      all-minilm already installed."
+    } else {
+        Write-Host "      Downloading the all-minilm embedding model (46 MB) ..."
+        ollama pull all-minilm *> $null
+        if ($LASTEXITCODE -ne 0) { Embed-Fail "Downloading the all-minilm model failed." }
+        Write-Host "      Semantic memory recall enabled."
+    }
+}
+
+# 6. web UI ------------------------------------------------------------------
+if (Test-Path "namma_agent\webui\dist\index.html") {
+    Write-Host "[6/9] Web UI already built - skipping"
+} elseif (Get-Command npm -ErrorAction SilentlyContinue) {
+    Write-Host "[6/9] Building the web UI ..."
+    Push-Location namma_agent\webui; npm install; npm run build; Pop-Location
+} else {
+    Write-Host "[6/9] WARNING: web UI not built and Node/npm not found."
+}
+
+# 7. first provider + onboarding ---------------------------------------------
+if ($NoSetup) {
+    Write-Host "[7/9] Skipping provider/onboarding - configure it in the app."
+} else {
+    Write-Host "[7/9] Configuring the first AI provider + a few questions ..."
     & $VenvPy -m namma_agent --setup
     if ($LASTEXITCODE -ne 0) { Write-Host "      (setup skipped - finish it in the app)" }
 }
 
-# 7. shortcut ----------------------------------------------------------------
+# 8. shortcut ----------------------------------------------------------------
 if ($NoShortcut) {
-    Write-Host "[7/8] Skipping shortcuts (managed by the installer)."
+    Write-Host "[8/9] Skipping shortcuts (managed by the installer)."
 } else {
-    Write-Host "[7/8] Creating shortcuts ..."
+    Write-Host "[8/9] Creating shortcuts ..."
     $PyW = Join-Path $Root ".venv\Scripts\pythonw.exe"
     $Icon = Join-Path $Root "namma_agent\assets\sparkle.ico"
     $Wsh = New-Object -ComObject WScript.Shell
@@ -134,7 +184,7 @@ if ($NoShortcut) {
     Write-Host "      Shortcut 'Namma Agent' added to Desktop + Start Menu."
 }
 
-# 7b. `namma` command on PATH (so you can run `namma`, `namma --chat`, `namma --server`).
+# 8b. `namma` command on PATH (so you can run `namma`, `namma --chat`, `namma --server`).
 $BinDir = Join-Path $Root "bin"
 New-Item -ItemType Directory -Force -Path $BinDir | Out-Null
 $PyW = Join-Path $Root ".venv\Scripts\pythonw.exe"
@@ -155,11 +205,11 @@ if (($userPath -split ';') -notcontains $BinDir) {
     Write-Host "      The 'namma' command is on your PATH."
 }
 
-# 8. launch ------------------------------------------------------------------
+# 9. launch ------------------------------------------------------------------
 Write-Host "=============================================="
 if ($NoLaunch) {
-    Write-Host "[8/8] Setup complete. Launch from the 'Namma Agent' shortcut."
+    Write-Host "[9/9] Setup complete. Launch from the 'Namma Agent' shortcut."
 } else {
-    Write-Host "[8/8] Launching Namma Agent ..."
+    Write-Host "[9/9] Launching Namma Agent ..."
     & $VenvPy -m namma_agent
 }

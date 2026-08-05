@@ -104,8 +104,18 @@ def test_news_parse_atom_and_rss():
         def __exit__(self, *a): return False
         def read(self, *a): return rss
     import contextlib
+
+    class _Opener:
+        def open(self, req, timeout=10):
+            return _Resp()
+
     with contextlib.ExitStack() as stack:
         stack.enter_context(_patch(urllib.request, "urlopen", lambda req, timeout=10: _Resp()))
+        # Feeds now go through the Phase 7a SSRF guard, which RESOLVES the host
+        # before fetching — "http://feed" has no DNS answer. This test is about
+        # RSS/Atom parsing, so stub the guard rather than invent a real host.
+        stack.enter_context(_patch(n, "check_url", lambda url: url))
+        stack.enter_context(_patch(n, "guarded_opener", _Opener))
         items = n._fetch_feed("http://feed", 5)
     assert items and items[0]["title"] == "RSS One"
 

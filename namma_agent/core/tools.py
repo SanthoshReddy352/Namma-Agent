@@ -228,8 +228,19 @@ class ToolRegistry:
         if not tool.enabled:
             return ToolResult(ok=False, content="",
                               error=f"Tool '{name}' is disabled in the Toolsets settings.")
-        if tool.destructive and self._approval and not self._approval(tool, args):
-            return ToolResult(ok=False, content="", error="User declined the action.")
+        # Phase 7e: user hooks may VETO a call (and only veto — rewriting args
+        # or faking results would make the audit trail lie about what ran).
+        from namma_agent.core.hooks import registry as _hooks
+
+        hooks = _hooks()
+        veto = hooks.pre_tool(name, args)
+        if veto:
+            return ToolResult(ok=False, content="", error=veto)
+        if tool.destructive and self._approval:
+            approved = bool(self._approval(tool, args))
+            hooks.on_approval(name, args, approved)
+            if not approved:
+                return ToolResult(ok=False, content="", error="User declined the action.")
         # Phase 1d: known secret values are masked in everything the model (and
         # the Activity strip / persisted steps, which render the same content)
         # gets back — a `cat .env` never hands the model a live credential.
@@ -241,10 +252,13 @@ class ToolRegistry:
                 result = ToolResult(ok=True, content=_coerce_content(result), data=result)
             result.content = redact(result.content)
             result.error = redact(result.error)
+            hooks.post_tool(name, args, result)
             return result
         except Exception as exc:  # noqa: BLE001 - surfaced back to the model
             logger.warning("[tools] %s raised: %s", name, exc)
-            return ToolResult(ok=False, content="", error=redact(str(exc)))
+            failed = ToolResult(ok=False, content="", error=redact(str(exc)))
+            hooks.post_tool(name, args, failed)
+            return failed
 
 
 def tool(name: str, description: str, parameters: dict, destructive: bool = False):

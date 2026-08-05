@@ -114,8 +114,26 @@ class OpenAICompatProvider(Provider):
     # -- translation -------------------------------------------------------
 
     @staticmethod
+    def _reasoning(m: dict) -> str:
+        """Neutral ``reasoning_content`` field, or ``""`` when absent."""
+        rc = m.get("reasoning_content")
+        if not isinstance(rc, str):
+            rc = m.get("reasoning")
+        return rc if isinstance(rc, str) else ""
+
+    @staticmethod
     def _to_wire_messages(messages: list[dict]) -> list[dict]:
         """Translate neutral messages into OpenAI chat format."""
+        # Thinking-mode conversations (any assistant turn that ever carried
+        # reasoning_content) must echo `reasoning_content` on EVERY assistant
+        # message — empty where the model produced none. Reasoning endpoints
+        # intermittently reject a conversation where a mid-stream turn dropped
+        # the field, so a turn that came back reasoning-less must NOT leave a
+        # bare hole in the next request's history.
+        thinking_mode = any(
+            m.get("role") == "assistant" and OpenAICompatProvider._reasoning(m)
+            for m in messages
+        )
         out: list[dict] = []
         for m in messages:
             role = m.get("role")
@@ -127,21 +145,27 @@ class OpenAICompatProvider(Provider):
                         "content": m.get("content", ""),
                     }
                 )
-            elif role == "assistant" and m.get("tool_calls"):
-                out.append(
-                    {
-                        "role": "assistant",
-                        "content": m.get("content") or None,
-                        "tool_calls": [
-                            {
-                                "id": tc.id,
-                                "type": "function",
-                                "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
-                            }
-                            for tc in m["tool_calls"]
-                        ],
-                    }
-                )
+            elif role == "assistant":
+                # content is never null here — endpoints reject an assistant
+                # message where neither content nor tool_calls is set.
+                wire: dict = {"role": "assistant", "content": m.get("content") or ""}
+                # Reasoning models require their previous chain-of-thought to be
+                # resent verbatim — the endpoint 400s if it's dropped. In a
+                # thinking-mode conversation even reasoning-less turns carry the
+                # field (empty), so the history never has a hole.
+                reasoning = OpenAICompatProvider._reasoning(m)
+                if reasoning or thinking_mode:
+                    wire["reasoning_content"] = reasoning
+                if m.get("tool_calls"):
+                    wire["tool_calls"] = [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {"name": tc.name, "arguments": json.dumps(tc.args)},
+                        }
+                        for tc in m["tool_calls"]
+                    ]
+                out.append(wire)
             else:
                 out.append({"role": role, "content": m.get("content", "")})
         return out
@@ -230,9 +254,15 @@ class OpenAICompatProvider(Provider):
         # Inline <think>…</think> reasoning never belongs in the answer. The
         # non-streamed path has no thinking channel, so it's simply stripped.
         content = _THINK_BLOCK_RE.sub("", msg.content or "").strip()
+        # Separate-field reasoning (DeepSeek-R1 & friends) is kept so the agent
+        # can echo it back on the next loop step — the API requires it.
+        reasoning = getattr(msg, "reasoning_content", None)
+        if not isinstance(reasoning, str):
+            reasoning = getattr(msg, "reasoning", "") or ""
         return LLMResponse(
             content=content,
             tool_calls=tool_calls,
+            reasoning_content=reasoning,
             usage=self._usage(usage),
             finish_reason=choice.finish_reason or "",
             provider=self.name,
@@ -246,6 +276,9 @@ class OpenAICompatProvider(Provider):
         # Request usage in the final stream chunk when the endpoint supports it.
         body.setdefault("stream_options", {"include_usage": True})
         content_parts: list[str] = []
+        # Reasoning deltas stream separately from content; they're returned in
+        # full so the next loop step can echo them back (endpoints 400 without).
+        reasoning_parts: list[str] = []
         # Accumulate tool-call deltas keyed by their streaming index.
         tool_acc: dict[int, dict] = {}
         finish_reason = ""
@@ -283,9 +316,12 @@ class OpenAICompatProvider(Provider):
             # Reasoning models (DeepSeek-R1, some OpenAI-compatible endpoints) stream
             # their chain-of-thought separately as `reasoning_content` / `reasoning`.
             # Surface it on the thinking channel; never mix it into the answer.
-            if on_thinking:
-                think = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
-                if think:
+            think = getattr(delta, "reasoning_content", None)
+            if not isinstance(think, str):
+                think = getattr(delta, "reasoning", None)
+            if isinstance(think, str) and think:
+                reasoning_parts.append(think)
+                if on_thinking:
                     on_thinking(think)
             if getattr(delta, "content", None):
                 splitter.feed(delta.content)
@@ -314,6 +350,7 @@ class OpenAICompatProvider(Provider):
         return LLMResponse(
             content="".join(content_parts),
             tool_calls=tool_calls,
+            reasoning_content="".join(reasoning_parts),
             usage=usage,
             finish_reason=finish_reason,
             provider=self.name,

@@ -40,27 +40,64 @@ export const setNotifyEventEnabled = (id, on) =>
 let _name = "Namma Agent";
 export const setNotifyAppName = (n) => { if (n) _name = n; };
 
+// /api/notify is auth-gated like every other route, so a self-hosted instance
+// with server.auth_token set needs the token header — without it the POST 401s
+// and every notification silently disappears. Read it from the same key api.js
+// writes (importing api.js here would be a cycle: api.js imports this module).
+function authHeaders() {
+  try {
+    const t = localStorage.getItem("namma_auth_token");
+    return t ? { "X-Namma-Token": t } : {};
+  } catch { return {}; }
+}
+
+// POST the toast. Resolves {ok, reason} — ok:false means the OS did NOT show
+// anything (notifications switched off, no daemon, request failed).
 async function postNotify(title, body) {
   try {
     const r = await fetch("/api/notify", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...authHeaders() },
       body: JSON.stringify({ title: title || _name, body: body || "" }),
     });
     const j = await r.json().catch(() => null);
-    return !!j?.ok;
-  } catch { return false; }
+    return { ok: !!j?.ok, reason: j?.reason || "" };
+  } catch { return { ok: false, reason: "" }; }
+}
+
+// Whether this machine can render native toasts: {available, reason, platform}.
+export async function notifyStatus() {
+  try {
+    const r = await fetch("/api/notify/status", { headers: authHeaders() });
+    return (await r.json()) || { available: false, reason: "" };
+  } catch { return { available: false, reason: "" }; }
+}
+
+// The in-app fallback. When the OS swallows the toast the notification would
+// otherwise vanish, so we raise it inside the app instead — one code path that
+// works identically in a browser tab and in the pywebview desktop window.
+// NotifyToasts.jsx renders these.
+export const INAPP_EVENT = "namma-inapp-notify";
+export function showInAppNotification({ title, body, tone = "info" }) {
+  window.dispatchEvent(new CustomEvent(INAPP_EVENT, {
+    detail: { title: title || _name, body: body || "", tone, id: `${Date.now()}-${Math.random()}` },
+  }));
 }
 
 // Fire a desktop notification for an event, honouring the master switch +
-// per-event toggle. Fire-and-forget.
+// per-event toggle. Falls back to the in-app banner when the OS shows nothing,
+// so an enabled notification is never lost.
 export function notify(event, { title, body } = {}) {
   if (!notifyEnabled() || !notifyEventEnabled(event)) return;
-  postNotify(title, body);
+  postNotify(title, body).then(({ ok }) => {
+    if (!ok) showInAppNotification({ title, body, tone: event === "error" ? "error" : "info" });
+  });
 }
 
 // The "Send test notification" button — always fires (ignores the toggles), and
-// reports whether the OS actually dispatched one.
+// reports what actually happened so Settings can tell the user the truth.
 export async function sendTestNotification() {
-  return postNotify(_name, "Notifications are working.");
+  const r = await postNotify(_name, "Notifications are working.");
+  if (!r.ok) showInAppNotification({ title: _name, body: "Notifications are working (shown in-app)." });
+  return r;
 }

@@ -290,14 +290,24 @@ class Database:
     def recent_turns(self, session_id: str, limit: int = 12) -> list[dict]:
         """Return the last ``limit`` turns in chronological order. Only real
         conversation roles — UI-only turns (e.g. persisted 'quiz' cards) never
-        enter the model's message history."""
+        enter the model's message history.
+
+        Empty assistant turns are dropped: a row with no content and no tool
+        calls (the trace of an interrupted/failed turn) would translate into an
+        assistant message the providers reject ("content or tool_calls must be
+        set")."""
         with self._lock:
             rows = self.conn.execute(
                 "SELECT role, content FROM turns WHERE session_id=? "
                 "AND role IN ('user','assistant') ORDER BY id DESC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
-        return [{"role": r["role"], "content": r["content"]} for r in reversed(rows)]
+        turns = []
+        for r in reversed(rows):
+            if r["role"] == "assistant" and not (r["content"] or "").strip():
+                continue
+            turns.append({"role": r["role"], "content": r["content"]})
+        return turns
 
     # -- rolling context compaction -----------------------------------------
 

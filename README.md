@@ -196,7 +196,7 @@ plugins under `mcp.servers` — additive, never load-bearing.
 ## Trust & security
 
 The full model is in **[docs/SECURITY.md](docs/SECURITY.md)** — threat model,
-the six trust boundaries, and an honest "what Namma does NOT claim" section.
+the seven trust boundaries, and an honest "what Namma does NOT claim" section.
 Every claim is observable live in **Settings → System → Security**. In one
 paragraph:
 

@@ -1,0 +1,140 @@
+﻿pptx table
+--------------
+Parent: slide
+Paths: /slide[N]/table[@id=ID]  /slide[N]/table[@name=NAME]  /slide[N]/table[M]
+Operations: add set get query remove
+
+Usage:
+  officecli add <file> /slide[N] --type table [--prop key=val ...]
+  officecli set <file> /slide[N]/table[M] --prop key=val ...
+  officecli get <file> /slide[N]/table[M]
+  officecli query <file> table
+  officecli remove <file> /slide[N]/table[M]
+
+Properties:
+  id   number   [add/get]
+    description: cNvPr graphic-frame id; @id in /table[@id=ID]. add honors a caller-supplied id so dump-replay keeps it stable for spTgt animation refs; immutable after creation.
+    readback: integer (cNvPr graphic frame id)
+  zorder   number   [add/set/get]   aliases: z-order, order
+    description: z-order in slide shape tree. On add, positions the table (1 = back). On set, re-stacks it: front/back/forward/backward, +1/-1, or a 1-based absolute index.
+    example: --prop zorder=1
+    example: --prop zorder=front
+    readback: 1-based integer (1 = back)
+  x   length   [add/set/get]
+    description: left offset in EMU-parseable length.
+    example: --prop x=1in
+    readback: cm-formatted length
+  y   length   [add/set/get]
+    example: --prop y=1in
+    readback: cm-formatted length
+  height   length   [add/set/get]
+    example: --prop height=5cm
+    readback: cm-formatted length
+  rowHeight   length   [add/set]   aliases: rowheight
+    description: uniform row height (EMU). On add, if unspecified it's derived from 'height' / rows. On set, applies the given height to EVERY row (a convenience for `tr[R] --prop height` on each); read individual heights back per-row via `tr[R]`.
+    example: --prop rowHeight=1cm
+    readback: not surfaced at table level
+  colWidths   string   [add/set/get]   aliases: colwidths
+    description: per-column widths as comma- or semicolon-separated lengths (EMU/cm/in/pt). Length must match 'cols'; extra/missing entries fall back to the uniform default. Get readback is comma-separated FormatEmu output.
+    example: --prop colWidths=2cm,3cm,2cm
+    example: --prop colWidths="1in;2in;1in"
+    readback: comma-separated length list (e.g. "2cm,3cm,2cm")
+  headerFill   color   [add]   aliases: headerfill
+    description: solid fill color applied to row 0 (header).
+    example: --prop headerFill=#4472C4
+    readback: per-cell fill, not aggregated at table level
+  bodyFill   color   [add]   aliases: bodyfill
+    description: solid fill color applied to rows 1..N (body).
+    example: --prop bodyFill=#EEECE1
+    readback: per-cell fill, not aggregated at table level
+  firstRow   bool   [add/set/get]
+    description: tblPr @firstRow flag — header-row styling enabled.
+    readback: true|false
+  lastRow   bool   [add/set/get]
+    description: tblPr @lastRow flag — total-row styling enabled.
+    readback: true|false
+  firstCol   bool   [add/set/get]
+    description: tblPr @firstCol flag — first-column styling enabled.
+    readback: true|false
+  lastCol   bool   [add/set/get]
+    description: tblPr @lastCol flag — last-column styling enabled.
+    readback: true|false
+  bandedRows   bool   [add/set/get]
+    description: tblPr @bandRow flag — alternating row banding from the table style.
+    readback: true|false
+  bandedCols   bool   [add/set/get]
+    description: tblPr @bandCol flag — alternating column banding from the table style.
+    readback: true|false
+  border.all   string   [add/set/get]   aliases: border
+    description: shorthand: applies the border to every edge of every cell. PPT OOXML has no table-level border element — this fans out to per-cell a:lnL/lnR/lnT/lnB. Format: 'WIDTH[ DASH][ COLOR]' space-separated (e.g. '1pt solid FF0000') or 'STYLE;WIDTH;COLOR[;DASH]' semicolon form (style is ignored — kept for docx parity). DASH ∈ solid|dot|dash|lgDash|dashDot|sysDot|sysDash. Use 'none' to clear. Alias: border. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.
+    example: --prop border.all="1pt solid FF0000"
+    example: --prop border="single;1pt;000000"
+    example: --prop border.all=none
+    example: --prop border.all="single;4;FF0000"
+    readback: edge descriptor
+  border.bottom   string   [add/set/get]
+    description: outer bottom border. Format: STYLE[;SIZE[;COLOR[;SPACE]]]. Cross-format note: pptx accepts a space-separated 'WIDTH DASH COLOR' form; docx only accepts the semicolon form 'STYLE;SIZE;COLOR'. Add/Set only — read per-cell.
+    example: --prop border.bottom="2pt solid 000000"
+    example: --prop border.bottom="double;6;0000FF"
+    readback: edge descriptor
+  border.horizontal   string   [add/set]   aliases: border.insideh, border.insideH
+    description: inside-horizontal dividers (between rows). Fans out to bottom of rows 1..N-1 plus top of rows 2..N. PPT has no native inside-border element. Alias: border.insideH. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.
+    example: --prop border.horizontal="1pt solid CCCCCC"
+    example: --prop border.horizontal="single;4;CCCCCC"
+    readback: n/a (PPT has no native inside-border emit on Get)
+  border.left   string   [add/set/get]
+    description: outer left edge: applies to the left of column-1 cells in every row only. Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.
+    example: --prop border.left="1pt solid 808080"
+    example: --prop border.left="single;4"
+    readback: edge descriptor
+  border.right   string   [add/set/get]
+    description: outer right edge: applies to the right of last-column cells in every row only. Format same as border.all. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.
+    example: --prop border.right="1pt solid 808080"
+    example: --prop border.right="single;4"
+    readback: edge descriptor
+  border.top   string   [add/set/get]
+    description: outer top border. Format: STYLE[;SIZE[;COLOR[;SPACE]]]. Cross-format note: pptx accepts a space-separated 'WIDTH DASH COLOR' form; docx only accepts the semicolon form 'STYLE;SIZE;COLOR' (SIZE is in 1/8 pt units). Add/Set only — table-level border readback is not surfaced today; inspect per-cell border.top instead.
+    example: --prop border.top="2pt solid 000000"
+    example: --prop border.top="single;4;000000"
+    readback: edge descriptor
+  border.vertical   string   [add/set]   aliases: border.insidev, border.insideV
+    description: inside-vertical dividers (between columns). Fans out to right of cols 1..M-1 plus left of cols 2..M. Alias: border.insideV. Cross-format note: docx only accepts the semicolon form 'STYLE;SIZE;COLOR' — pptx is more lenient.
+    example: --prop border.vertical="1pt solid CCCCCC"
+    example: --prop border.vertical="single;4;CCCCCC"
+    readback: n/a (PPT has no native inside-border emit on Get)
+  name   string   [add/set/get]
+    description: NonVisualDrawingProperties Name (used for stable @name addressing).
+    example: --prop name=SalesData
+    example: --prop name=Summary
+    readback: name string
+  cols   int   [add/get]
+    description: number of columns (ignored if 'data' is supplied).
+    example: --prop cols=3
+    readback: integer column count from first row
+  data   string   [add]
+    description: inline CSV-ish data ('H1,H2;R1C1,R1C2') or CSV file/URL/data-URI resolvable by FileSource. Both forms are quote-aware: wrap a cell in double quotes to keep a comma (or a row separator) inside it, and double the quote to write a literal one.
+    example: --prop data="A,B;1,2"
+    example: --prop data='Name,Age;"Doe, John",30'
+    readback: n/a (seeds cells at Add time)
+  rows   int   [add/get]
+    description: number of rows (ignored if 'data' is supplied).
+    example: --prop rows=3
+    readback: integer row count
+  width   string   [add/set/get]
+    description: table width in twips (Dxa) or percent ('50%' → Pct).
+    example: --prop width=10cm
+    example: --prop width=9000
+    readback: Dxa twips or pct50ths
+  style   string   [add/set/get]   aliases: tableStyle, tableStyleId
+    description: table style name or GUID (accepted aliases: tableStyle, tableStyleId). Valid names: medium1..4, light1..3, dark1..2, none, or a direct {GUID}.
+    values: medium1, medium2, medium3, medium4, light1, light2, light3, dark1, dark2, none
+    example: --prop style=medium2
+    example: --prop style=light1
+    example: --prop style=dark1
+    readback: style name when resolvable, else GUID
+
+Children:
+  row  (1..n)  /tr
+  column  (1..n)  /col
+
+Note: GraphicFrame wrapping Drawing.Table. Seed data inline via `data` (semicolons split rows, commas split cells) or per-cell via `r{R}c{C}` props. `get /slide[N]/table[K]` defaults to --depth=1 (table + row stubs only; large tables at depth=2 dominate the response). Use --depth 2 or address cells directly via `/slide[N]/table[K]/row[R]/cell[C]`. A table-level `fill=COLOR` fans the fill out to every cell (there is no separate table-level fill readback — read the per-cell fill).

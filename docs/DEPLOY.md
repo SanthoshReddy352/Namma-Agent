@@ -30,8 +30,9 @@ definition.
 
 All server paths use the same one-line installer
 ([`deploy/install.sh`](../deploy/install.sh)): system user, venv, a 2 GB swap
-file on small boxes, a systemd service that survives reboots, and a generated
-access token.
+file on small boxes, **Ollama + the `all-minilm` embedding model** (required —
+it powers semantic memory recall; ~350 MB disk, ~150 MB RAM), a systemd service
+that survives reboots, and a generated access token.
 
 ### Docker quick path
 

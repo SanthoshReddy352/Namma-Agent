@@ -13,7 +13,10 @@ One run = a pass of independent, individually-budgeted steps that make memory
   5. **reflect**    — a few higher-level `insight` memories are written from the
                       recent facts + episodes (Generative-Agents style)
   6. **compact**    — a core-memory block over 80% budget is densified
-  7. **environment**— the L5 host model is re-probed (new drives/tools show up)
+  7. **audit**      — a batch of live facts is scored for durable, user-relevant
+                      value (Memory Quality), catching a write pipeline that is
+                      storing noise — which recall@k structurally cannot see
+  8. **environment**— the L5 host model is re-probed (new drives/tools show up)
 
 Every model call goes through the writer's provider getter — the model the user
 selected in Settings — and shares the writer's hourly budget. Every step is
@@ -34,7 +37,7 @@ from typing import Callable, Optional
 from namma_agent.core.docscan import scan_text
 from namma_agent.core.engram.core_memory import BLOCK_BUDGET_CHARS, CoreMemory
 from namma_agent.core.engram.environment import EnvironmentMemory
-from namma_agent.core.engram.store import EngramStore
+from namma_agent.core.engram.store import EngramStore, _content_words, _overlap
 from namma_agent.core.engram.writer import EngramWriter
 from namma_agent.core.logger import logger
 
@@ -66,6 +69,22 @@ SKILLS. Return ONLY a JSON array (max 1 element, [] when nothing qualifies):
   "steps": ["<step 1>", "<step 2>", ...]}]
 Be very conservative — a skill is only worth drafting when the SAME workflow
 clearly repeats. When unsure, return []."""
+
+_QUALITY_SYSTEM = """You audit the long-term memory of a personal AI assistant.
+Score each numbered memory for how much it is worth keeping as durable knowledge
+about the USER:
+
+  2 = durable and reusable — identity, a standing preference, a person in their
+      life, a long-lived project, a constraint the assistant would be wrong to
+      forget
+  1 = plausibly useful but narrow, dated, or easily re-derived
+  0 = not knowledge about the user at all — what the ASSISTANT did in some past
+      session, raw tool or command output (hostnames, CPU models, disk sizes,
+      package versions, file listings), or a transient detail of one task
+
+Judge only what the text says; do not infer extra context. Return ONLY a JSON
+array of integers, one per memory, in the SAME ORDER and the same length as the
+input. No prose."""
 
 _COMPACT_SYSTEM = """You curate the small always-in-context core memory of a
 personal AI assistant. Rewrite the entries below into FEWER, DENSER single-line
@@ -99,7 +118,7 @@ class Consolidator:
                  skill_usage_fn: Optional[Callable[[], dict]] = None,
                  skill_disable_fn: Optional[Callable[[str], None]] = None,
                  half_life_days: float = 30.0, archive_floor: float = 0.05,
-                 event_horizon_days: float = 90.0):
+                 event_horizon_days: float = 90.0, quality_batch: int = 30):
         self.store = store
         self.core = core
         self.writer = writer
@@ -112,6 +131,9 @@ class Consolidator:
         self.half_life_days = float(half_life_days)
         self.archive_floor = float(archive_floor)
         self.event_horizon_days = float(event_horizon_days)
+        #: Rows audited per run. One model call covers the batch, so this trades
+        #: how fast the whole store gets scored against per-run token cost.
+        self.quality_batch = int(quality_batch)
         self._run_lock = threading.Lock()
 
     # -- the run ---------------------------------------------------------------
@@ -133,13 +155,20 @@ class Consolidator:
                 ("skill_drafts", self._step_skill_drafts),
                 ("skills_reinforced", self._step_skill_usage),
                 ("core_compacted", self._step_compact_core),
+                ("memory_quality", self._step_memory_quality),
                 ("environment_refreshed", self._step_environment),
             ):
                 try:
-                    report[name] = step()
+                    value = step()
                 except Exception as exc:  # noqa: BLE001 — a step never kills the run
                     logger.warning("[engram] consolidate step %s failed: %s", name, exc)
-                    report[name] = 0
+                    value = 0
+                # Most steps report a single count; the quality audit reports a
+                # small group of figures, so a dict is merged in whole.
+                if isinstance(value, dict):
+                    report.update(value)
+                else:
+                    report[name] = value
             self.store.record_consolidation(report, reason=reason)
             return {"ok": True, "at": _now_iso(), "reason": reason, **report}
         finally:
@@ -175,7 +204,11 @@ class Consolidator:
         return promoted
 
     def _step_merge(self) -> int:
-        return self.store.merge_exact_duplicates() + self.store.merge_triple_duplicates()
+        return (self.store.merge_exact_duplicates()
+                + self.store.merge_triple_duplicates()
+                # Insights have no s/p/o triple and are never byte-identical, so
+                # neither pass above can ever touch them — they need their own.
+                + self.store.merge_similar_insights())
 
     def decay_score(self, item: dict) -> float:
         """Ebbinghaus-style retention: importance × reinforcement × recency."""
@@ -224,17 +257,24 @@ class Consolidator:
         data = self.writer._call_json(_REFLECT_SYSTEM, user)
         if not isinstance(data, list):
             return 0
-        existing = {" ".join(f["text"].lower().split())
-                    for f in self.store.list_items(kind="insight", limit=200)}
+        # Dedup on content overlap, not exact text: the model rewords the same
+        # observation every run, so an exact-match check let near-duplicates
+        # ("deeply invested in AI/AGI development…") pile up indefinitely.
+        existing = [_content_words(f["text"])
+                    for f in self.store.list_items(kind="insight", limit=200)]
         written = 0
         for text in data[:3]:
             text = " ".join(str(text or "").strip().split())
-            if not text or " ".join(text.lower().split()) in existing:
+            if not text:
+                continue
+            words = _content_words(text)
+            if any(_overlap(words, prev) >= 0.6 for prev in existing):
                 continue
             if scan_text(text).flagged:
                 continue
             self.store.add_item(text, kind="insight", importance=0.6,
                                 source="consolidator:reflect")
+            existing.append(words)   # also dedup within this same batch
             written += 1
         return written
 
@@ -268,8 +308,13 @@ class Consolidator:
             body = "## Steps\n" + "\n".join(f"{i}. {s}" for i, s in enumerate(steps, 1))
             if scan_text(desc + "\n" + body).flagged:
                 continue
-            slug = skills._slug(name)
-            if skills.get(slug) is not None:    # never overwrite an existing skill
+            # Never overwrite an existing skill — and never add a second one for a
+            # job the catalog already does (an exact-slug check missed every
+            # rename the drafter came up with).
+            covered = skills.find_similar(name, desc)
+            if covered is not None:
+                logger.debug("[consolidate] skill draft %r skipped — %r covers it",
+                             name, covered.name)
                 continue
             skill = skills.create(name, desc, body, category="draft",
                                   tags=["draft", "consolidator"])
@@ -326,6 +371,39 @@ class Consolidator:
             compacted += 1
         return compacted
 
+    def _step_memory_quality(self) -> dict:
+        """Audit what memory actually CONTAINS, not just what it can retrieve.
+
+        Recall@k — our only prior metric — seeds its own clean dataset and then
+        measures retrieval over it, so a write pipeline storing pure noise still
+        scores perfectly. This pass closes that blind spot: an LLM judge scores a
+        batch of live rows 0-2 for durable, user-relevant value, and the mean
+        (normalized to 0..1) is the paper-comparable Memory Quality figure.
+
+        One model call per run for the whole batch, sharing the writer's hourly
+        budget. Scores land on the rows themselves so the facts browser can
+        surface the junk, not just count it.
+        """
+        batch = self.store.unaudited_items(limit=self.quality_batch)
+        if batch:
+            listing = "\n".join(f"#{i + 1}: {it['text'][:300]}"
+                                for i, it in enumerate(batch))
+            data = self.writer._call_json(_QUALITY_SYSTEM, f"MEMORIES:\n{listing}")
+            # A length mismatch means the judge lost alignment — scoring rows
+            # against the wrong text would be worse than not scoring at all.
+            if isinstance(data, list) and len(data) == len(batch):
+                for item, raw in zip(batch, data):
+                    try:
+                        score = max(0.0, min(2.0, float(raw))) / 2.0
+                    except (TypeError, ValueError):
+                        continue
+                    self.store.set_quality(item["id"], score)
+        stats = self.store.quality_stats()
+        return {"memory_quality": stats["memory_quality"],
+                "quality_scored": stats["scored"],
+                "quality_junk": stats["junk"],
+                "reinforced_pct": stats["reinforced_pct"]}
+
     def _step_environment(self) -> int:
         self.environment.get(refresh=True)
         return 1
@@ -351,19 +429,43 @@ class ConsolidationScheduler:
         # start never causes a model-burning pass by itself (daily still covers
         # the nightly one, and manual runs are always available).
         self._last_run = time.time()
-        # If today's daily time is already past at boot, don't fire it late —
-        # the daily trigger only fires when the clock crosses it while running.
+        # If today's daily time is already past at boot, normally don't fire it
+        # late. But a desktop app is usually started AFTER 03:30 and closed
+        # before the next one, so that rule alone meant the daily pass never ran
+        # at all. Suppress it only when memory was actually consolidated
+        # recently; otherwise let it fire as a catch-up on the next tick.
         self._last_daily_date: Optional[str] = None
         if self.daily_at:
             try:
                 hh, mm = (int(x) for x in self.daily_at.split(":", 1))
                 now = datetime.now()
-                if (now.hour, now.minute) >= (hh, mm):
+                if (now.hour, now.minute) >= (hh, mm) and self._ran_recently():
                     self._last_daily_date = now.strftime("%Y-%m-%d")
             except ValueError:
                 pass
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
+
+    #: A recorded run newer than this counts as "today's pass already happened".
+    CATCHUP_AFTER_H = 20.0
+
+    def _ran_recently(self) -> bool:
+        """True when a consolidation was recorded within ``CATCHUP_AFTER_H``.
+        Never raises — an unreadable history just means we allow the catch-up."""
+        try:
+            last = self.consolidator.store.latest_consolidation()
+        except Exception:  # noqa: BLE001
+            return False
+        if not last or not last.get("at"):
+            return False
+        try:
+            then = datetime.fromisoformat(str(last["at"]))
+        except ValueError:
+            return False
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+        age_h = (datetime.now(timezone.utc) - then).total_seconds() / 3600
+        return age_h < self.CATCHUP_AFTER_H
 
     # -- signals -----------------------------------------------------------------
 

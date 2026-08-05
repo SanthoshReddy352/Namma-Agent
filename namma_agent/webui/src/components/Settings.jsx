@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { applyUpdate, checkUpdate, clearMemory, deletePersona, deleteRoutine, deleteWatcher, exportPack, fetchAutostart, setAutostart, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchMcp, fetchMemorySettings, fetchModels, fetchSelfReview, fetchStatus, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listRoutines, listSkills, listTools, listWatchers, packDownloadUrl, reloadMcp, resolveProposal, runRoutine, runSelfReview, runWatcher, savePersona, saveConfiguredModels, saveConfiguredProviders, saveMemorySettings, saveSettings, setChannelTrust, setPersona, startComms, stopComms, fetchSecurityOverview, migrateSecrets, toggleMcpServer, toggleRoutine, toggleSkill, toggleTool, toggleToolset, toggleWatcher, uninstallApp } from "../api.js";
+import { applyUpdate, checkUpdate, clearMemory, deleteCheckpoint, listCheckpoints, restoreCheckpoint, deletePersona, deleteRoutine, deleteSkill, deleteWatcher, exportPack, fetchAutostart, setAutostart, fetchCommsStatus, fetchConfiguredModels, fetchConfiguredProviders, fetchEnvStatus, fetchLearningSettings, saveLearningSettings, fetchMcp, fetchMemorySettings, memoryPending, resolveMemoryPending, fetchModels, fetchSelfReview, fetchStatus, fetchWhatsappQR, relinkWhatsapp, fetchModelsForProvider, fetchPackItems, fetchPersona, fetchPersonas, fetchProviders, fetchSettings, fetchVersion, generatePersona, inspectPack, installPack, listRoutines, listSkills, listTools, listWatchers, packDownloadUrl, reloadMcp, resolveProposal, runRoutine, runSelfReview, runWatcher, savePersona, saveConfiguredModels, saveConfiguredProviders, saveMemorySettings, saveSettings, setChannelTrust, setPersona, startComms, stopComms, fetchSecurityOverview, migrateSecrets, toggleMcpServer, toggleRoutine, toggleSkill, toggleTool, toggleToolset, toggleWatcher, uninstallApp } from "../api.js";
 import { COMPLETION_PRESETS, SOUND_EVENTS, completionPreset, previewPreset, setCompletionPreset, setSoundEventEnabled, setSoundVolume, setSoundsEnabled, soundEventEnabled, soundVolume, soundsEnabled } from "../sounds.js";
-import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
+import { NOTIFY_EVENTS, notifyEnabled, notifyEventEnabled, notifyStatus, sendTestNotification, setNotifyEnabled, setNotifyEventEnabled } from "../notify.js";
 
 // Suggest an .env variable name for a provider's key. ONLY the native providers
 // (OpenAI/Anthropic/Google) use their conventional shared var; every OpenAI-
@@ -40,7 +40,7 @@ const TAB_GROUPS = [
   { label: "Capabilities", tabs: ["Skills", "Toolsets", "Routines", "Watchers", "Packs", "Browser"] },
   { label: "Channels", tabs: ["Messaging"] },
   { label: "MCP", tabs: ["Config", "Servers"] },
-  { label: "System", tabs: ["Memory", "Security", "Learning", "Status", "About"] },
+  { label: "System", tabs: ["Memory", "Security", "Checkpoints", "Learning", "Status", "About"] },
 ];
 const TABS = TAB_GROUPS.flatMap((g) => g.tabs);
 
@@ -61,6 +61,7 @@ const TAB_ICONS = {
   Servers: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01",
   Memory: "M4 7a8 4 0 0016 0 8 4 0 00-16 0v10a8 4 0 0016 0M4 12a8 4 0 0016 0",
   Security: "M12 3l7 3v5c0 4.5-3 8.5-7 10-4-1.5-7-5.5-7-10V6zM9 12l2 2 4-4",
+  Checkpoints: "M3 12a9 9 0 109-9 9 9 0 00-6.4 2.7L3 8m0-5v5h5",
   Learning: "M4 19V5a2 2 0 012-2h13v14H6a2 2 0 00-2 2zm0 0a2 2 0 002 2h13M9 7h6",
   Routines: "M12 3a9 9 0 100 18 9 9 0 000-18zM12 7v5l3.5 2",
   Watchers: "M2 12s3.5-6.5 10-6.5S22 12 22 12s-3.5 6.5-10 6.5S2 12 2 12zM12 9.5a2.5 2.5 0 100 5 2.5 2.5 0 000-5z",
@@ -235,6 +236,106 @@ const agoTs = (ts) => {
   return `${Math.round(mins / 1440)} d ago`;
 };
 
+// Phase 7b — restore points. The approval gate asks BEFORE a destructive tool
+// runs (and needs you to predict the consequence); this is the other half:
+// undo a change you already said yes to.
+function CheckpointsTab() {
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState("");        // id being restored
+  const [confirmId, setConfirmId] = useState("");
+  const [report, setReport] = useState(null);
+
+  const load = () => listCheckpoints().then(setData);
+  useEffect(() => { load(); }, []);
+
+  const doRestore = async (id) => {
+    setConfirmId(""); setBusy(id); setReport(null);
+    const r = await restoreCheckpoint(id);
+    setBusy("");
+    setReport(r);
+    load();
+  };
+  const doDelete = async (id) => { await deleteCheckpoint(id); load(); };
+
+  const items = data?.items || [];
+  const status = data?.status || {};
+  const fmtTime = (iso) => (iso || "").replace("T", " ").slice(0, 16);
+  const fileName = (p) => (p || "").split(/[\\/]/).pop();
+
+  return (
+    <>
+      <Section title="Restore points"
+               hint="Before a tool changes files, the assistant snapshots them here. Restoring puts them back. You can also just say “undo that” in chat.">
+        {data === null && <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>}
+        {items.length === 0 && data !== null && (
+          <div className="text-[13px] text-ink-soft dark:text-night-faint">
+            Nothing to undo — no tool has changed files yet.
+          </div>
+        )}
+        {report && (
+          <div className={`rounded-xl border px-3.5 py-2.5 text-[12.5px] ${report.ok ? "border-emerald-500/40 text-emerald-700 dark:text-emerald-400" : "border-amber-500/50 text-amber-700 dark:text-amber-400"}`}>
+            {report.ok
+              ? `Restored ${report.restored?.length || 0} path(s)${report.deleted?.length ? `, removed ${report.deleted.length} created path(s)` : ""}.`
+              : `Partly restored. Could not put back: ${(report.failed || []).map((f) => `${fileName(f.path)} (${f.why})`).join("; ")}`}
+          </div>
+        )}
+        {items.map((it) => (
+          <div key={it.id}
+               className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5 flex items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[13.5px] font-medium text-ink dark:text-night-ink truncate">{it.tool}</span>
+                <span className="text-[11.5px] rounded-full border border-line dark:border-night-line px-2 py-0.5 text-ink-faint dark:text-night-faint shrink-0">
+                  {it.entries?.length || 0} path{(it.entries?.length || 0) === 1 ? "" : "s"}
+                </span>
+                {it.restored_at && (
+                  <span className="text-[11.5px] rounded-full px-2 py-0.5 shrink-0 text-emerald-700 dark:text-emerald-400 border border-emerald-500/40">restored</span>
+                )}
+                {(it.entries || []).some((e) => e.truncated) && (
+                  <span className="text-[11.5px] rounded-full px-2 py-0.5 shrink-0 text-amber-700 dark:text-amber-400 border border-amber-500/40"
+                        title="Something here was too large to copy — a restore can only do part of it.">partial</span>
+                )}
+              </div>
+              <div className="text-[12px] text-ink-faint dark:text-night-faint truncate">
+                {fmtTime(it.created_at)} · {(it.entries || []).map((e) => fileName(e.path)).slice(0, 4).join(", ")}
+              </div>
+            </div>
+            {confirmId === it.id ? (
+              <button onClick={() => doRestore(it.id)}
+                      className="shrink-0 px-2.5 py-1 rounded-lg text-[12.5px] text-white" style={{ background: "#0f766e" }}>
+                Restore?
+              </button>
+            ) : (
+              <button onClick={() => setConfirmId(it.id)} disabled={busy === it.id}
+                      className="shrink-0 px-2.5 py-1 rounded-lg border border-line dark:border-night-line text-[12.5px] hover:border-brand/60 disabled:opacity-50">
+                {busy === it.id ? "Restoring…" : "Undo"}
+              </button>
+            )}
+            <button onClick={() => doDelete(it.id)}
+                    className="shrink-0 px-2.5 py-1 rounded-lg border text-[12.5px] hover:bg-[#dc2626]/10"
+                    style={{ borderColor: "#dc262666", color: "#dc2626" }}>
+              Forget
+            </button>
+          </div>
+        ))}
+      </Section>
+
+      <Section title="Storage"
+               hint="Restore points are pruned automatically — oldest first — so they can't fill your disk.">
+        <div className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5 text-[12.5px] text-ink-soft dark:text-night-faint">
+          {status.count || 0} restore point{status.count === 1 ? "" : "s"} · {status.total_mb || 0} MB
+          of {status.max_total_mb || 0} MB · kept {status.max_age_days || 0} days
+          {status.enabled === false && " · DISABLED in config"}
+        </div>
+        <div className="text-[12px] text-ink-faint dark:text-night-faint leading-relaxed">
+          Shell commands are not covered: what an arbitrary command will touch can't be
+          known from the command itself, and a half-promise of undo would be worse than none.
+        </div>
+      </Section>
+    </>
+  );
+}
+
 function RoutinesTab() {
   const [items, setItems] = useState(null);
   const [busy, setBusy] = useState(0);        // id being run
@@ -402,13 +503,35 @@ function StatCard({ label, value, prev, fmt = numFmt }) {
   );
 }
 
+// Mon=0 … Sun=6 — the same convention as the routines scheduler.
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
 function LearningTab() {
   const [data, setData] = useState(null);
+  const [cfg, setCfg] = useState(null);        // {self_review:{…}, learning:{…}}
+  const [draft, setDraft] = useState({});      // unsaved text/number edits
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
 
   const load = () => fetchSelfReview().then((r) => { if (r) setData(r); });
-  useEffect(() => { load(); }, []);
+  const loadCfg = () => fetchLearningSettings().then((r) => {
+    if (r) { setCfg({ self_review: r.self_review, learning: r.learning }); setDraft({}); }
+  });
+  useEffect(() => { load(); loadCfg(); }, []);
+
+  // Every knob writes config.local.yaml and applies live — the runners start and
+  // stop with the toggle, so nothing here needs a restart (or a hand-edited file).
+  const save = async (settings) => {
+    const r = await saveLearningSettings(settings);
+    if (r?.ok) {
+      setCfg({ self_review: r.self_review, learning: r.learning });
+      setDraft({});
+      setErr("");
+    } else {
+      setErr(r?.error || "Couldn't save that setting.");
+    }
+  };
 
   const doRun = async () => {
     setBusy(true); setMsg("");
@@ -424,28 +547,89 @@ function LearningTab() {
     load();
   };
 
-  if (!data) return <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>;
+  if (!data || !cfg) return <div className="text-[13px] text-ink-faint dark:text-night-faint">Loading…</div>;
   const snaps = data.snapshots || [];
   const cur = snaps[snaps.length - 1] || {};
   const prev = snaps[snaps.length - 2] || {};
   const pending = (data.proposals || []).filter((p) => p.status === "pending");
   const resolved = (data.proposals || []).filter((p) => p.status !== "pending");
+  const sr = cfg.self_review || {};
+  const room = cfg.learning || {};
+  const atDraft = draft.at ?? sr.at ?? "18:00";
+  const daysDraft = draft.nudge_after_days ?? String(room.nudge_after_days ?? 3);
 
   return (
     <>
-      <Section title="What I learned"
-               hint="A weekly self-review mines your sessions (failures, corrections, repeated workflows), measures memory recall offline, and drafts proposals — nothing is ever applied without your yes.">
+      <Section title="Weekly self-review"
+               hint="Once a week Namma Agent mines its own sessions (tool failures, corrections you made, repeated workflows), measures memory recall offline, and writes you a report with proposals. Changes apply live — no restart.">
+        <Toggle label="Run the review every week and deliver the report"
+                checked={!!sr.enabled}
+                onChange={(v) => save({ self_review: { enabled: v } })} />
+        <Field label="Day">
+          <Select value={WEEKDAYS[sr.weekday ?? 6]}
+                  onChange={(v) => save({ self_review: { weekday: WEEKDAYS.indexOf(v) } })}
+                  options={WEEKDAYS} />
+        </Field>
+        <Field label="Time (HH:MM)">
+          <div className="flex items-center gap-2">
+            <Input value={atDraft}
+                   onChange={(v) => setDraft((d) => ({ ...d, at: v }))}
+                   placeholder="18:00" />
+            {draft.at != null && draft.at !== (sr.at ?? "") && (
+              <button className={_btn + " text-[12.5px] shrink-0"}
+                      onClick={() => save({ self_review: { at: draft.at.trim() } })}>Apply</button>
+            )}
+          </div>
+        </Field>
+        <div className="text-[12px] text-ink-faint dark:text-night-faint">
+          {sr.enabled
+            ? `Weekly runs on — next ${WEEKDAYS[sr.weekday ?? 6]} at ${sr.at || "18:00"} (${sr.runner_running ? "runner active" : "runner idle; fires while the app is running"}).`
+            : "Weekly runs are off. The manual run below always works — turn this on once you like what it produces."}
+        </div>
         <div className="flex items-center gap-3 flex-wrap">
           <button onClick={doRun} disabled={busy}
                   className="px-3 py-1.5 rounded-lg border border-line dark:border-night-line text-[12.5px] hover:border-brand/60 disabled:opacity-50">
             {busy ? "Reviewing…" : "Run review now"}
           </button>
           <span className="text-[12px] text-ink-faint dark:text-night-faint">
-            {data.enabled
-              ? `Weekly runs on (${data.runner_running ? "runner active" : "runner idle"})`
-              : "Weekly runs are off — set self_review.enabled: true in config.yaml once you like a manual run."}
+            One pass over the last 7 days — costs a single model call.
           </span>
         </div>
+        {err && <div className="text-[12.5px] text-amber-600 dark:text-amber-400">{err}</div>}
+      </Section>
+
+      <Section title="Learning Room"
+               hint="How the teacher agent follows up outside the chat: a ping when you finish a module, and a spaced-practice nudge when a topic goes cold.">
+        <Toggle label="Tell me over messaging when I complete a module"
+                checked={!!room.notify_progress}
+                onChange={(v) => save({ learning: { notify_progress: v } })} />
+        <Field label="Nudge me about idle topics after (days)">
+          <div className="flex items-center gap-2">
+            <Input type="number" min="0" value={daysDraft}
+                   onChange={(v) => setDraft((d) => ({ ...d, nudge_after_days: v }))} />
+            {draft.nudge_after_days != null
+              && draft.nudge_after_days !== String(room.nudge_after_days ?? 3) && (
+              <button className={_btn + " text-[12.5px] shrink-0"}
+                      onClick={() => {
+                        const n = parseFloat(draft.nudge_after_days);
+                        if (!Number.isNaN(n)) save({ learning: { nudge_after_days: n } });
+                      }}>Apply</button>
+            )}
+          </div>
+        </Field>
+        <div className="text-[12px] text-ink-faint dark:text-night-faint">
+          {(room.nudge_after_days ?? 0) <= 0
+            ? "Nudges are off (0 days)."
+            : !room.background_on
+              ? "Set scheduler.run_in_background to let the nudge thread run — it's off, so nothing is polling."
+              : !room.comms_ready
+                ? "Add a messaging channel under Settings → Messaging — there's nowhere to send a nudge yet."
+                : `Nudges ${room.nudger_running ? "are running" : "will start with the next check"} — a topic is reminded at most once per window.`}
+        </div>
+      </Section>
+
+      <Section title="What I learned"
+               hint="The latest report and the metric trend behind it. Nothing here is ever applied without your yes.">
         {msg && <div className="text-[12.5px] text-ink-soft dark:text-night-faint">{msg}</div>}
         {snaps.length > 0 && (
           <div className="flex flex-wrap gap-2.5">
@@ -742,6 +926,7 @@ export default function Settings({ onClose, theme, onThemeToggle, themeName, onT
                 {tab === "Memory" && <MemorySettingsTab wipe={wipe} cleared={cleared} />}
 
                 {tab === "Security" && <SecurityTab />}
+                {tab === "Checkpoints" && <CheckpointsTab />}
 
                 {tab === "Routines" && <RoutinesTab />}
                 {tab === "Watchers" && <WatchersTab />}
@@ -945,6 +1130,8 @@ function SecurityTab() {
   const q = data.quarantine || {};
   const quarantineCount = (q.memory?.length || 0) + (q.documents?.length || 0) + (q.web?.length || 0);
   const sandbox = data.sandbox || {};
+  const urlguard = data.urlguard || {};
+  const shellBackend = data.shell_backend || {};
   const trustTone = { owner: "green", trusted: "amber", untrusted: "red" };
 
   async function migrate() {
@@ -968,6 +1155,7 @@ function SecurityTab() {
           <p>• Everything the AI fetches from the web is <b>screened for prompt injection</b>; suspicious pages are delivered wrapped in a warning, never silently.</p>
           <p>• Shell commands run inside an <b>OS sandbox</b> with resource caps, and destructive tools always need your approval (declines are recorded).</p>
           <p>• Tokens and API keys live in the <b>OS vault</b>, and known secret values are masked everywhere the AI (or the log) could repeat them.</p>
+          <p>• When the AI fetches a URL, it <b>can't reach into private networks</b> — your router, your NAS, or the cloud metadata service that hands out server credentials.</p>
         </div>
       </Section>
 
@@ -997,8 +1185,76 @@ function SecurityTab() {
               {sandbox.max_processes ? ` · ${sandbox.max_processes} procs` : ""}
             </span>
           </div>
+          <div className="px-3.5 py-2.5 flex items-center gap-2.5">
+            <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${shellBackend.backend === "local" ? "bg-line dark:bg-night-line" : shellBackend.state === "running" || shellBackend.backend === "ssh" ? "bg-emerald-500" : "bg-amber-400"}`} />
+            <span className="text-[13px] text-ink dark:text-night-ink">
+              {shellBackend.backend === "docker"
+                ? `Runs in a container (${shellBackend.container}${shellBackend.state ? ` · ${shellBackend.state}` : ""})`
+                : shellBackend.backend === "ssh"
+                  ? `Runs on ${shellBackend.host}`
+                  : "Runs on this machine"}
+            </span>
+            <span className="ml-auto text-[12px] text-ink-faint dark:text-night-faint text-right">
+              {shellBackend.caps || shellBackend.detail}
+            </span>
+          </div>
+        </SecCard>
+        {shellBackend.backend !== "local" && (
+          <div className="text-[12px] text-ink-faint dark:text-night-faint leading-relaxed">
+            The resource caps above bound the local {shellBackend.backend} client, not the
+            work itself — {shellBackend.backend === "docker"
+              ? "the container's own limits do that."
+              : "the remote host's own limits do that."}
+          </div>
+        )}
+      </Section>
+
+      <Section title="Web fetch guard"
+               hint="Stops a fetched URL reaching your private network — the confused-deputy case (an untrusted sender asking the AI to read an internal address).">
+        <SecCard>
+          <div className="px-3.5 py-2.5 flex items-center gap-2.5">
+            <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${urlguard.enabled ? "bg-emerald-500" : "bg-amber-400"}`} />
+            <span className="text-[13px] text-ink dark:text-night-ink">
+              {urlguard.enabled
+                ? "Private, loopback and cloud-metadata addresses are blocked"
+                : "Off — private addresses are reachable (allow_private_urls is on)"}
+            </span>
+            <span className="ml-auto text-[12px] text-ink-faint dark:text-night-faint">
+              {(urlguard.schemes || []).join("/") || "http/https"} only · redirects checked
+            </span>
+          </div>
         </SecCard>
       </Section>
+
+      {((data.extensions?.hooks?.count || 0) > 0
+        || (data.extensions?.user_tools || []).length > 0
+        || (data.extensions?.hooks?.errors || []).length > 0) && (
+        <Section title="Your extensions"
+                 hint="Code you added yourself, running in-process with the assistant. Listed here because it should never be invisible — even though you put it there.">
+          <SecCard>
+            {(data.extensions?.user_tools || []).map((n) => (
+              <div key={n} className="px-3.5 py-2 flex items-center gap-3">
+                <span className="text-[12.5px] font-mono text-ink dark:text-night-ink">{n}</span>
+                <span className="ml-auto"><SecChip tone="amber">custom tool</SecChip></span>
+              </div>
+            ))}
+            {(data.extensions?.hooks?.hooks || []).map((h) => (
+              <div key={h.name} className="px-3.5 py-2 flex items-center gap-3">
+                <span className="text-[12.5px] font-mono text-ink dark:text-night-ink">{h.name}</span>
+                <span className="text-[11.5px] text-ink-faint dark:text-night-faint">{h.events.join(", ")}</span>
+                <span className="ml-auto"><SecChip tone="amber">hook</SecChip></span>
+              </div>
+            ))}
+            {(data.extensions?.hooks?.errors || []).map((e) => (
+              <div key={e.name} className="px-3.5 py-2 flex items-center gap-3">
+                <span className="text-[12.5px] font-mono text-ink dark:text-night-ink">{e.name}</span>
+                <span className="text-[11.5px] text-amber-600 dark:text-amber-400 truncate">{e.error}</span>
+                <span className="ml-auto"><SecChip tone="red">failed to load</SecChip></span>
+              </div>
+            ))}
+          </SecCard>
+        </Section>
+      )}
 
       <Section title="Secrets vault"
                hint="Names only — values never leave the OS store. Known secret values are masked in tool output and logs.">
@@ -1112,13 +1368,21 @@ function NotificationsTab() {
   const [notifEvents, setNotifEvents] = useState(
     () => Object.fromEntries(NOTIFY_EVENTS.map((e) => [e.id, notifyEventEnabled(e.id)])));
   const [testMsg, setTestMsg] = useState("");
+  // Whether the OS will actually render a toast — surfaced up front so a machine
+  // with notifications switched off says so, instead of silently showing nothing.
+  const [osStatus, setOsStatus] = useState(null); // {available, reason}
+
+  useEffect(() => { notifyStatus().then(setOsStatus); }, []);
 
   const flipNotif = (v) => { setNotif(v); setNotifyEnabled(v); };
   const flipNotifEvent = (id, v) => { setNotifEvents((e) => ({ ...e, [id]: v })); setNotifyEventEnabled(id, v); };
   const test = async () => {
-    const ok = await sendTestNotification();
-    setTestMsg(ok ? "Sent — check your desktop." : "Couldn't show a notification on this device.");
-    setTimeout(() => setTestMsg(""), 5000);
+    const { ok, reason } = await sendTestNotification();
+    notifyStatus().then(setOsStatus);  // the user may have just fixed it
+    setTestMsg(ok
+      ? "Sent — check your desktop."
+      : (reason || "Your OS wouldn't show it — displayed in the app instead."));
+    setTimeout(() => setTestMsg(""), 8000);
   };
 
   // ── Sounds ──
@@ -1139,6 +1403,11 @@ function NotificationsTab() {
       <Block title="Desktop notifications"
              hint="Native pop-ups from your OS when a reply is ready or your assistant needs you — they reach you even when the window is in the background.">
         <ToggleCard rows={[{ id: "master", label: "Enable notifications", checked: notif, onChange: flipNotif }]} />
+        {osStatus && !osStatus.available && osStatus.reason && (
+          <div className="rounded-lg border border-amber-400/50 bg-amber-50 dark:bg-amber-500/10 px-3 py-2 text-[12px] text-ink-soft dark:text-night-faint">
+            {osStatus.reason} Until then, notifications appear as banners inside the app.
+          </div>
+        )}
         <div className="space-y-2">
           <div className="text-[12px] font-medium text-ink-soft dark:text-night-faint">Notify me about</div>
           <ToggleCard disabled={!notif}
@@ -1799,13 +2068,33 @@ function SkillsTab() {
     setBusy((b) => ({ ...b, [s.name]: false }));
   }
 
+  // Review queue: approving a draft is just enabling it (it joins the catalog and
+  // stops being a proposal); discarding deletes the SKILL.md from disk.
+  async function approve(s) {
+    setBusy((b) => ({ ...b, [s.name]: true }));
+    const r = await toggleSkill(s.name, true);
+    if (r?.ok)
+      setSkills((list) => list.map((x) =>
+        x.name === s.name ? { ...x, enabled: true, draft: false, category: "general" } : x));
+    setBusy((b) => ({ ...b, [s.name]: false }));
+  }
+
+  async function discard(s) {
+    setBusy((b) => ({ ...b, [s.name]: true }));
+    const r = await deleteSkill(s.name);
+    if (r?.ok) setSkills((list) => list.filter((x) => x.name !== s.name));
+    else setBusy((b) => ({ ...b, [s.name]: false }));
+  }
+
   if (!skills) return <div className="text-ink-faint dark:text-night-faint">Loading…</div>;
 
+  const drafts = skills.filter((s) => s.draft);
+  const draftsOpen = open.__drafts ?? true;   // the queue is the point — open by default
   const needle = q.trim().toLowerCase();
-  const shown = skills.filter((s) =>
+  const shown = skills.filter((s) => !s.draft && (
     !needle || s.name.toLowerCase().includes(needle) ||
     (s.description || "").toLowerCase().includes(needle) ||
-    (s.category || "").toLowerCase().includes(needle));
+    (s.category || "").toLowerCase().includes(needle)));
   const byCat = {};
   for (const s of shown) (byCat[s.category || "general"] ||= []).push(s);
   const cats = Object.keys(byCat).sort();
@@ -1817,6 +2106,44 @@ function SkillsTab() {
                hint={`Procedural playbooks the assistant can load mid-task. ${enabledCount} of ${skills.length} enabled. Turn one off to keep it out of the assistant's catalog.`}>
         <Input value={q} onChange={setQ} placeholder="Search skills…" />
       </Section>
+
+      {drafts.length > 0 && (
+        <div>
+          <GroupHeader open={draftsOpen} onToggle={() => setOpen((o) => ({ ...o, __drafts: !draftsOpen }))}
+                       label="drafts awaiting review" count={drafts.length} />
+          {draftsOpen && (<>
+          <div className="text-[12.5px] text-ink-faint dark:text-night-faint mb-2">
+            Workflows the assistant noticed repeating and wrote up as playbooks. They stay
+            out of its catalog until you approve one.
+          </div>
+          <div className="space-y-1.5">
+            {drafts.map((s) => (
+              <div key={s.name} className={`${_box} flex items-start justify-between gap-3`}>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-medium">{s.name}</span>
+                    <SkillBadge tone="warn">draft</SkillBadge>
+                  </div>
+                  {s.description && (
+                    <div className="text-[12.5px] text-ink-faint dark:text-night-faint mt-0.5">{s.description}</div>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button type="button" disabled={!!busy[s.name]} onClick={() => approve(s)}
+                          className="px-2.5 py-1 rounded-md text-[12.5px] font-medium bg-brand text-white disabled:opacity-50">
+                    Approve
+                  </button>
+                  <button type="button" disabled={!!busy[s.name]} onClick={() => discard(s)}
+                          className="px-2.5 py-1 rounded-md text-[12.5px] border border-line dark:border-night-line text-ink-faint dark:text-night-faint disabled:opacity-50">
+                    Discard
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+          </>)}
+        </div>
+      )}
 
       {cats.length === 0 && <div className="text-ink-faint dark:text-night-faint text-[13px]">No skills match “{q}”.</div>}
 
@@ -2164,6 +2491,73 @@ function McpServersTab() {
 // the LIVE engine via /api/memory/settings (persisted to config.local.yaml).
 // There is no separate memory backend to configure — external memory MCP
 // servers are ordinary plugins under MCP → Servers.
+// Phase 7c — the write-approval queue. Only rendered while the toggle is on.
+function PendingFactsQueue({ onResolved }) {
+  const [items, setItems] = useState(null);
+  const [busy, setBusy] = useState("");
+
+  const load = () => memoryPending().then((r) => setItems(r?.items || []));
+  useEffect(() => { load(); }, []);
+
+  const resolve = async (opts, key) => {
+    setBusy(key);
+    await resolveMemoryPending(opts);
+    setBusy("");
+    await load();
+    onResolved?.();
+  };
+
+  if (items === null) return <div className="text-[12.5px] text-ink-faint dark:text-night-faint">Loading…</div>;
+  if (items.length === 0) {
+    return (
+      <div className="text-[12.5px] text-ink-soft dark:text-night-faint">
+        Nothing waiting. New inferred facts will show up here for review.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2">
+        <span className="text-[12.5px] text-ink-soft dark:text-night-faint">
+          {items.length} waiting
+        </span>
+        <button className={_btn + " ml-auto text-[12.5px]"} disabled={busy === "all-yes"}
+                onClick={() => resolve({ all: true, approve: true }, "all-yes")}>
+          Approve all
+        </button>
+        <button className={_btn + " text-[12.5px]"} disabled={busy === "all-no"}
+                onClick={() => resolve({ all: true, approve: false }, "all-no")}>
+          Reject all
+        </button>
+      </div>
+      {items.map((it) => (
+        <div key={it.id} className="rounded-xl border border-line dark:border-night-line px-3.5 py-2.5">
+          <div className="text-[13px] text-ink dark:text-night-ink">{it.text}</div>
+          {it.replaces && (
+            <div className="text-[12px] text-amber-600 dark:text-amber-400 mt-1">
+              Would replace: “{it.replaces}”
+            </div>
+          )}
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-[11.5px] text-ink-faint dark:text-night-faint">
+              {it.kind} · {(it.source || "chat")} · {(it.created_at || "").replace("T", " ").slice(0, 16)}
+            </span>
+            <button className={_btn + " ml-auto text-[12.5px]"} disabled={busy === it.id}
+                    onClick={() => resolve({ item_id: it.id, approve: true }, it.id)}>
+              Keep
+            </button>
+            <button className={_btn + " text-[12.5px]"} disabled={busy === it.id}
+                    onClick={() => resolve({ item_id: it.id, approve: false }, it.id)}>
+              Discard
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MemorySettingsTab({ wipe, cleared }) {
   const [cfg, setCfg] = useState(null);
   const [msg, setMsg] = useState(null);
@@ -2230,6 +2624,20 @@ function MemorySettingsTab({ wipe, cleared }) {
         {numField("budget_per_hour", "Write budget (model calls / hour)",
                   "Hard cap on background memory-pipeline model calls, so learning can never run away with your quota.", 1)}
         {msg && <div className={`text-[12.5px] ${msg.ok ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>{msg.text}</div>}
+      </Section>
+
+      <Section title="Review what I learn"
+               hint="Off by default — the agent learns as you talk, which is the point. Turn it on and every fact it INFERRED on its own waits here for your yes/no; explicit “remember this” saves are never gated, since you already decided those.">
+        <Toggle label="Hold inferred facts for my approval before they become memory"
+                checked={!!cfg.write_approval}
+                onChange={(v) => apply({ write_approval: v })} />
+        {cfg.write_approval && <PendingFactsQueue onResolved={load} />}
+        {!cfg.write_approval && cfg.pending_count > 0 && (
+          <div className="text-[12.5px] text-amber-600 dark:text-amber-400">
+            {cfg.pending_count} fact(s) are still waiting from when this was on — turn it
+            back on to review them.
+          </div>
+        )}
       </Section>
 
       <Section title="Self-improvement"

@@ -7,6 +7,7 @@ import Settings from "./components/Settings.jsx";
 import PasswordPrompt from "./components/PasswordPrompt.jsx";
 import ImageViewer from "./components/ImageViewer.jsx";
 import UpdateBanner from "./components/UpdateBanner.jsx";
+import NotifyToasts from "./components/NotifyToasts.jsx";
 import { installClipboardShortcuts } from "./clipboard.js";
 import { setNotifyAppName } from "./notify.js";
 import ChatView from "./views/ChatView.jsx";
@@ -121,6 +122,9 @@ function Shell() {
         <UpdateBanner />
         <Outlet context={ctx} />
       </div>
+
+      {/* In-app fallback banners for notifications the OS wouldn't display. */}
+      <NotifyToasts />
 
       {/* Tool approval is no longer a global modal — it renders inline in the chat's
           activity timeline (Hermes-style), handled in Timeline/Activity. */}

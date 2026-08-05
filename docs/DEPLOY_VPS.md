@@ -46,9 +46,51 @@ Telegram path dials out and needs none.
 curl -fsSL https://raw.githubusercontent.com/SanthoshReddy352/Namma-Agent/main/deploy/install.sh | sudo bash
 ```
 
-It prints nine numbered steps (packages → swap file on small boxes → code →
-venv → UI build → lite config → **access token** → systemd service) and ends
-with the token + next steps. Copy the token somewhere safe.
+It prints ten numbered steps (packages → swap file on small boxes → code →
+venv → **memory embeddings** → UI build → lite config → **access token** →
+systemd service) and ends with the token + next steps. Copy the token somewhere
+safe.
+
+### About step 5 — memory embeddings (required)
+
+The installer adds [Ollama](https://ollama.com) and pulls `all-minilm`, the
+embedding model behind the memory's semantic recall. Without it, memory search
+is keyword-only and misses paraphrases — "what is my mother tongue?" never
+reaches the stored fact that says *Telugu*.
+
+This step is **required**: if Ollama can't be installed or the model can't be
+pulled, the installer stops with instructions rather than leaving you with a
+half-working memory.
+
+|  | |
+|---|---|
+| Disk | ~350 MB (Ollama ~300 MB + the 46 MB model) |
+| RAM | ~150 MB resident while serving |
+| Speed | ~10 ms per query on 2 cores |
+| Cost | none — it never leaves the box |
+
+That fits the 1 GB Oracle reference box beside the agent. Ollama's installer
+registers a systemd unit, so it comes back after a reboot with no extra work.
+
+On a box that genuinely cannot run it (air-gapped, or too tight even for
+150 MB), opt out explicitly:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/SanthoshReddy352/Namma-Agent/main/deploy/install.sh | sudo bash -s -- --no-embeddings
+```
+
+Nothing else breaks when you do: recall falls back to BM25 keyword search, the
+embedder circuit-breaks after one failed call so a missing endpoint costs
+nothing per turn, and Settings → Memory shows **Vector recall: off**. To enable
+it later:
+
+```bash
+ollama pull all-minilm
+```
+
+On a roomier box, `nomic-embed-text` (274 MB, 768-dim, ~500 MB resident)
+retrieves better — pull it and set `memory.embeddings.model` in
+`namma_agent/config.local.yaml`.
 
 Add your AI key and restart:
 

@@ -114,6 +114,16 @@ def stage_app():
             p.unlink()
             print(f"  (stripped {leak} from the bundle)", flush=True)
 
+    # `data/` is RUNTIME state — the chat DB, uploads, media, and the weekly
+    # self-review's report/snapshots/proposals. None of it belongs in an install:
+    # it's one machine's data, and it made every fresh install open Settings →
+    # Learning on somebody else's "what I learned this week". The app recreates
+    # the directory on first launch, so drop whatever git handed us.
+    data = APP / "data"
+    if data.exists():
+        shutil.rmtree(data, ignore_errors=True)
+        print("  (stripped data/ — runtime state never ships)", flush=True)
+
 
 def stage_runtime():
     """Windows only: produce a relocatable CPython with all app deps pre-installed, so

@@ -29,6 +29,22 @@ def test_recent_turns_limit_and_order():
     assert [t["content"] for t in turns] == ["m15", "m16", "m17", "m18", "m19"]
 
 
+def test_recent_turns_drops_empty_assistant_rows():
+    """An interrupted/failed turn can leave a content-less assistant row in the
+    DB; replaying it would poison the next request (endpoints reject assistant
+    messages with neither content nor tool_calls)."""
+    db = _db()
+    sid = db.create_session()
+    db.add_turn(sid, "user", "do the thing")
+    db.add_turn(sid, "assistant", "")           # the poisoned row
+    db.add_turn(sid, "assistant", "done", tools_used=["echo"])
+    turns = db.recent_turns(sid, limit=10)
+    assert turns == [
+        {"role": "user", "content": "do the thing"},
+        {"role": "assistant", "content": "done"},
+    ]
+
+
 def test_facts_upsert_and_get():
     db = _db()
     db.save_fact("Name", "Tricky")

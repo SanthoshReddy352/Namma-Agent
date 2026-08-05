@@ -507,6 +507,9 @@ def test_rest_security_overview():
     assert overview["trust"]["telegram"] == "owner"
     assert overview["sandbox"]["mechanism"] in ("job-object", "rlimits")
     assert "names" in overview["secrets"] and "backend" in overview["secrets"]
+    # Phase 7a: the fetch guard reports its posture here too.
+    assert overview["urlguard"]["enabled"] is True
+    assert overview["urlguard"]["allow_private_urls"] is False
 
     mem = overview["quarantine"]["memory"]
     assert any(m["status"] == "untrusted" and "admin" in m["text"] for m in mem)
@@ -520,3 +523,50 @@ def test_rest_security_overview():
     assert declined["ok"] is False and declined["destructive"] is True
     ran = next(a for a in audit if a["tool"] == "read_file")
     assert ran["ok"] is True and ran["destructive"] is False
+
+
+def test_rest_checkpoints_list_restore_delete(tmp_path, monkeypatch):
+    """Phase 7b: the undo surface — list restore points, put files back, forget."""
+    from namma_agent.core.checkpoints import CheckpointStore
+
+    svc = _service([])
+    svc.checkpoints = CheckpointStore(tmp_path / "cp")
+
+    target = tmp_path / "notes.txt"
+    target.write_text("original", encoding="utf-8")
+    checkpoint = svc.checkpoints.snapshot("sess", "write_file", {"path": str(target)})
+    target.write_text("clobbered", encoding="utf-8")
+
+    client = TestClient(create_app(svc))
+
+    listing = client.get("/api/checkpoints").json()
+    assert listing["ok"] is True
+    assert listing["status"]["count"] == 1
+    assert listing["items"][0]["tool"] == "write_file"
+
+    report = client.post(f"/api/checkpoints/{checkpoint.id}/restore").json()
+    assert report["ok"] is True
+    assert target.read_text(encoding="utf-8") == "original"
+
+    assert client.delete(f"/api/checkpoints/{checkpoint.id}").json()["ok"] is True
+    assert client.get("/api/checkpoints").json()["items"] == []
+
+
+def test_rest_restore_unknown_checkpoint_is_an_error(tmp_path):
+    from namma_agent.core.checkpoints import CheckpointStore
+
+    svc = _service([])
+    svc.checkpoints = CheckpointStore(tmp_path / "cp")
+    client = TestClient(create_app(svc))
+    body = client.post("/api/checkpoints/nope/restore").json()
+    assert body["ok"] is False and "nope" in body["error"]
+
+
+def test_background_status_reports_checkpoints(tmp_path):
+    from namma_agent.core.checkpoints import CheckpointStore
+
+    svc = _service([])
+    svc.checkpoints = CheckpointStore(tmp_path / "cp")
+    status = TestClient(create_app(svc)).get("/api/status").json()
+    assert status["checkpoints"]["enabled"] is True
+    assert status["checkpoints"]["count"] == 0

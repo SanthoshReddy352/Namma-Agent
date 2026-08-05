@@ -135,6 +135,119 @@ def test_merge_triple_duplicates_folds_rephrasings():
 
 # ── promote & reflect (model steps) ───────────────────────────────────────────
 
+def test_quality_audit_scores_items_and_reports_mq():
+    """The blind spot recall@k cannot see: whether what's STORED is worth
+    storing. The judge returns 0-2 per row; MQ is the mean normalized to 0..1."""
+    # The audit batch is newest-first, so a regression in the write pipeline is
+    # caught on the next run rather than after the whole store is re-scored.
+    # Scores therefore line up with reverse insertion order.
+    cons, store, core, provider, env = _consolidator(payloads=[[2, 0, 1]])
+    good = store.add_item("Santhosh is allergic to shellfish", kind="preference")
+    junk = store.add_item("The assistant delivered 8 diagrams last session")
+    newest = store.add_item("The user has Docker Desktop installed")
+    report = cons._step_memory_quality()
+    assert report["quality_scored"] == 3
+    assert report["memory_quality"] == round((1.0 + 0.0 + 0.5) / 3, 3)
+    assert report["quality_junk"] == 1
+    assert store.get_item(newest)["quality"] == 1.0   # judged 2
+    assert store.get_item(junk)["quality"] == 0.0     # judged 0
+    assert store.get_item(good)["quality"] == 0.5     # judged 1
+
+
+def test_quality_audit_ignores_a_misaligned_judge_response():
+    """A wrong-length array means the judge lost track of the ordering. Scoring
+    rows against the wrong text is worse than leaving them unscored."""
+    cons, store, *_ = _consolidator(payloads=[[2, 1]])   # 2 scores, 3 rows
+    ids = [store.add_item(f"fact number {i}") for i in range(3)]
+    report = cons._step_memory_quality()
+    assert all(store.get_item(i)["quality"] is None for i in ids)
+    assert report["quality_scored"] == 0 and report["memory_quality"] is None
+
+
+def test_quality_audit_costs_nothing_when_everything_is_audited():
+    cons, store, core, provider, env = _consolidator(payloads=[[2], []])
+    store.add_item("Santhosh studies at KARE")
+    cons._step_memory_quality()
+    before = provider.calls
+    cons._step_memory_quality()          # nothing new to audit
+    assert provider.calls == before
+
+
+def test_low_quality_items_are_reviewable_worst_first():
+    cons, store, *_ = _consolidator()
+    a = store.add_item("The assistant ran a shell command")
+    b = store.add_item("Namma-agent's hostname is namma-agent")
+    c = store.add_item("Santhosh is from Nellore")
+    # 0.5 ("plausibly useful") is deliberately NOT in the purge queue — only
+    # rows the judge scored below that are worth reviewing.
+    store.set_quality(a, 0.0); store.set_quality(b, 0.25); store.set_quality(c, 0.5)
+    rows = store.low_quality_items()
+    assert [r["id"] for r in rows] == [a, b]      # the 0.5 row is not listed
+    assert rows[0]["quality"] <= rows[1]["quality"]
+
+
+def test_quality_stats_tracks_the_maintenance_signal():
+    """Reinforcement is the paper's R_memory 'maintenance' term — all-frequency-1
+    memory means nothing is ever being confirmed a second time."""
+    cons, store, *_ = _consolidator()
+    a = store.add_item("one"); store.add_item("two"); store.add_item("three")
+    assert store.quality_stats()["reinforced_pct"] == 0.0
+    store.reinforce(a)
+    assert store.quality_stats()["reinforced_pct"] == round(1 / 3, 3)
+
+
+def test_run_merges_the_quality_dict_into_the_report():
+    """Most steps report one count; the audit reports several figures, so run()
+    merges a dict instead of nesting it."""
+    cons, store, *_ = _consolidator(payloads=[[2]])
+    store.add_item("Santhosh is from Nellore")
+    report = cons.run(reason="test")
+    for key in ("memory_quality", "quality_scored", "quality_junk", "reinforced_pct"):
+        assert key in report
+    assert store.latest_consolidation()["quality_scored"] == 1
+
+
+def test_merge_similar_insights_folds_rewordings():
+    """Insights carry no s/p/o triple and are never byte-identical, so neither
+    existing merge pass could ever touch them — reflection restated the same
+    observation every run and they piled up."""
+    cons, store, *_ = _consolidator()
+    a = store.add_item("The user is deeply invested in AI/AGI development, consistently "
+                       "working on projects like Namma and AGI, utilizing LM Studio "
+                       "and Docker", kind="insight")
+    store.add_item("The user demonstrates a deep, methodical investment in AI/AGI "
+                   "development, consistently working on projects like Namma and AGI "
+                   "while utilizing LM Studio and Docker for implementation",
+                   kind="insight")
+    store.add_item("The user is allergic to shellfish and prefers metric units",
+                   kind="insight")
+    assert store.merge_similar_insights() == 1
+    live = store.list_items(kind="insight")
+    assert len(live) == 2                       # the unrelated one survives
+    assert any(i["frequency"] == 2 for i in live)
+    assert store.get_item(a)["superseded_by"]   # history kept, not deleted
+
+
+def test_merge_similar_insights_leaves_distinct_ones_alone():
+    cons, store, *_ = _consolidator()
+    store.add_item("The user prefers step-by-step explanations with code first",
+                   kind="insight")
+    store.add_item("The user schedules deep work in the early morning", kind="insight")
+    assert store.merge_similar_insights() == 0
+    assert len(store.list_items(kind="insight")) == 2
+
+
+def test_reflect_dedups_rewordings_not_just_exact_text():
+    cons, store, core, provider, env = _consolidator(
+        payloads=[["The user is deeply invested in AI and AGI development work"]],
+        summaries=["talked about AGI"])
+    store.add_item("The user demonstrates a deep investment in AI and AGI "
+                   "development work overall", kind="insight")
+    for i in range(4):
+        store.add_item(f"fact {i} about the user's projects")
+    assert cons._step_reflect() == 0             # reworded restatement rejected
+
+
 def test_promote_runs_candidates_through_pipeline():
     cand = {"text": "The user started a new job at ACME", "kind": "fact",
             "subject": "user", "predicate": "works_at", "object": "ACME",
@@ -251,10 +364,31 @@ def test_daily_trigger_fires_once_per_day():
     assert s.due(now=time.time(), local_now=next_day) == "daily"
 
 
-def test_daily_not_fired_late_on_boot():
-    """Booting after today's daily time must not trigger a catch-up run."""
-    s = ConsolidationScheduler(_consolidator()[0], idle_minutes=0, daily_at="00:00")
+def test_daily_not_fired_late_on_boot_when_already_consolidated():
+    """Booting after today's daily time must not re-run it when memory was
+    already consolidated recently."""
+    cons, store, *_ = _consolidator()
+    store.record_consolidation({"merged": 0}, reason="daily")   # just now
+    s = ConsolidationScheduler(cons, idle_minutes=0, daily_at="00:00")
     assert s.due(now=time.time(), local_now=datetime.now()) is None
+
+
+def test_daily_catches_up_when_last_run_is_stale():
+    """A desktop app is normally started after 03:30 and closed before the next
+    one — suppressing the late daily unconditionally meant it never ran at all.
+    With no recent run recorded, boot must schedule a catch-up pass."""
+    cons, store, *_ = _consolidator()
+    s = ConsolidationScheduler(cons, idle_minutes=0, daily_at="00:00")
+    assert s.due(now=time.time(), local_now=datetime.now()) == "daily"
+
+    # ...and an old run counts as stale exactly like no run at all.
+    cons2, store2, *_ = _consolidator()
+    store2.record_consolidation({"merged": 0}, reason="daily")
+    old = (datetime.now(timezone.utc) - timedelta(hours=30)).isoformat()
+    store2.conn.execute("UPDATE consolidation_runs SET at=?", (old,))
+    store2.conn.commit()
+    s2 = ConsolidationScheduler(cons2, idle_minutes=0, daily_at="00:00")
+    assert s2.due(now=time.time(), local_now=datetime.now()) == "daily"
 
 
 # ── time travel: as_of graph ──────────────────────────────────────────────────

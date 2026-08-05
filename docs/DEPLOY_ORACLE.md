@@ -93,13 +93,16 @@ Paste this at the server prompt and press Enter:
 curl -fsSL https://raw.githubusercontent.com/SanthoshReddy352/Namma-Agent/main/deploy/install.sh | sudo bash
 ```
 
-What you'll see, step by step (it prints `== 1/9 …` through `== 9/9 …`):
+What you'll see, step by step (it prints `== 1/10 …` through `== 10/10 …`):
 system packages, then **a 2 GB swap file** (borrowed disk that acts as
 overflow memory — the 1 GB box's survival step; the UI build leans on it),
-the code, Python packages, the web UI build (the slowest part — a few
-minutes; it's fine), a memory-friendly config profile, a generated **access
-token**, and a **systemd service** (Ubuntu's "keep this program running and
-restart it after reboots" manager).
+the code, Python packages, **the memory embedding model** (Ollama + the 46 MB
+`all-minilm` — this is what lets the agent recall things you phrase
+differently later; it's installed for you and the install stops if it fails),
+the web UI build (the slowest part — a few minutes; it's fine), a
+memory-friendly config profile, a generated **access token**, and a **systemd
+service** (Ubuntu's "keep this program running and restart it after reboots"
+manager).
 
 At the end it prints:
 

@@ -9,8 +9,14 @@ Neutral message schema (what the agent builds and passes around):
 
     {"role": "system",    "content": str}
     {"role": "user",      "content": str}
-    {"role": "assistant", "content": str, "tool_calls": [ToolCall, ...]}   # tool_calls optional
+    {"role": "assistant", "content": str, "tool_calls": [ToolCall, ...],
+                          "reasoning_content": str}   # tool_calls & reasoning optional
     {"role": "tool",      "tool_call_id": str, "name": str, "content": str}
+
+Reasoning models (DeepSeek-R1, …) return chain-of-thought in a separate
+`reasoning_content` field. The agent keeps it on the assistant turn it records
+and providers echo it back to the API — several endpoints 400 if a previous
+assistant message is resent without it.
 
 Neutral tool schema (what ToolRegistry emits; providers translate it):
 
@@ -80,6 +86,10 @@ class LLMResponse:
 
     content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
+    # Chain-of-thought the model emitted alongside `content` (DeepSeek-R1 &
+    # friends). Kept out of `content`; echoed back to the API on the next loop
+    # step, since reasoning endpoints reject history that drops it.
+    reasoning_content: str = ""
     usage: dict = field(default_factory=dict)
     finish_reason: str = ""
     provider: str = ""

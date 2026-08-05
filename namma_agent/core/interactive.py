@@ -57,6 +57,29 @@ def get_current_session() -> Optional[str]:
     return _SESSION.get()
 
 
+# The Provider driving the in-flight turn — i.e. the model the user picked for
+# THIS chat. Set by the service around every turn so tools that spin up their own
+# agent (delegate_task / background_task) run the sub-agent on the same working
+# brain, instead of the boot-time `provider:` chain, which on a profile-only setup
+# holds no credentials at all and made every delegation fail instantly.
+_PROVIDER: "contextvars.ContextVar[Any]" = (
+    contextvars.ContextVar("namma_agent_provider", default=None)
+)
+
+
+def set_current_provider(provider: Any):
+    """Set the turn's provider; returns a token for ``reset_current_provider``."""
+    return _PROVIDER.set(provider)
+
+
+def reset_current_provider(token) -> None:
+    _PROVIDER.reset(token)
+
+
+def get_current_provider() -> Any:
+    return _PROVIDER.get()
+
+
 # Turn-local event sink: lets a tool push a typed event straight to the browser
 # (e.g. an interactive quiz card or a "learn this" suggestion). Set per turn by the
 # service to the WebSocket sink; None outside a turn / for headless callers.

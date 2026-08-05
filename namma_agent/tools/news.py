@@ -14,6 +14,7 @@ import xml.etree.ElementTree as ET
 from namma_agent.core.docscan import screen_web_text
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
+from namma_agent.core.urlguard import check_url, guarded_opener
 
 _FEEDS: dict[str, list[str]] = {
     "technology": ["https://feeds.arstechnica.com/arstechnica/index",
@@ -29,8 +30,11 @@ _TIMEOUT = 10
 
 
 def _fetch_feed(url: str, limit: int) -> list[dict]:
-    req = urllib.request.Request(url, headers={"User-Agent": _USER_AGENT})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:  # noqa: S310
+    # The feeds above are public and hardcoded, so the guard can never block a
+    # legitimate one — it is here so a custom feed added later inherits the
+    # Phase 7a policy for free (and so redirects stay checked).
+    req = urllib.request.Request(check_url(url), headers={"User-Agent": _USER_AGENT})
+    with guarded_opener().open(req, timeout=_TIMEOUT) as resp:
         raw = resp.read(1_000_000)
     root = ET.fromstring(raw)
     items = []

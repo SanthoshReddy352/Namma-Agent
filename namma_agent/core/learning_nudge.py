@@ -114,9 +114,21 @@ class LearningNudger:
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
 
+    @property
+    def after_days(self) -> float:
+        return self._after_days
+
+    @property
+    def running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
+
     def start(self) -> None:
-        if self._thread is not None:
+        # Restartable: Settings → Learning can turn nudges off and back on without
+        # a relaunch, so a stopped nudger must be able to run again (clear the
+        # event, drop the dead thread) instead of silently staying off forever.
+        if self.running:
             return
+        self._stop.clear()
         self._thread = threading.Thread(target=self._loop, name="LearningNudger", daemon=True)
         self._thread.start()
         logger.info("[learning-nudge] started (idle > %.1f day(s), check every %.0fs)",
@@ -124,6 +136,7 @@ class LearningNudger:
 
     def stop(self) -> None:
         self._stop.set()
+        self._thread = None
 
     def _loop(self) -> None:
         while not self._stop.wait(self._interval):

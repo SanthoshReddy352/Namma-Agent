@@ -113,6 +113,28 @@ _VERIFY_NUDGE = (
     "tools, say so explicitly. Then give the final answer."
 )
 
+_EMPTY_NUDGE = (
+    "[system] Your previous response was empty — no text and no tool calls, as "
+    "if the output was cut off (a reasoning model can exhaust its token budget "
+    "thinking). Continue the task where you left off and produce a real response."
+)
+
+
+def _assistant_turn(resp, content=None, **extra) -> dict:
+    """Neutral assistant message for the working history.
+
+    Preserves the model's separate-field reasoning (``reasoning_content``) so a
+    later loop step can echo it back — reasoning endpoints (DeepSeek-R1 & friends)
+    reject history where a previous assistant turn dropped it.
+    """
+    m: dict = {"role": "assistant",
+               "content": resp.content if content is None else content,
+               **extra}
+    reasoning = getattr(resp, "reasoning_content", "") or ""
+    if reasoning:
+        m["reasoning_content"] = reasoning
+    return m
+
 
 # References to our media mount. The ONLY legitimate source of these is a
 # successful render_diagram / fetch_image / render_simulation tool result (the
@@ -393,8 +415,10 @@ class Agent:
         emit: Optional[EmitFn] = None,
         skills=None,
         engram=None,
+        skill_capture=None,
         compact_history: bool = True,
         verify_after_writes: bool = True,
+        checkpoints=None,
     ):
         self.provider = provider
         self.registry = registry
@@ -417,6 +441,10 @@ class Agent:
         # model in every prompt, fused prefetch per turn, and the always-on write
         # pipeline after each turn. None for sub-agents/bare tests.
         self.engram = engram
+        # Procedural learning's actual trigger (core/skill_capture.py): after each
+        # turn, a converged tool workflow becomes a drafted skill. The prompt-only
+        # "remember to call create_skill" nudge never once fired on its own.
+        self.skill_capture = skill_capture
         # Rolling context compaction: long sessions keep a running summary of the
         # turns that fell off the history window, injected into the prompt so the
         # model never silently loses the middle of a long conversation.
@@ -426,6 +454,9 @@ class Agent:
         # One-shot "verify your file change before answering" nudge (see
         # _VERIFY_CATEGORIES / _VERIFY_NUDGE).
         self.verify_after_writes = bool(verify_after_writes)
+        # Phase 7b: CheckpointStore (or None). Snapshots the files a destructive
+        # write-ish tool is about to change so the turn can be rolled back.
+        self.checkpoints = checkpoints
 
     # -- sessions ----------------------------------------------------------
 
@@ -587,6 +618,10 @@ class Agent:
         # whether the one-shot nudge already fired this turn.
         needs_verify = False
         verify_nudged = False
+        # Reasoning models can burn their whole output-token budget thinking
+        # (finish_reason "length" with zero visible tokens). Ending the turn on
+        # that would deliver a blank bubble mid-task — nudge once to continue.
+        empty_nudged = False
 
         step = 0
         while True:
@@ -614,6 +649,30 @@ class Agent:
             _accumulate_usage(usage, resp.usage)
 
             if not resp.has_tool_calls:
+                # The model answered with NOTHING — no text and no tool calls.
+                # On a reasoning endpoint this is what an exhausted output-token
+                # budget looks like (finish_reason "length" after a long
+                # chain-of-thought). Finalizing there silently drops the task
+                # mid-way, so nudge once to continue; a second empty response is
+                # surfaced as an explicit error instead of a blank bubble.
+                if not resp.content.strip() and not empty_nudged:
+                    empty_nudged = True
+                    logger.warning(
+                        "[turn] model returned an empty response (finish=%r) "
+                        "after %d step(s) — nudging to continue",
+                        resp.finish_reason or "?", step)
+                    # Deliberately NOT recording the assistant turn: an
+                    # assistant message with no content and no tool calls is
+                    # rejected by endpoints ("content or tool_calls must be
+                    # set"). The dead-end empty turn adds nothing to history.
+                    messages.append({"role": "user", "content": _EMPTY_NUDGE})
+                    continue
+                if not resp.content.strip():
+                    logger.error("[turn] model returned an empty response twice — failing the turn")
+                    raise ProviderError(
+                        "The model returned an empty response twice in a row (its "
+                        "output-token budget may be exhausted by reasoning). "
+                        "Try again, raise max_tokens, or switch model in Settings.")
                 # Self-verification: about to finalize with an unverified file
                 # write → ONE nudge to check the change, then loop once more. The
                 # unverified draft stays visible as a progress line (preamble),
@@ -629,7 +688,9 @@ class Agent:
                                           "visible": visible_now})
                         if live_on_token is not None and visible_now:
                             live_on_token("\n\n")
-                    messages.append({"role": "assistant", "content": resp.content})
+                        # Only a real (non-empty) assistant turn enters history —
+                        # a content-less one is rejected by the endpoints.
+                        messages.append(_assistant_turn(resp))
                     messages.append({"role": "user", "content": _VERIFY_NUDGE})
                     continue
                 final_content = resp.content
@@ -667,7 +728,7 @@ class Agent:
                         live_on_token("\n\n")
 
             # Record the assistant's tool-call turn in the working message list.
-            messages.append({"role": "assistant", "content": resp.content, "tool_calls": resp.tool_calls})
+            messages.append(_assistant_turn(resp, tool_calls=resp.tool_calls))
 
             for tc in resp.tool_calls:
                 tools_used.append(tc.name)
@@ -698,6 +759,10 @@ class Agent:
                         continue
                 logger.info("[tool] → %s %s", tc.name, _short_args(tc.args))
                 emit("tool_started", {"session_id": session_id, "tool": tc.name, "args": tc.args})
+                # Phase 7b: snapshot the files this call may change BEFORE it
+                # runs, so the user can undo an approval they regret. Never
+                # blocks the tool — a failed snapshot returns None.
+                checkpoint_id = self._checkpoint_before(session_id, tool, tc.args)
                 result = self.registry.execute(tc.name, tc.args)
                 logger.info("[tool] ← %s %s%s", tc.name, "ok" if result.ok else "FAIL",
                             "" if result.ok else f": {result.error[:120]}")
@@ -710,10 +775,16 @@ class Agent:
                     elif not tool.destructive and needs_verify:
                         needs_verify = False
                 self.db.log_audit(session_id, tc.name, tc.args, result.as_message_content(), result.ok)
+                # A checkpoint taken for a call that then FAILED protects nothing
+                # — drop it so the Undo list only offers real changes.
+                if checkpoint_id and not result.ok:
+                    self._discard_checkpoint(checkpoint_id)
+                    checkpoint_id = ""
                 emit("tool_finished", {
                     "session_id": session_id, "tool": tc.name,
                     "ok": result.ok, "summary": result.as_message_content()[:200],
                     "output": result.as_message_content()[:_STEP_OUTPUT_CAP],
+                    "checkpoint": checkpoint_id,
                 })
                 # Surface generated media (diagram/image/simulation) inline in the
                 # visible answer — these tools return ready-to-render markdown +
@@ -792,7 +863,12 @@ class Agent:
         # steps + thinking shown under the reply (kept out of meta when there's none).
         if steps:
             turn_meta = {**(turn_meta or {}), "steps": steps}
-        self.db.add_turn(session_id, "assistant", final_content, tools_used, meta=turn_meta)
+        # A turn that produced no content is never persisted — an empty
+        # assistant row would poison this session's message history on reload
+        # (providers reject content-less assistant turns).
+        if final_content.strip():
+            self.db.add_turn(session_id, "assistant", final_content, tools_used,
+                             meta=turn_meta)
         # Always-on learning: the turn enters Engram's write pipeline (background,
         # salience-gated — most turns extract nothing and cost nothing durable).
         # Untrusted senders never write memory — their salient turns are
@@ -801,6 +877,11 @@ class Agent:
             self.engram.writer.ingest_turn(user_input, final_content,
                                            source=f"chat:{session_id[:8]}",
                                            trusted=not untrusted)
+        # Procedural learning: if this turn's tool run is a workflow that has now
+        # recurred, draft it as a (disabled) skill for the review queue. Gated and
+        # backgrounded inside; a no-op for turns that used few or no tools.
+        if self.skill_capture is not None:
+            self.skill_capture.consider(tools_used)
         # Rolling context compaction: fold turns that just fell off the history
         # window into the session's running summary (background, off the reply path).
         if self.compact_history:
@@ -808,6 +889,10 @@ class Agent:
         emit("turn_completed", {
             "session_id": session_id, "content": final_content, "tools_used": tools_used,
         })
+        # Phase 7e: user hooks see the completed turn. Fired last, after the
+        # reply is final — a hook can log or notify, never change the answer.
+        from namma_agent.core.hooks import registry as _hooks
+        _hooks().post_turn(session_id, user_input, final_content)
         return AgentResult(content=final_content, session_id=session_id,
                            tools_used=tools_used, usage=usage, ttft=ttft["t"],
                            steps=steps)
@@ -863,6 +948,30 @@ class Agent:
         summary = (getattr(resp, "content", "") or "").strip()
         if summary:
             self.db.set_compaction(session_id, summary[:4000], pending[-1]["id"])
+
+    # -- checkpoints (Phase 7b) ----------------------------------------------
+
+    def _checkpoint_before(self, session_id: str, tool, args: dict) -> str:
+        """Snapshot the files ``tool(args)`` may change; return the checkpoint id
+        (or "" when nothing was saved). Only destructive tools from write-ish
+        toolsets qualify — see ``checkpoints.WRITE_CATEGORIES`` for why shell is
+        deliberately excluded."""
+        if self.checkpoints is None or tool is None or not tool.destructive:
+            return ""
+        from namma_agent.core.checkpoints import WRITE_CATEGORIES
+
+        if (tool.category or "") not in WRITE_CATEGORIES:
+            return ""
+        cp = self.checkpoints.snapshot(session_id, tool.name, args, tool.parameters)
+        return cp.id if cp else ""
+
+    def _discard_checkpoint(self, checkpoint_id: str) -> None:
+        if self.checkpoints is None or not checkpoint_id:
+            return
+        try:
+            self.checkpoints.delete(checkpoint_id)
+        except Exception as exc:  # noqa: BLE001 — cleanup must never break a turn
+            logger.debug("[checkpoint] discard %s failed: %s", checkpoint_id, exc)
 
     # -- helpers -----------------------------------------------------------
 
@@ -1016,7 +1125,7 @@ class Agent:
                     logger.warning("[turn] visual-repair: model never called a render tool")
                     return ""
                 convo += [
-                    {"role": "assistant", "content": resp.content or "(no diagram)"},
+                    _assistant_turn(resp, content=resp.content or "(no diagram)"),
                     {"role": "user", "content": _VISUAL_REPAIR_INSTRUCTION},
                 ]
                 continue
@@ -1046,7 +1155,7 @@ class Agent:
             logger.info("[turn] visual-repair render failed, retrying: %s",
                         (result.error or "")[:160])
             convo += [
-                {"role": "assistant", "content": "", "tool_calls": [call]},
+                _assistant_turn(resp, content="", tool_calls=[call]),
                 {"role": "tool", "tool_call_id": call.id, "name": call.name,
                  "content": result.as_message_content() + "\n\n" + _VISUAL_RETRY_HINT},
             ]

@@ -123,6 +123,16 @@ persona: core              # loaded from personas/<id>.yaml
 skills:
   user_dir: ~/.namma_agent/skills      # where create_skill writes learned skills
   allow_inline_shell: false       # expand !`cmd` snippets inside SKILL.md (off by default)
+  # Post-turn capture — the trigger for procedural learning. After a turn, if the
+  # same multi-tool workflow has RECURRED (and no skill already covers it), one
+  # model call writes it up as a skill. Drafts are created DISABLED and wait in
+  # Settings → Skills under "drafts awaiting review" — never self-granted.
+  capture:
+    enabled: true
+    # min_tools: 3                # distinct tools in a turn before it counts as a workflow
+    # min_count: 2                # how many times it must recur to be drafted
+    # window_days: 14             # how far back recurrences are looked for
+    # cooldown_hours: 6           # minimum gap between drafts (bounds the model calls)
 
 # ── Browser (controlled, visible browser for real video playback + control) ──
 browser:
@@ -166,6 +176,24 @@ watchers:
   # poll_seconds: 60              # how often due watchers are checked
   # store_path: data/watchers.json
 
+# ── Checkpoints / undo (Phase 7b) ──────────────────────────────────
+# Before a tool CHANGES files (write_file, move/delete, organize, document
+# conversion), the paths it's about to touch are snapshotted to
+# data/checkpoints/. Ask "undo that" in chat, or use Settings → System →
+# Checkpoints to put them back. Approval asks BEFORE (and needs you to predict
+# the consequence); this is the other half — undo after the fact.
+# Shell commands are deliberately NOT checkpointed: what an arbitrary command
+# will touch can't be read off its arguments, and a half-promise of undo is
+# worse than none. Retention is bounded so the store can't fill your disk.
+checkpoints:
+  enabled: true
+  # max_file_mb: 32               # largest single file OR folder tree copied;
+  #                               # bigger ones are recorded as unrestorable
+  #                               # (a folder keeps a manifest, so moves inside
+  #                               # it can still be undone) — never silently
+  # max_total_mb: 512             # whole-store budget; oldest pruned first
+  # max_age_days: 14              # checkpoints older than this are dropped
+
 # ── Weekly self-review (Phase 3 — measured self-improvement) ────────
 # Mines the week's sessions (tool failures, corrections you made, repeated
 # workflows, threads left hanging), measures memory recall offline (mock eval,
@@ -173,13 +201,17 @@ watchers:
 # shows trends, and drafts skill/routine/watcher proposals you accept or reject
 # — never auto-applied. The WEEKLY run is off by default; the "Run review now"
 # button in Settings → System → Learning always works.
+# Everything below is editable from Settings → System → Learning (writes
+# config.local.yaml, starts/stops the runner live) — no need to hand-edit here.
+# data/self_review/ holds YOUR report, snapshots and proposals: local-only state,
+# never committed and never bundled into an install.
 self_review:
   enabled: false                  # true: run weekly + deliver the report over comms
   # weekday: 6                    # Sunday (Mon=0)
   # at: "18:00"
   # dir: data/self_review
 
-# ── Learning Room ───
+# ── Learning Room ───  (also in Settings → System → Learning)
 learning:
   notify_progress: true           # Telegram/Discord ping when a module completes (needs comms)
   nudge_after_days: 3             # "it's been a while" nudge for idle topics (0 disables;
@@ -273,12 +305,54 @@ security:
                                   # command timeout is the first line of defense)
     fsize_mb: 0                   # POSIX: largest file a child may create (0 = off)
     max_processes: 128            # Windows: active processes in the job (0 = off)
-  # ── Confined shell root (optional, off by default) ──
-  # When set, run_shell commands that reference absolute paths outside this
-  # folder (or run while cd'd outside it) require your explicit in-chat
-  # approval first. A tripwire against the agent wandering, not a jail.
+  # ── SSRF guard (Phase 7a) ──
+  # Tools that fetch a URL the MODEL chose (web_extract, web_crawl, the
+  # web_search fallback, get_news, image download) refuse targets that resolve
+  # into loopback / private / link-local / CGNAT / reserved space — above all
+  # the cloud instance-metadata service (169.254.169.254), which on a VPS hands
+  # out credentials to anything that can make an HTTP request. The check runs on
+  # the RESOLVED addresses and on every redirect hop, before any socket opens.
+  # This matters because fetching a page isn't "destructive", so an untrusted
+  # Slack/WhatsApp sender's turn keeps those tools (see comms.trust above).
+  # Set true ONLY if you want the agent to reach your own LAN devices (a NAS, a
+  # router, a local dev server) and you trust every sender that can reach it.
+  allow_private_urls: false
+  # ── Shell: where commands run + the confined root ──
   # shell:
+  #   # ── Confined shell root (optional, off by default) ──
+  #   # When set, run_shell commands that reference absolute paths outside this
+  #   # folder (or run while cd'd outside it) require your explicit in-chat
+  #   # approval first. A tripwire against the agent wandering, not a jail.
   #   confine_to: "D:\\AgentWork"
+  #
+  #   # ── Execution backend (Phase 7d) ──
+  #   # local (default)  — this machine, with the sandbox caps above. Resource
+  #   #                    caps are not isolation: an approved command still runs
+  #   #                    as you, on your files.
+  #   # docker           — a persistent hardened Linux container. THIS is real
+  #   #                    isolation, and the right answer if untrusted channels
+  #   #                    (Slack/WhatsApp) can reach your agent.
+  #   # ssh              — a remote host, over a key/agent you already set up
+  #   #                    (Namma never handles SSH passwords). Pairs with
+  #   #                    self-hosting: agent on the always-on box, work on your
+  #   #                    dev machine.
+  #   # A backend you choose that can't start FAILS with a clear error — it never
+  #   # silently falls back to running on your machine.
+  #   backend: local
+  #   docker:
+  #     container: namma-shell      # attach to this container
+  #     image: debian:bookworm-slim # …or create it from this image if missing
+  #     workspace: "D:\\AgentWork"  # the ONLY host folder mounted (at /workspace)
+  #     memory: 2g
+  #     cpus: "1.0"
+  #     pids_limit: 256
+  #     # network: none             # uncomment to cut the container off the net
+  #   ssh:
+  #     host: my-dev-box
+  #     user: santhosh
+  #     # port: 22
+  #     # key: ~/.ssh/id_ed25519
+  #     # cwd: /home/santhosh/work  # where the remote shell starts
   # nmap_binary: nmap
   # gobuster_binary: gobuster
   # dig_binary: dig
@@ -308,8 +382,12 @@ security:
 
 # ── MCP servers (optional — external Model Context Protocol tools) ──
 # Each server's tools appear as mcp_<server>_<tool> in the registry.
+# Servers you actually run belong in config.local.yaml (Settings → MCP writes it),
+# not here — this file is the checked-in default and must not carry machine paths.
 # mcp:
 #   servers:
+#     - name: excalidraw          # remote server, bridged to stdio by supergateway
+#       command: ["npx", "-y", "supergateway", "--streamableHttp", "https://exdraw-x.vercel.app/mcp"]
 #     - name: filesystem
 #       command: ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/home/me"]
 #     - name: git
@@ -325,15 +403,45 @@ security:
 # (writes config.local.yaml, applies live); values below are optional tuning.
 # An external memory MCP server (e.g. Cognee) can still be attached as a plain
 # plugin under mcp.servers — it is additive, never load-bearing.
-# memory:
+# Vector recall IS on by default (below) — the installers provision the model.
+memory:
+  # ── Write approval (Phase 7c) ──
+  # OFF by default: the agent learns as you talk, which is the point of Engram.
+  # Turn it ON and every fact the agent EXTRACTED ON ITS OWN lands in a review
+  # queue instead — not indexed, not embedded, never recalled — until you
+  # approve it in Settings → Memory. Explicit "remember this" writes are NOT
+  # gated: you already decided those. Use it when a wrong inference sticking
+  # around forever would cost you more than reviewing a short queue.
+  # Bonus: the approve/reject ratio is a real PRECISION number for auto-ingest
+  # — pair it with recall@k from the weekly self-review (docs/BENCHMARKS.md).
+  write_approval: false
+
+  embeddings:
+    # The semantic channel of fused recall: catches paraphrases BM25 cannot
+    # ("what is my mother tongue?" -> the fact that says Telugu). Any
+    # OpenAI-compatible /embeddings endpoint works (Ollama, LM Studio, OpenAI,
+    # Groq); the installers set up Ollama + all-minilm for you.
+    #
+    # all-minilm: 46 MB, 384-dim, ~150 MB resident, ~10 ms/query — small enough
+    # for a 1 GB VPS. nomic-embed-text (274 MB, 768-dim) retrieves better but
+    # needs ~500 MB; switch only on a roomier host.
+    #
+    # 127.0.0.1 and NOT localhost: localhost resolves to ::1 first while Ollama
+    # and LM Studio bind IPv4 only, which cost ~2 s per call (the client
+    # normalizes this anyway, but the config should be right on its face).
+    #
+    # If the endpoint is missing the channel simply stays dark: the embedder
+    # circuit-breaks after a failure, so recall falls back to BM25 keyword
+    # search at no per-turn cost. Set `model:` empty to disable it outright.
+    base_url: http://127.0.0.1:11434/v1
+    model: all-minilm
+    timeout_s: 10
+    # api_key_env: OPENAI_API_KEY        # only for remote endpoints
+
+# Remaining knobs are optional tuning — uncomment to override the defaults.
 #   write:
 #     salience_min_chars: 24   # user messages shorter than this are never extracted
 #     budget_per_hour: 60      # cap on memory-pipeline model calls per hour
-#   embeddings:                # OPTIONAL vector recall channel (catches paraphrases
-#     base_url: http://localhost:1234/v1   # any OpenAI-compatible /embeddings —
-#     model: text-embedding-nomic-embed-text-v1.5   # OpenAI, Groq, LM Studio, Ollama
-#     api_key_env: OPENAI_API_KEY          # not needed for localhost endpoints
-#                              # unset = recall stays BM25-only (works fine offline)
 #   recall:
 #     prefetch: true           # auto-inject relevant memory into each agent turn
 #     k: 5                     # max prefetched memories per turn
@@ -344,6 +452,11 @@ security:
 #     half_life_days: 30       # decay: how fast unreinforced facts fade
 #     archive_floor: 0.05      # decay score below which a fact is archived
 #     event_horizon_days: 90   # 'event' facts older than this expire on their own
+#     quality_batch: 30        # facts audited per run for storage quality (one
+#                              # model call covers the batch). The audit answers
+#                              # "is what we STORED worth storing?" — recall@k
+#                              # can't see that, because it only measures the
+#                              # read path. 0 disables the audit.
 
 # ── Logging ────────────────────────────────────────────────────────
 logging:

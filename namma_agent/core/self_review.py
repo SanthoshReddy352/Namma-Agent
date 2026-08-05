@@ -6,7 +6,8 @@ with you" from a vibe into numbers and reviewable proposals:
   * **Mining** — offline heuristics over the week's own data (no model calls):
     failed tool runs (audit ``success=0``), user corrections ("no, that's
     wrong"), retries (near-duplicate consecutive asks), repeated multi-step
-    workflows (recurring ``tools_used`` sequences — skill/routine candidates),
+    workflows (``tools_used`` runs clustered by overlap, so a reordering or one
+    extra step still converges — skill/routine candidates),
     and sessions that end on an unanswered user message.
   * **Metrics spine** — a weekly snapshot persisted to ``data/self_review/``:
     memory-eval recall@k (run headlessly with the offline mock provider, same
@@ -38,6 +39,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from namma_agent.core.logger import logger
+from namma_agent.core.skills import DEDUP_THRESHOLD, texts_overlap
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 
@@ -74,6 +76,72 @@ def _similar(a: str, b: str, threshold: float = 0.6) -> bool:
     return len(wa & wb) / max(1, len(wa | wb)) >= threshold
 
 
+# ── workflow convergence (the skill-candidate signal) ─────────────────────────
+#
+# A "workflow" is what the assistant actually did in one turn, reduced to the
+# SET of tools it used. Two runs are the same workflow when those sets mostly
+# agree — order and repeat counts are noise, not identity.
+
+#: Jaccard overlap at which two tool runs are the same workflow.
+WORKFLOW_THRESHOLD = 0.6
+#: How many recurrences make a workflow a skill candidate.
+WORKFLOW_MIN_COUNT = 2
+
+
+def workflow_signature(tools) -> tuple[str, ...]:
+    """A turn's tool run reduced to its identity: which tools, sorted, deduped.
+
+    ``web_search → web_extract → web_extract`` and ``web_extract → web_search``
+    are the same research move and must compare equal."""
+    return tuple(sorted({str(t).strip() for t in (tools or []) if str(t).strip()}))
+
+
+def workflows_similar(a, b, threshold: float = WORKFLOW_THRESHOLD) -> bool:
+    """True when two signatures overlap enough to be the same workflow."""
+    sa, sb = set(a), set(b)
+    if not sa or not sb:
+        return False
+    return len(sa & sb) / len(sa | sb) >= threshold
+
+
+def cluster_workflows(signatures: list[tuple[str, ...]],
+                      threshold: float = WORKFLOW_THRESHOLD,
+                      min_count: int = WORKFLOW_MIN_COUNT) -> list[dict]:
+    """Group near-identical tool runs into recurring workflows, most-frequent first.
+
+    The original rule counted *exact* tuples and required three hits, so one
+    extra ``read_file`` or a different tool order made every run its own
+    singleton — ``repeated_workflows`` sat empty week after week while the same
+    loop ran daily, and skill drafting fell back to mining tool failures (which
+    is how a "reduce run_shell errors" postmortem ended up saved as a skill).
+
+    Greedy leader clustering: each signature joins the first cluster whose
+    exemplar it matches, so the grouping is deterministic and clusters can't
+    drift outward as members accumulate."""
+    clusters: list[dict] = []
+    for sig in signatures:
+        for c in clusters:
+            if workflows_similar(sig, c["exemplar"], threshold):
+                c["members"].append(sig)
+                break
+        else:
+            clusters.append({"exemplar": sig, "members": [sig]})
+
+    out = []
+    for c in clusters:
+        members = c["members"]
+        if len(members) < min_count:
+            continue
+        shared = set(members[0]).intersection(*(set(m) for m in members))
+        # Report the most common exact run as the workflow's face, plus the tools
+        # every member had in common (what a drafted skill would be *about*).
+        common = Counter(members).most_common(1)[0][0]
+        out.append({"tools": list(common), "count": len(members),
+                    "shared": sorted(shared)})
+    out.sort(key=lambda w: w["count"], reverse=True)
+    return out
+
+
 def mine_week(db, now_ts: float, days: int = 7) -> dict:
     """Heuristic sweep of the last ``days`` of sessions + audit trail."""
     cutoff = _iso_ago(now_ts, days)
@@ -92,7 +160,7 @@ def mine_week(db, now_ts: float, days: int = 7) -> dict:
         by_session.setdefault(t["session_id"], []).append(t)
 
     corrections, retries, unanswered = [], [], []
-    workflow_counts: Counter = Counter()
+    workflows: list[tuple[str, ...]] = []
     for sid, ts in by_session.items():
         prev_user: Optional[str] = None
         prev_role: Optional[str] = None
@@ -105,16 +173,15 @@ def mine_week(db, now_ts: float, days: int = 7) -> dict:
                     retries.append({"session_id": sid, "text": content[:160]})
                 prev_user = content
             elif t["role"] == "assistant":
-                tools = tuple(t.get("tools_used") or ())
-                if len(tools) >= 2:
-                    workflow_counts[tools] += 1
+                sig = workflow_signature(t.get("tools_used") or ())
+                if len(sig) >= 2:          # one tool isn't a workflow
+                    workflows.append(sig)
             prev_role = t["role"]
         if ts and ts[-1]["role"] == "user" and (ts[-1].get("content") or "").strip():
             unanswered.append({"session_id": sid,
                                "text": (ts[-1]["content"] or "").strip()[:160]})
 
-    repeated = [{"tools": list(seq), "count": n}
-                for seq, n in workflow_counts.most_common(8) if n >= 3]
+    repeated = cluster_workflows(workflows)[:8]
 
     return {
         "window_days": days,
@@ -325,21 +392,63 @@ def draft_proposals(generate: Generate, mined: dict,
     return out
 
 
-def add_proposals(drafts: list[dict], config: Optional[dict] = None) -> list[dict]:
-    """Append drafts as ``pending``, skipping ones whose title already exists in
-    any state (a rejected idea must not come back every week)."""
+def _proposal_blurb(prop: dict) -> str:
+    """What identifies a proposal for duplicate detection: its title and, for a
+    skill, the name + description that would become the SKILL.md frontmatter.
+    (``why`` is left out — it quotes that week's failures and would match
+    unrelated proposals drafted from the same evidence.)"""
+    payload = prop.get("payload") if isinstance(prop.get("payload"), dict) else {}
+    return " ".join(str(x) for x in (prop.get("title"), payload.get("name"),
+                                     payload.get("description")) if x)
+
+
+def duplicate_proposal(prop: dict, existing: list[dict],
+                       threshold: float = DEDUP_THRESHOLD) -> Optional[dict]:
+    """The already-known proposal this one restates, if any.
+
+    Title equality alone was not enough: the drafter renames freely, so
+    "delegate-task-completion" came back a week later as "Robust Task
+    Delegation" and both got created."""
+    kind = prop.get("kind")
+    title = (prop.get("title") or "").strip().lower()
+    blurb = _proposal_blurb(prop)
+    for p in existing:
+        if p.get("kind") != kind:
+            continue
+        if title and (p.get("title") or "").strip().lower() == title:
+            return p
+        if texts_overlap(blurb, _proposal_blurb(p), threshold):
+            return p
+    return None
+
+
+def add_proposals(drafts: list[dict], config: Optional[dict] = None,
+                  skills_store=None) -> list[dict]:
+    """Append drafts as ``pending``, dropping ones that restate a proposal already
+    on file in ANY state (a rejected idea must not come back every week) or, for
+    skills, one the catalog already covers. Drafts are also deduped against each
+    other within the batch."""
     items = load_proposals(config)
-    known = {(p.get("kind"), (p.get("title") or "").strip().lower()) for p in items}
     next_id = max((int(p.get("id", 0)) for p in items), default=0) + 1
     added = []
     for d in drafts:
-        key = (d.get("kind"), (d.get("title") or "").strip().lower())
-        if key in known:
+        dup = duplicate_proposal(d, items)
+        if dup is not None:
+            logger.info("[self-review] dropped proposal %r — restates #%s %r",
+                        d.get("title"), dup.get("id"), dup.get("title"))
             continue
+        if d.get("kind") == "skill" and skills_store is not None:
+            payload = d.get("payload") or {}
+            covered = skills_store.find_similar(
+                payload.get("name") or d.get("title") or "",
+                payload.get("description") or "")
+            if covered is not None:
+                logger.info("[self-review] dropped skill proposal %r — %r already "
+                            "covers it", d.get("title"), covered.name)
+                continue
         prop = {"id": next_id, "status": "pending", "created_at": time.time(), **d}
         items.append(prop)
         added.append(prop)
-        known.add(key)
         next_id += 1
     if added:
         save_proposals(items, config)
@@ -359,6 +468,12 @@ def apply_proposal(prop: dict, skills_store=None,
     if kind == "skill":
         if skills_store is None:
             return False, "skill store unavailable"
+        # Last line of defence: a proposal drafted before the catalog grew (or
+        # accepted long after) must not add a second skill for the same job.
+        covered = skills_store.find_similar(payload["name"], payload["description"])
+        if covered is not None:
+            return False, (f"'{covered.name}' already covers this — refine that "
+                           "skill instead of adding a near-duplicate")
         skill = skills_store.create(payload["name"], payload["description"],
                                     payload["body"], category="self-review")
         return True, f"skill '{skill.name}' created"

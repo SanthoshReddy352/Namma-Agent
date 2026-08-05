@@ -90,6 +90,52 @@ def test_summarize_session_tool():
     assert db.get_session_summary(sid) == "User chatted about gardening."
 
 
+class _DeadProvider(_FixedProvider):
+    """Stands in for the legacy `provider:` chain on a profile-only setup."""
+
+    def __init__(self):
+        super().__init__("")
+
+    def generate(self, *a, **kw):
+        raise RuntimeError("No LLM provider is available. openai_compat: no API key")
+
+
+def test_summaries_use_the_live_provider_getter_not_the_legacy_chain():
+    """Session summarization ran on the positional `provider` — the legacy
+    config chain, which on a profile-only setup holds no usable credentials.
+    Every summary failed silently, which in turn killed the summary recall
+    channel and the consolidator's promote/reflect/skill-draft steps."""
+    db = Database(":memory:")
+    sid = db.create_session()
+    db.add_turn(sid, "user", "talk about gardening")
+    db.add_turn(sid, "assistant", "sure")
+    working = _FixedProvider("User chatted about gardening.")
+    reg = ToolRegistry()
+    register_memory_tools(reg, db)
+    from namma_agent.core.agent import Agent
+    agent = Agent(working, reg, db, load_persona())
+    register_agent_tools(reg, agent, _DeadProvider(), db,
+                         provider_getter=lambda: working)
+    out = reg.execute("summarize_session", {"session_id": sid})
+    assert out.ok and "gardening" in out.content
+    assert db.get_session_summary(sid) == "User chatted about gardening."
+
+
+def test_summaries_fall_back_to_the_positional_provider_when_no_getter():
+    """Callers that pass no getter (tests, embedders) keep the old behaviour."""
+    db = Database(":memory:")
+    sid = db.create_session()
+    db.add_turn(sid, "user", "talk about gardening")
+    db.add_turn(sid, "assistant", "sure")
+    provider = _FixedProvider("Gardening chat.")
+    reg = ToolRegistry()
+    register_memory_tools(reg, db)
+    from namma_agent.core.agent import Agent
+    agent = Agent(provider, reg, db, load_persona())
+    register_agent_tools(reg, agent, provider, db)
+    assert reg.execute("summarize_session", {"session_id": sid}).ok
+
+
 # ── plugin-backed memory tool fallbacks ──────────────────────────────────────────────
 
 class _StubIngestor:

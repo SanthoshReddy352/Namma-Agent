@@ -7,21 +7,24 @@
 # beginner can just run it. Then: venv, dependencies, the web UI, the first AI
 # provider + onboarding, a desktop launcher, and launch.
 #
-#   --no-setup     skip the interactive first-provider / onboarding prompts
-#   --no-launch    set up only, don't launch (used by the native .dmg/.AppImage)
-#   --no-shortcut  don't create a launcher (the native installer manages it)
+#   --no-setup       skip the interactive first-provider / onboarding prompts
+#   --no-launch      set up only, don't launch (used by the native .dmg/.AppImage)
+#   --no-shortcut    don't create a launcher (the native installer manages it)
+#   --no-embeddings  skip Ollama + the all-minilm model (memory recall stays
+#                    keyword-only; use this on a box that must stay minimal)
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 cd "$ROOT"
 
-NO_LAUNCH=0; NO_SETUP=0; NO_SHORTCUT=0
+NO_LAUNCH=0; NO_SETUP=0; NO_SHORTCUT=0; NO_EMBEDDINGS=0
 for a in "$@"; do
   case "$a" in
-    --no-launch)   NO_LAUNCH=1 ;;
-    --no-setup)    NO_SETUP=1 ;;
-    --no-shortcut) NO_SHORTCUT=1 ;;
+    --no-launch)     NO_LAUNCH=1 ;;
+    --no-setup)      NO_SETUP=1 ;;
+    --no-shortcut)   NO_SHORTCUT=1 ;;
+    --no-embeddings) NO_EMBEDDINGS=1 ;;
   esac
 done
 
@@ -33,7 +36,7 @@ echo "=============================================="
 have() { command -v "$1" >/dev/null 2>&1; }
 
 # 1. Ensure Python, Git, Node (auto-install if missing) ----------------------
-echo "[1/8] Ensuring Python 3.10+, Git and Node.js ..."
+echo "[1/9] Ensuring Python 3.10+, Git and Node.js ..."
 ensure_deps_macos() {
   have git || xcode-select --install 2>/dev/null || true
   if ! have brew; then
@@ -87,47 +90,101 @@ if [ -z "$PY" ]; then
   echo "  Install it, then re-run this script."
   exit 1
 fi
-echo "[2/8] Using $($PY --version)"
+echo "[2/9] Using $($PY --version)"
 
 # 3. virtual environment -----------------------------------------------------
-if [ ! -d .venv ]; then echo "[3/8] Creating .venv …"; "$PY" -m venv .venv
-else echo "[3/8] Reusing existing .venv"; fi
+if [ ! -d .venv ]; then echo "[3/9] Creating .venv …"; "$PY" -m venv .venv
+else echo "[3/9] Reusing existing .venv"; fi
 VPY="$ROOT/.venv/bin/python"
 
 # 4. dependencies ------------------------------------------------------------
-echo "[4/8] Installing dependencies (a few minutes on first run) …"
+echo "[4/9] Installing dependencies (a few minutes on first run) …"
 "$VPY" -m pip install --upgrade pip --no-cache-dir >/dev/null
 "$VPY" -m pip install --no-cache-dir -r namma_agent/requirements.txt
 
-# 5. web UI ------------------------------------------------------------------
-if [ -f namma_agent/webui/dist/index.html ]; then
-  echo "[5/8] Web UI already built — skipping"
-elif have npm; then
-  echo "[5/8] Building the web UI …"
-  ( cd namma_agent/webui && npm install && npm run build )
+# 5. local memory embeddings -------------------------------------------------
+# The memory's semantic recall channel. Without it, memory search is keyword-only
+# and misses paraphrases ("what is my mother tongue?" never reaches the fact that
+# says Telugu). all-minilm is 46 MB / 384-dim, ~150 MB resident, ~10 ms a query —
+# it fits a 1 GB VPS. Entirely best-effort: if Ollama can't be installed the app
+# works exactly as before (BM25 recall) and the embedder circuit-breaks, so a
+# missing endpoint costs nothing per turn.
+embed_fail() {
+  echo ""
+  echo "ERROR: $1"
+  echo "  Namma Agent's memory needs a local embedding model for semantic recall."
+  echo "  Install Ollama manually, then re-run this installer:"
+  echo "    macOS:  brew install ollama"
+  echo "    Linux:  curl -fsSL https://ollama.com/install.sh | sh"
+  echo "  Then:     ollama pull all-minilm"
+  echo ""
+  echo "  To install without it anyway (memory recall becomes keyword-only):"
+  echo "    bash installers/install.sh --no-embeddings"
+  exit 1
+}
+
+if [ "$NO_EMBEDDINGS" = "1" ]; then
+  echo "[5/9] Skipping local memory embeddings (--no-embeddings) — recall will be keyword-only."
 else
-  echo "[5/8] WARNING: web UI not built and Node/npm not found."
+  echo "[5/9] Setting up local memory embeddings …"
+  if ! have ollama; then
+    echo "      Installing Ollama …"
+    if [ "$(uname -s)" = "Darwin" ]; then
+      have brew && brew install ollama >/dev/null 2>&1 || true
+    else
+      # Ollama's official installer (adds a systemd unit on Linux, so the
+      # daemon comes back on reboot — what a 24/7 VPS needs).
+      curl -fsSL https://ollama.com/install.sh | sh || true
+    fi
+    hash -r 2>/dev/null || true
+  fi
+  have ollama || embed_fail "Ollama could not be installed automatically."
+  # `pull` needs the daemon. The Linux installer starts it via systemd;
+  # elsewhere give it a nudge and a moment to bind.
+  if ! ollama list >/dev/null 2>&1; then
+    ( ollama serve >/dev/null 2>&1 & ) ; sleep 3
+  fi
+  ollama list >/dev/null 2>&1 || \
+    embed_fail "Ollama is installed but its service is not responding."
+  if ollama list 2>/dev/null | grep -q "^all-minilm"; then
+    echo "      all-minilm already installed."
+  else
+    echo "      Downloading the all-minilm embedding model (46 MB) …"
+    ollama pull all-minilm >/dev/null 2>&1 \
+      || embed_fail "Downloading the all-minilm model failed."
+    echo "      Semantic memory recall enabled."
+  fi
 fi
 
-# 6. first provider + onboarding ---------------------------------------------
-if [ "$NO_SETUP" = "1" ]; then
-  echo "[6/8] Skipping provider/onboarding — configure it in the app."
+# 6. web UI ------------------------------------------------------------------
+if [ -f namma_agent/webui/dist/index.html ]; then
+  echo "[6/9] Web UI already built — skipping"
+elif have npm; then
+  echo "[6/9] Building the web UI …"
+  ( cd namma_agent/webui && npm install && npm run build )
 else
-  echo "[6/8] Configuring the first AI provider + a few questions …"
+  echo "[6/9] WARNING: web UI not built and Node/npm not found."
+fi
+
+# 7. first provider + onboarding ---------------------------------------------
+if [ "$NO_SETUP" = "1" ]; then
+  echo "[7/9] Skipping provider/onboarding — configure it in the app."
+else
+  echo "[7/9] Configuring the first AI provider + a few questions …"
   "$VPY" -m namma_agent --setup || echo "      (setup skipped — finish it in the app)"
 fi
 
-# 7. desktop launcher --------------------------------------------------------
+# 8. desktop launcher --------------------------------------------------------
 if [ "$NO_SHORTCUT" = "1" ]; then
-  echo "[7/8] Skipping launcher (managed by the installer)."
+  echo "[8/9] Skipping launcher (managed by the installer)."
 elif [ "$(uname -s)" = "Darwin" ]; then
-  echo "[7/8] Creating a desktop launcher …"
+  echo "[8/9] Creating a desktop launcher …"
   LAUNCHER="$ROOT/Namma Agent.command"
   printf '#!/usr/bin/env bash\ncd "%s"\nexec "%s" -m namma_agent\n' "$ROOT" "$VPY" > "$LAUNCHER"
   chmod +x "$LAUNCHER"
   echo "      Double-click to start: $LAUNCHER"
 else
-  echo "[7/8] Creating a desktop launcher …"
+  echo "[8/9] Creating a desktop launcher …"
   APPS="$HOME/.local/share/applications"; mkdir -p "$APPS"
   cat > "$APPS/namma-agent.desktop" <<EOF
 [Desktop Entry]
@@ -143,7 +200,7 @@ EOF
   echo "      Added to your applications menu: Namma Agent"
 fi
 
-# 7b. `namma` command on PATH (so you can run `namma`, `namma --chat`, `namma --server`).
+# 8b. `namma` command on PATH (so you can run `namma`, `namma --chat`, `namma --server`).
 BINDIR="$HOME/.local/bin"; mkdir -p "$BINDIR"
 printf '#!/usr/bin/env bash\nexec "%s" -m namma_agent "$@"\n' "$VPY" > "$BINDIR/namma"
 chmod +x "$BINDIR/namma"
@@ -152,11 +209,11 @@ case ":$PATH:" in
   *) echo "      Installed the 'namma' command at $BINDIR/namma — add $BINDIR to your PATH to use it." ;;
 esac
 
-# 8. launch ------------------------------------------------------------------
+# 9. launch ------------------------------------------------------------------
 echo "=============================================="
 if [ "$NO_LAUNCH" = "1" ]; then
-  echo "[8/8] Setup complete. Launch 'Namma Agent' from your applications menu."
+  echo "[9/9] Setup complete. Launch 'Namma Agent' from your applications menu."
 else
-  echo "[8/8] Launching Namma Agent …"
+  echo "[9/9] Launching Namma Agent …"
   exec "$VPY" -m namma_agent
 fi

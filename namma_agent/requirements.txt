@@ -19,6 +19,12 @@ google-genai             # provider.type: google
 
 # Voice (TTS + STT) is 100% browser-native (Web Speech API) — no Python deps.
 
+# ── TERMINAL UI (optional — `python -m namma_agent --tui`) ─────────
+# Without these the terminal front end degrades to the plain input()/print()
+# REPL (namma_agent/comms/console.py); nothing else in the app needs them.
+prompt_toolkit           # the TUI's input area, status bar, key bindings
+rich                     # banner, tool lines, diffs, colored transcript
+
 # ── DESKTOP WINDOW (optional — native window instead of browser) ───
 pywebview                # `python -m namma_agent` opens a native window; falls back to browser
 pystray                  # system tray icon (show/hide window, gateway status, quit) — optional, app runs fine without it

@@ -57,8 +57,9 @@ def test_mine_week_heuristics():
     assert len(mined["retries"]) == 1
     assert len(mined["unanswered"]) == 1
     assert "next quarter" in mined["unanswered"][0]["text"]
-    # web_search→web_extract ran 3× across sessions → a repeated workflow
-    assert mined["repeated_workflows"][0]["tools"] == ["web_search", "web_extract"]
+    # web_search+web_extract ran 3× across sessions → a repeated workflow.
+    # Signatures are sorted sets: order and repeats are noise, not identity.
+    assert mined["repeated_workflows"][0]["tools"] == ["web_extract", "web_search"]
     assert mined["repeated_workflows"][0]["count"] == 3
 
 
@@ -146,9 +147,124 @@ def test_add_proposals_dedupes_even_rejected(cfg):
     assert len(sr.load_proposals(cfg)) == 1
 
 
+# ── workflow convergence (the skill-candidate signal) ─────────────────────────
+
+def test_workflow_signature_ignores_order_and_repeats():
+    a = sr.workflow_signature(["web_search", "web_extract", "web_extract"])
+    b = sr.workflow_signature(["web_extract", "web_search"])
+    assert a == b == ("web_extract", "web_search")
+    assert sr.workflow_signature([]) == ()
+
+
+def test_cluster_workflows_tolerates_an_extra_step():
+    # The same research loop, three times, with one stray read_file in the middle
+    # run. Exact-tuple counting (the old rule) saw three singletons and reported
+    # nothing; overlap clustering sees one workflow that recurred.
+    runs = [
+        ("web_extract", "web_search"),
+        ("read_file", "web_extract", "web_search"),
+        ("web_extract", "web_search"),
+    ]
+    clusters = sr.cluster_workflows(runs)
+    assert len(clusters) == 1
+    assert clusters[0]["count"] == 3
+    assert clusters[0]["shared"] == ["web_extract", "web_search"]
+
+
+def test_cluster_workflows_keeps_unrelated_runs_apart():
+    runs = [("web_extract", "web_search"), ("web_extract", "web_search"),
+            ("make_dir", "move_path", "organize_dir"),
+            ("make_dir", "move_path", "organize_dir")]
+    clusters = sr.cluster_workflows(runs)
+    assert len(clusters) == 2 and all(c["count"] == 2 for c in clusters)
+
+
+def test_cluster_workflows_needs_a_recurrence():
+    assert sr.cluster_workflows([("a", "b")]) == []        # seen once ⇒ not a pattern
+
+
+def test_mine_week_converges_a_reordered_workflow():
+    db = Database(":memory:")
+    sid = db.create_session()
+    for tools in (["web_search", "web_extract"],
+                  ["web_extract", "read_file", "web_search"],
+                  ["web_extract", "web_search"]):
+        db.add_turn(sid, "user", "look this up for me")
+        db.add_turn(sid, "assistant", "Done.", tools_used=tools)
+    mined = sr.mine_week(db, time.time())
+    assert mined["repeated_workflows"][0]["count"] == 3
+
+
+# ── duplicate detection ───────────────────────────────────────────────────────
+
+# The real pair, verbatim from the user's proposals.json: #4 was accepted, then
+# #5 came back a week later saying the same thing under a new title.
+_DELEGATE_4 = {"kind": "skill", "title": "delegate-task-completion",
+               "payload": {"name": "delegate-task-completion",
+                           "description": "Provides a framework for receiving, "
+                           "executing, and reporting delegated tasks to ensure all "
+                           "sub-tasks are addressed and results are delivered."}}
+_DELEGATE_5 = {"kind": "skill", "title": "Robust Task Delegation",
+               "payload": {"name": "Robust Task Delegation",
+                           "description": "A skill for effectively delegating and "
+                           "completing sub-tasks, particularly in research or agent "
+                           "roles, with built-in error handling and retry mechanisms "
+                           "to improve success rates."}}
+
+
+def test_duplicate_proposal_catches_repeats_and_rewordings():
+    assert sr.duplicate_proposal(dict(_DELEGATE_4), [_DELEGATE_4]) is not None
+    # a reworded title with overlapping wording is caught too
+    reworded = {"kind": "skill", "title": "Delegated task reporting",
+                "payload": {"name": "delegated-task-reporting",
+                            "description": _DELEGATE_4["payload"]["description"]}}
+    assert sr.duplicate_proposal(reworded, [_DELEGATE_4]) is not None
+    # a genuinely different proposal still gets through
+    other = {"kind": "skill", "title": "Organize downloads folder",
+             "payload": {"name": "organize-downloads",
+                         "description": "Sort a messy folder into dated subfolders"}}
+    assert sr.duplicate_proposal(other, [_DELEGATE_4]) is None
+    # …and kinds never cross-match
+    assert sr.duplicate_proposal({**_DELEGATE_5, "kind": "routine"},
+                                 [_DELEGATE_4]) is None
+
+
+def test_a_full_reword_needs_the_catalog_check_not_word_overlap(cfg):
+    """#5 shares almost no vocabulary with #4 — word overlap cannot see it.
+
+    That is exactly why `add_proposals` also asks the skill store (which embeds),
+    rather than relying on text comparison alone."""
+    assert sr.duplicate_proposal(_DELEGATE_5, [_DELEGATE_4]) is None
+    covered = type("S", (), {"name": "delegate-task-completion"})()
+    assert sr.add_proposals([_DELEGATE_5], cfg,
+                            skills_store=_FakeSkills(covered)) == []
+
+
+def test_add_proposals_drops_a_skill_the_catalog_already_covers(cfg):
+    covered = type("S", (), {"name": "convert-media"})()
+    assert sr.add_proposals([_skill_prop()], cfg,
+                            skills_store=_FakeSkills(covered)) == []
+    assert sr.load_proposals(cfg) == []
+    # without the store the proposal is kept (bare/test services pass none)
+    assert len(sr.add_proposals([_skill_prop()], cfg)) == 1
+
+
+def test_accept_refuses_a_near_duplicate_skill(cfg):
+    added = sr.add_proposals([_skill_prop()], cfg)
+    covered = type("S", (), {"name": "convert-media"})()
+    ok, detail = sr.set_proposal_status(added[0]["id"], "accepted", cfg,
+                                        skills_store=_FakeSkills(covered))
+    assert not ok and "convert-media" in detail
+    assert sr.load_proposals(cfg)[0]["status"] == "pending"   # still reviewable
+
+
 class _FakeSkills:
-    def __init__(self):
+    def __init__(self, covered=None):
         self.created = []
+        self._covered = covered      # a skill that already covers anything asked
+
+    def find_similar(self, name, description="", threshold=None):
+        return self._covered
 
     def create(self, name, description, body, category=""):
         self.created.append(name)

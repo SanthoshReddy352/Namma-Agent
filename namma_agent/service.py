@@ -53,10 +53,14 @@ def _consolidation_summary(report: dict) -> str:
                        ("insights", "{n} new insight(s)"),
                        ("skill_drafts", "drafted {n} skill(s)"),
                        ("skills_reinforced", "reinforced {n} fact(s) from skill use"),
-                       ("core_compacted", "compacted core memory")):
+                       ("core_compacted", "compacted core memory"),
+                       ("quality_junk", "flagged {n} low-value fact(s)")):
         n = report.get(key) or 0
         if n:
             parts.append(label.format(n=n))
+    mq = report.get("memory_quality")
+    if mq is not None:
+        parts.append(f"memory quality {mq:.0%}")
     parts.append("refreshed the host model")
     return "Improved memory: " + ", ".join(parts) + "."
 
@@ -84,6 +88,21 @@ class NammaAgentService:
         # root, applied to every persistent-shell child spawned from here on.
         from namma_agent.core.sandbox import configure_sandbox
         configure_sandbox(self.config.get("security"))
+        # SSRF guard (Phase 7a): URL-fetching tools refuse loopback/private/
+        # link-local/metadata targets unless security.allow_private_urls is set.
+        from namma_agent.core.urlguard import configure_urlguard
+        configure_urlguard(self.config.get("security"))
+        # Shell execution backend (Phase 7d): local (default) | docker | ssh.
+        from namma_agent.core.shell_backends import configure_backend
+        configure_backend(self.config.get("security"))
+        # User lifecycle hooks (Phase 7e) from ~/.namma_agent/hooks/*.py.
+        # Loaded before the registry is built so pre_tool sees every call.
+        from namma_agent.core.hooks import load_hooks
+        load_hooks()
+        # Checkpoints (Phase 7b): the undo store for file-changing tools. Built
+        # before the agent so it can be handed in below.
+        from namma_agent.core.checkpoints import build_store as _build_checkpoints
+        self.checkpoints = _build_checkpoints(self.config)
         conv = self.config.get("conversation", {})
         from namma_agent.config import data_dir as _data_dir
         db_path = (self.config.get("database") or {}).get("path") or str(_data_dir() / "namma_agent.db")
@@ -182,6 +201,25 @@ class NammaAgentService:
             skill_disable_fn=lambda name: self.set_skill_enabled(name, False),
         )
 
+        # Procedural learning's trigger. The prompt has always asked the model to
+        # call `create_skill` after a novel multi-step task and it never did, so
+        # the decision moved into the loop: after each turn this checks whether a
+        # tool workflow has RECURRED and, if so, drafts it as a disabled skill for
+        # Settings → Skills. Same contract as the consolidator's drafts — a
+        # proposal, never a self-granted capability.
+        self.skill_capture = None
+        if self.skills is not None:
+            from namma_agent.core.skill_capture import SkillCapture
+
+            self.skill_capture = SkillCapture(
+                self.db, self.skills,
+                lambda messages: (self.provider_for(None)
+                                  .generate(messages, tools=None, stream=False)
+                                  .content or ""),
+                config=self.config,
+                disable_fn=lambda name: self.set_skill_enabled(name, False),
+            )
+
         self.agent = Agent(
             self.provider, self.registry, self.db, self.persona,
             tool_loop_limit=int(conv.get("tool_loop_limit", 0)),
@@ -194,6 +232,7 @@ class NammaAgentService:
             tool_result_max_chars=int(conv.get("tool_result_max_chars", 0) or 0),
             skills=self.skills,
             engram=self.engram,
+            skill_capture=self.skill_capture,
             # Rolling context compaction: long chats keep a running summary of
             # evicted history in the prompt (conversation.compact_history: false
             # turns it off).
@@ -201,6 +240,9 @@ class NammaAgentService:
             # One-shot "verify your file change before answering" nudge
             # (conversation.verify_after_writes: false turns it off).
             verify_after_writes=bool(conv.get("verify_after_writes", True)),
+            # Phase 7b: file snapshots before destructive write-ish tools, so a
+            # change the user approved can still be undone.
+            checkpoints=self.checkpoints,
         )
 
         # One-time: flow any legacy SQLite facts (e.g. what the installer wizard
@@ -215,7 +257,13 @@ class NammaAgentService:
             with self.registry.categorize("agent"):
                 self._agent_tool_handles = register_agent_tools(
                     self.registry, self.agent, self.provider, self.db,
-                    get_comms=lambda: getattr(self, "comms", None)) or {}
+                    get_comms=lambda: getattr(self, "comms", None),
+                    # Session summaries are memory work: they must run on the
+                    # user's REAL brain (provider_for(None) = the first configured
+                    # model profile), not the legacy `provider:` chain — which on
+                    # a profile-only setup has no usable credentials and made
+                    # summarization fail silently for every session.
+                    provider_getter=lambda: self.provider_for(None)) or {}
 
         # Wave 5: messaging channels (Telegram/Discord). Outbound send is always
         # available; the Telegram *inbound* bridge spawns a background polling
@@ -252,6 +300,18 @@ class NammaAgentService:
                 register_routine_tools(self.registry, self.routines,
                                        config=self.config)
             self.routines.ensure_started()
+
+        # Phase 7b: rollback as a chat action. The session getter reads the
+        # in-flight turn's session (core.interactive), so a bare "undo that"
+        # rolls back THIS chat's last file change, not another chat's.
+        if registry is None and self.checkpoints.enabled:
+            from namma_agent.core.checkpoints import register_checkpoint_tools
+            from namma_agent.core.interactive import get_current_session
+
+            with self.registry.categorize("checkpoints"):
+                register_checkpoint_tools(
+                    self.registry, self.checkpoints,
+                    session_getter=lambda: get_current_session() or "")
 
         # Phase 2: event-driven watchers ("tell me WHEN…"). Same opt-in contract
         # as routines — the poll thread only runs while an enabled watcher
@@ -323,10 +383,21 @@ class NammaAgentService:
             from namma_agent.core.skills import SkillStore
 
             cfg = config.get("skills") or {}
+            # Duplicate detection borrows Engram's embedder: word overlap alone
+            # cannot tell a renamed skill from a new one. Absent or unreachable,
+            # the store falls back to its lexical rule.
+            embedder = None
+            try:
+                from namma_agent.core.engram.embeddings import Embedder
+
+                embedder = Embedder.from_config(config)
+            except Exception:  # noqa: BLE001
+                pass
             return SkillStore(
                 user_dir=cfg.get("user_dir"),
                 allow_inline_shell=bool(cfg.get("allow_inline_shell", False)),
                 disabled=cfg.get("disabled") or [],
+                embedder=embedder,
             )
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
@@ -520,6 +591,38 @@ class NammaAgentService:
                                              limit=limit)
         return {"ok": True, "items": items}
 
+    # -- write approval (Phase 7c) -----------------------------------------
+
+    def memory_pending(self, limit: int = 100) -> dict:
+        """The approval queue: facts the agent extracted on its own, waiting for
+        a yes/no. Empty (and invisible) unless memory.write_approval is on."""
+        return {"ok": True,
+                "enabled": self.engram.writer.write_approval,
+                "items": self.engram.store.pending_items(limit=limit)}
+
+    def memory_resolve_pending(self, item_id: str = "", approve: bool = True,
+                               all_items: bool = False) -> dict:
+        """Approve (index it into memory) or reject (throw it away) a pending
+        fact — or every one of them."""
+        if all_items:
+            count = self.engram.store.resolve_all_pending(approve)
+            return {"ok": True, "resolved": count,
+                    "pending": self.engram.store.pending_count()}
+        if not item_id:
+            return {"ok": False, "error": "item_id or all is required"}
+        done = (self.engram.store.approve_item(item_id) if approve
+                else self.engram.store.reject_item(item_id))
+        return {"ok": done, "resolved": 1 if done else 0,
+                "pending": self.engram.store.pending_count(),
+                **({} if done else {"error": "no pending fact with that id"})}
+
+    def memory_low_quality(self, limit: int = 50) -> dict:
+        """Audited facts the quality pass scored poorly, worst first — the
+        review queue behind the Memory-tab quality figure. A count alone isn't
+        actionable; these are the rows crowding real answers out of recall."""
+        return {"ok": True, "items": self.engram.store.low_quality_items(limit=limit),
+                **self.engram.store.quality_stats()}
+
     def memory_forget(self, query: str = "", item_id: str = "",
                       everything: bool = False, hard: bool = False) -> dict:
         """Invalidate (default) or hard-delete memory. ``everything`` wipes the
@@ -601,6 +704,9 @@ class NammaAgentService:
             "k": self.engram.prefetch_k,
             "salience_min_chars": self.engram.writer.min_chars,
             "budget_per_hour": self.engram.writer.budget_per_hour,
+            # Phase 7c: hold auto-extracted facts for review + how many wait.
+            "write_approval": self.engram.writer.write_approval,
+            "pending_count": self.engram.store.pending_count(),
             "consolidate_background": self.engram.consolidate_background,
             "idle_minutes": self.engram.scheduler.idle_minutes,
             "daily_at": self.engram.scheduler.daily_at,
@@ -628,6 +734,15 @@ class NammaAgentService:
             n = max(1, int(settings["budget_per_hour"]))
             mem["write"]["budget_per_hour"] = n
             self.engram.writer.budget_per_hour = n
+        # Sits directly under `memory:` (not `memory.write:`) — it's a policy
+        # switch, not a tuning knob for the extraction pipeline. Tracked apart
+        # from `mem` because the empty-section filter below would drop a
+        # deliberate `false`.
+        root_keys: dict = {}
+        if "write_approval" in settings:
+            on = bool(settings["write_approval"])
+            root_keys["write_approval"] = on
+            self.engram.writer.write_approval = on
         if "consolidate_background" in settings:
             on = bool(settings["consolidate_background"])
             mem["consolidate"]["background"] = on
@@ -647,6 +762,7 @@ class NammaAgentService:
                 mem["consolidate"]["daily_at"] = t
                 self.engram.scheduler.daily_at = t
         mem = {k: v for k, v in mem.items() if v}
+        mem.update(root_keys)
         if mem:
             self.config = update_config({"memory": mem})
         return self.memory_settings()
@@ -886,7 +1002,9 @@ class NammaAgentService:
             return resp.content or ""
 
         drafts = sr.draft_proposals(_generate, mined, existing)
-        sr.add_proposals(drafts, self.config)
+        # The store goes in so a skill proposal the catalog already covers is
+        # dropped here rather than becoming a second skill for the same job.
+        sr.add_proposals(drafts, self.config, skills_store=self.skills)
         pending = [p for p in sr.load_proposals(self.config)
                    if p.get("status") == "pending"]
 
@@ -931,6 +1049,7 @@ class NammaAgentService:
         ran, what's queued. Powers GET /api/status and the Settings panel."""
         from namma_agent.core.routines import load_routines
         from namma_agent.core.sandbox import status as _sandbox_status
+        from namma_agent.core.shell_backends import status as _shell_backend_status
         from namma_agent.core.self_review import load_proposals, load_snapshots
         from namma_agent.core.watchers import load_watchers
 
@@ -1008,6 +1127,11 @@ class NammaAgentService:
             # Phase 1c: shell-sandbox state (mechanism, caps, whether the last
             # spawn actually got sandboxed) — the Security tab (1e) reads this.
             "shell_sandbox": _sandbox_status(),
+            # Phase 7d: WHERE shell commands run (local / container / remote).
+            "shell_backend": _shell_backend_status(),
+            # Phase 7b: the undo store — how many restore points and how much
+            # disk they hold against the budget.
+            "checkpoints": self.checkpoints.status(),
         }
 
     # -- reminders ---------------------------------------------------------
@@ -1085,8 +1209,11 @@ class NammaAgentService:
         trust, sandbox state, secrets inventory (names only), the quarantine
         log (memory + documents + flagged web fetches), and the recent
         approval/audit trail annotated with each tool's destructive flag."""
+        from namma_agent.core.hooks import status as hooks_status
         from namma_agent.core.sandbox import status as sandbox_status
+        from namma_agent.core.shell_backends import status as shell_backend_status
         from namma_agent.core.trust import TRUST_LEVELS, trust_map
+        from namma_agent.core.urlguard import status as urlguard_status
 
         destructive = {t.name for t in self.registry.all() if t.destructive}
         audit = []
@@ -1113,6 +1240,15 @@ class NammaAgentService:
             "trust": trust_map(self.config),
             "trust_levels": list(TRUST_LEVELS),
             "sandbox": sandbox_status(),
+            "shell_backend": shell_backend_status(),
+            "urlguard": urlguard_status(),
+            # Phase 7e: user-supplied code running in-process. The user put it
+            # there themselves, but it must never be INVISIBLE.
+            "extensions": {
+                "hooks": hooks_status(),
+                "user_tools": sorted(t.name for t in self.registry.all()
+                                     if (t.category or "") == "custom"),
+            },
             "secrets": {k: v for k, v in self.secrets_overview().items() if k != "ok"},
             "quarantine": {
                 "memory": quarantined_memory,
@@ -1121,6 +1257,26 @@ class NammaAgentService:
             },
             "audit": audit,
         }
+
+    # -- checkpoints (Phase 7b) --------------------------------------------
+
+    def checkpoints_overview(self, session_id: str = "", limit: int = 50) -> dict:
+        """Restore points for Settings → System → Checkpoints."""
+        items = self.checkpoints.list(session_id=session_id, limit=limit)
+        return {"ok": True,
+                "status": self.checkpoints.status(),
+                "items": [cp.summary() for cp in items]}
+
+    def restore_checkpoint(self, checkpoint_id: str) -> dict:
+        """Put a checkpoint's files back. The report names anything it could not
+        restore rather than reporting a clean success."""
+        report = self.checkpoints.restore(checkpoint_id)
+        if report.get("error"):
+            return {"ok": False, "error": report["error"]}
+        return report
+
+    def delete_checkpoint(self, checkpoint_id: str) -> dict:
+        return {"ok": self.checkpoints.delete(checkpoint_id)}
 
     # -- secrets vault (Phase 1d) ------------------------------------------
 
@@ -1720,8 +1876,28 @@ class NammaAgentService:
                 "supported": s.supported,
                 "requires": s.requires_text(),
                 "missing": s.missing(),
+                # A skill the assistant proposed (consolidator reflection or
+                # post-turn capture). Created disabled; the Skills tab shows
+                # these in a review queue with approve/discard.
+                "draft": s.is_draft,
             })
         return out
+
+    def delete_skill(self, name: str) -> dict:
+        """Discard a learned skill — the review queue's "no thanks". Bundled
+        skills are never deleted (they'd be unrecoverable); turn those off."""
+        if self.skills is None:
+            return {"ok": False, "error": "skills unavailable"}
+        ok, detail = self.skills.delete(name)
+        if not ok:
+            return {"ok": False, "error": detail}
+        from namma_agent.config import update_config
+
+        # `delete` already dropped it from the in-memory disabled-set; persist
+        # that so a discarded draft leaves no trace in config.local.yaml.
+        disabled = self.skills.disabled_names()
+        self.config = update_config({"skills": {"disabled": disabled}})
+        return {"ok": True, "detail": detail, "disabled": disabled}
 
     def set_skill_enabled(self, name: str, enabled: bool) -> dict:
         """Toggle a skill and persist the disabled-set to config.local.yaml so the
@@ -1778,8 +1954,14 @@ class NammaAgentService:
         merged config from ``update_config``; falls back to the in-memory config
         (used when only an API key changed). A bad provider spec is logged and the
         previous provider is kept, so a half-typed setting never bricks the chat."""
-        if config is not None:
-            self.config = config
+        if config is not None and config is not self.config:
+            # Update the config dict IN PLACE. Runners and registered tools were
+            # handed this exact object at boot (RoutineRunner, SelfReviewRunner,
+            # the learning tools' `config=`); rebinding `self.config` to a fresh
+            # dict left every one of them reading stale values until a restart —
+            # which is why "applies live" wasn't true for anything but the provider.
+            self.config.clear()
+            self.config.update(config)
         try:
             new_provider = from_config(self.config)
             self.provider = new_provider
@@ -1806,7 +1988,132 @@ class NammaAgentService:
         self._providers = {p["id"]: p for p in configured_providers(self.config)}
         self._model_profiles = {m["id"]: m for m in configured_models(self.config)}
         self._model_providers = {}
+        self._sync_learning_runners()
         return self.config
+
+    # -- learning settings (Settings → System → Learning) ---------------------
+
+    def _sync_learning_runners(self) -> None:
+        """Start/stop the weekly self-review runner and the learning nudger so
+        they match the current config — the live half of Settings → Learning.
+        Safe to call any time; bare test services have neither runner."""
+        from namma_agent.core.logger import logger
+
+        if self.self_review is not None:
+            if (self.config.get("self_review") or {}).get("enabled", False):
+                self.self_review.ensure_started()
+            elif self.self_review.running:
+                self.self_review.stop()
+                logger.info("[self-review] weekly runner stopped (disabled in Settings)")
+
+        learn = self.config.get("learning") or {}
+        try:
+            after_days = float(learn.get("nudge_after_days", 3) or 0)
+        except (TypeError, ValueError):
+            after_days = 0.0
+        # Nudges need the background switch, a messaging channel to nudge INTO,
+        # and a non-zero idle window. Anything missing → no thread.
+        wanted = (after_days > 0
+                  and bool((self.config.get("scheduler") or {}).get("run_in_background", False))
+                  and self.comms is not None and self.comms.any_available)
+        current = self.learning_nudger
+        if not wanted:
+            if current is not None:
+                current.stop()
+                self.learning_nudger = None
+            return
+        if current is not None and current.after_days == after_days:
+            current.start()                       # no-op when it's already alive
+            return
+        if current is not None:                   # window changed → rebuild
+            current.stop()
+        from namma_agent.core.learning_nudge import LearningNudger
+
+        self.learning_nudger = LearningNudger(self.db, self.comms.send,
+                                              after_days=after_days)
+        self.learning_nudger.start()
+
+    def learning_settings(self) -> dict:
+        """Everything Settings → System → Learning edits, plus the live state of
+        both background threads (so the UI can say when a knob is inert)."""
+        sr_cfg = self.config.get("self_review") or {}
+        learn = self.config.get("learning") or {}
+        try:
+            weekday = int(sr_cfg.get("weekday", 6))
+        except (TypeError, ValueError):
+            weekday = 6
+        try:
+            after_days = float(learn.get("nudge_after_days", 3))
+        except (TypeError, ValueError):
+            after_days = 3.0
+        comms_ready = bool(self.comms is not None and self.comms.any_available)
+        return {
+            "self_review": {
+                "enabled": bool(sr_cfg.get("enabled", False)),
+                "weekday": weekday if 0 <= weekday <= 6 else 6,
+                "at": str(sr_cfg.get("at") or "18:00"),
+                "runner_running": bool(self.self_review is not None
+                                       and self.self_review.running),
+            },
+            "learning": {
+                "notify_progress": bool(learn.get("notify_progress", True)),
+                "nudge_after_days": after_days,
+                "nudger_running": bool(self.learning_nudger is not None
+                                       and self._thread_alive(self.learning_nudger)),
+                "comms_ready": comms_ready,
+                "background_on": bool((self.config.get("scheduler") or {})
+                                      .get("run_in_background", False)),
+            },
+        }
+
+    def save_learning_settings(self, settings: dict) -> dict:
+        """Validate + persist the Learning knobs to config.local.yaml and apply
+        them live (runners start/stop immediately). Rejects a bad value instead
+        of writing it — a half-typed time must never silently disable the run."""
+        from namma_agent.config import update_config
+        from namma_agent.core.logger import logger
+
+        s = settings or {}
+        sr_in = s.get("self_review") or {}
+        learn_in = s.get("learning") or {}
+        sr_out: dict = {}
+        learn_out: dict = {}
+
+        if "enabled" in sr_in:
+            sr_out["enabled"] = bool(sr_in["enabled"])
+        if "weekday" in sr_in:
+            try:
+                weekday = int(sr_in["weekday"])
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "weekday must be 0 (Mon) – 6 (Sun)."}
+            if not 0 <= weekday <= 6:
+                return {"ok": False, "error": "weekday must be 0 (Mon) – 6 (Sun)."}
+            sr_out["weekday"] = weekday
+        if "at" in sr_in:
+            at = str(sr_in["at"] or "").strip()
+            if not _valid_hhmm(at):
+                return {"ok": False, "error": "Time must look like 18:00 (24-hour)."}
+            sr_out["at"] = at
+        if "notify_progress" in learn_in:
+            learn_out["notify_progress"] = bool(learn_in["notify_progress"])
+        if "nudge_after_days" in learn_in:
+            try:
+                days = float(learn_in["nudge_after_days"])
+            except (TypeError, ValueError):
+                return {"ok": False, "error": "Nudge delay must be a number of days."}
+            if days < 0 or days > 365:
+                return {"ok": False, "error": "Nudge delay must be 0–365 days (0 = off)."}
+            learn_out["nudge_after_days"] = days
+
+        updates: dict = {}
+        if sr_out:
+            updates["self_review"] = sr_out
+        if learn_out:
+            updates["learning"] = learn_out
+        if updates:
+            self.apply_config(update_config(updates))
+            logger.info("[learning] settings updated: %s", updates)
+        return {"ok": True, **self.learning_settings()}
 
     def provider_for(self, model_id: Optional[str]):
         """The Provider for a model profile id. With no/unknown id, prefer the
@@ -1899,13 +2206,22 @@ class NammaAgentService:
                 self.db.record_artifact(topic["id"], kind, url, title)
 
         set_artifact_recorder(_record)
+        # Expose THIS turn's brain to tools that run their own agent
+        # (delegate_task / background_task) so a sub-agent inherits the model the
+        # user actually picked — see core/interactive.set_current_provider.
+        from namma_agent.core.interactive import (
+            reset_current_provider, set_current_provider,
+        )
+        turn_provider = self.provider_for(model_id)
+        prov_token = set_current_provider(turn_provider)
         try:
             return self.agent.process_turn(
                 text, session_id=session_id, on_token=on_token, approval=approval,
                 mode=mode, should_cancel=should_cancel, emit=emit,
-                provider=self.provider_for(model_id),
+                provider=turn_provider,
             )
         finally:
+            reset_current_provider(prov_token)
             set_askpass(None)
             set_event_sink(None)
             set_artifact_recorder(None)

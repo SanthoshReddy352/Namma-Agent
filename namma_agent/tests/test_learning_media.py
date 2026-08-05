@@ -58,6 +58,12 @@ def test_fetch_image_mocked(reg, tmp_path, monkeypatch):
         return FakeResp(b"\x89PNG\r\n\x1a\n fake-bytes", "image/png")  # the image download
 
     monkeypatch.setattr(lm.urllib.request, "urlopen", fake_urlopen)
+    # The image download goes through the Phase 7a SSRF guard (the URL comes
+    # from the Openverse response, i.e. remote data). example.test has no DNS
+    # answer, so stub the guard — the guard itself is covered in test_urlguard.
+    monkeypatch.setattr(lm.urlguard, "check_url", lambda url, **kw: url)
+    monkeypatch.setattr(lm.urlguard, "guarded_opener",
+                        lambda: type("O", (), {"open": staticmethod(fake_urlopen)})())
     res = reg.execute("fetch_image", {"query": "cat"})
     assert res.ok
     assert "/api/media/images/" in res.content and "Ada" in res.content

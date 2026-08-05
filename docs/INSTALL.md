@@ -20,8 +20,58 @@ your first AI provider, add a desktop shortcut, and launch the app.
 |---|---|---|
 | **Python 3.10–3.13** | the app runtime | the installer checks for it and tells you how to install it if missing |
 | **An API key** (or a local model) | the "brain" | Anthropic / OpenAI / Google key, **or** a local Ollama/LM Studio server (no key) |
+| **Ollama** | semantic memory recall | **required** — every installer installs it for you and pulls the 46 MB `all-minilm` model. See below |
 | Git *(optional)* | one-command updates | if you `git clone`, updates are a single `git pull`-based step |
 | Node 18+ *(optional)* | only to **build** the UI from source | release downloads ship the UI pre-built, so most users don't need Node |
+
+### Memory embeddings — a required component
+
+[Ollama](https://ollama.com) plus the `all-minilm` model is what gives the
+memory its *semantic* recall. Without it, memory search is keyword-only and
+misses anything you phrase differently from how you stored it — "what is my
+mother tongue?" never reaches the stored fact that says *Telugu*. That is the
+difference between an assistant that remembers you and one that only remembers
+your exact words, so it is treated as a real dependency, not a nicety.
+
+**You do not install it yourself.** Every installer — `install.sh`,
+`install.ps1`, the native `.exe`/`.dmg` from the releases tab, and the VPS
+one-liner — detects whether Ollama is present and installs it automatically if
+not (winget/choco on Windows, Homebrew on macOS, the official script on Linux),
+then pulls the model. If that can't be done, **the install stops** with
+instructions rather than silently leaving you with degraded memory.
+
+| | |
+|---|---|
+| Disk | ~350 MB (Ollama ~300 MB + the 46 MB model) |
+| RAM | ~150 MB resident while serving |
+| Speed | ~10 ms per query |
+| Cost | none — it never leaves your machine |
+| Network | none after install |
+
+#### Opting out (constrained hosts only)
+
+If a machine genuinely cannot run it — air-gapped, locked-down corporate build,
+unsupported architecture — you can install without it. Memory then falls back to
+BM25 keyword recall; everything else works identically, the embedder
+circuit-breaks so the missing endpoint costs nothing per turn, and Settings →
+Memory shows **Vector recall: off**.
+
+```bash
+bash installers/install.sh --no-embeddings
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File installers\install.ps1 -NoEmbeddings
+```
+
+For the native installer from the releases tab, set the environment variable
+`NAMMA_NO_EMBEDDINGS=1` before running it.
+
+To add it later, just pull the model — the shipped config already points at it:
+
+```bash
+ollama pull all-minilm
+```
 
 ---
 

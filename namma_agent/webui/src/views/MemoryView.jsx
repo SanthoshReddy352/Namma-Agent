@@ -56,6 +56,8 @@ export default function MemoryView() {
         {status && (
           <span className="text-[12px] text-ink-faint dark:text-night-faint">
             {status.items ?? 0} facts · {status.entities ?? 0} entities · {status.relations ?? 0} links
+            {status.memory_quality != null &&
+              ` · ${Math.round(status.memory_quality * 100)}% quality`}
             {status.pending_writes > 0 && ` · ${status.pending_writes} writing…`}
           </span>
         )}
@@ -432,12 +434,18 @@ const REPORT_LABELS = [
   ["skill_drafts", "skills drafted"],
   ["skills_reinforced", "facts reinforced by skill use"],
   ["core_compacted", "core compacted"],
+  ["quality_scored", "facts audited"],
+  ["quality_junk", "low-value facts flagged"],
 ];
 
 function reportLine(report) {
   const parts = REPORT_LABELS
     .filter(([k]) => (report?.[k] || 0) > 0)
     .map(([k, label]) => `${report[k]} ${label}`);
+  // Storage quality is a rate, not a count — it belongs even when it's 0.
+  if (report?.memory_quality != null) {
+    parts.push(`${Math.round(report.memory_quality * 100)}% memory quality`);
+  }
   return parts.length ? parts.join(" · ") : "nothing needed changing";
 }
 

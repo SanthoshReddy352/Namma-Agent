@@ -1,0 +1,17 @@
+{
+  "id": "b80bd005da03",
+  "session_id": "20a65228-9f50-44da-9a3f-36bd4d277f53",
+  "tool": "write_file",
+  "created_at": "2026-08-03T17:33:51+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\AppData\\Local\\Temp\\namma_deck_build.py",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

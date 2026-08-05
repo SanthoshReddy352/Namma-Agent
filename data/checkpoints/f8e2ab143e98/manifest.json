@@ -1,0 +1,17 @@
+{
+  "id": "f8e2ab143e98",
+  "session_id": "b49c2360-2e87-4cec-b16f-2ea09809b03c",
+  "tool": "delete_path",
+  "created_at": "2026-07-29T10:24:45+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\Desktop\\Sripa Aqua\\nellore_dp.pdf",
+      "kind": "file",
+      "stored": "files/0.pdf",
+      "size": 1109,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

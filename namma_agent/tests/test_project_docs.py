@@ -259,6 +259,70 @@ def test_project_scope_block_lists_documents_and_history(db, project, tmp_path, 
     assert "search_project_history" in block
 
 
+# ── index_document tool (agent-callable indexing) ───────────────────────────
+
+def _project_tools(db):
+    from namma_agent.core.builtins import register_project_tools
+    from namma_agent.core.tools import ToolRegistry
+
+    reg = ToolRegistry()
+    register_project_tools(reg, db)
+    return reg
+
+
+def test_index_document_tool_indexes_into_project(db, project, tmp_path):
+    """The agent can index a file it has on disk into the current project, and
+    then find it — the capability that previously did not exist as a tool."""
+    from namma_agent.core.interactive import set_current_session
+
+    reg = _project_tools(db)
+    p = _write(tmp_path, "arch.md", CLEAN_DOC)
+    sid = db.create_session_in(project_id=project["id"])
+    set_current_session(sid)
+    try:
+        r = reg.execute("index_document", {"path": str(p)})
+        assert r.ok and "Indexed" in r.content and "arch.md" in r.content
+
+        found = reg.execute("search_project_documents", {"query": "retry backoff policy"})
+        assert found.ok and "backoff" in found.content.lower()
+    finally:
+        set_current_session(None)
+
+
+def test_index_document_without_project_is_honest(db, tmp_path):
+    """Outside a project there is nowhere to index — the tool must FAIL clearly,
+    not fake success (the eval's 'reported Indexed but didn't' failure mode)."""
+    from namma_agent.core.interactive import set_current_session
+
+    reg = _project_tools(db)
+    p = _write(tmp_path, "notes.md", CLEAN_DOC)
+    sid = db.create_session()  # a plain chat, not filed under any project
+    set_current_session(sid)
+    try:
+        r = reg.execute("index_document", {"path": str(p)})
+        assert not r.ok
+        assert "project" in r.error.lower()
+        assert "read_document" in r.error  # points at the honest alternative
+    finally:
+        set_current_session(None)
+
+
+def test_index_document_flagged_file_is_quarantined(db, project, tmp_path):
+    """An injected document indexes but is held out of retrieval, and the tool
+    says so instead of silently succeeding."""
+    from namma_agent.core.interactive import set_current_session
+
+    reg = _project_tools(db)
+    p = _write(tmp_path, "evil.txt", INJECTED)
+    sid = db.create_session_in(project_id=project["id"])
+    set_current_session(sid)
+    try:
+        r = reg.execute("index_document", {"path": str(p)})
+        assert r.ok and "QUARANTINED" in r.content
+    finally:
+        set_current_session(None)
+
+
 def test_search_turns_scoped_to_project(db, project):
     inside = db.create_session_in(project_id=project["id"])
     outside = db.create_session()

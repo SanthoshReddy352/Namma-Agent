@@ -364,6 +364,63 @@ window, `installer/` + `installers/native/build.py`) and **plain bootstrap scrip
 
 ---
 
+## Phase 9 — Terminal UI + CLI surface  🚧 (wave 1 landed 2026-07-29)
+Hermes ships a full terminal front end (`prompt_toolkit` + `rich`) and a broad
+`hermes <command>` surface. Namma had only a 53-line `input()`/`print()` REPL.
+Wave 1 ports the **core TUI + the command surface**; the inline widgets
+(approval / sudo / clarify panels rendered above the input) are wave 2, per the
+user's "core first, widgets later" call.
+
+New package: [`namma_agent/tui/`](namma_agent/tui/) — `theme` (palette, skins,
+color-depth + unicode degradation), `art` (hero emblem + name-driven wordmark),
+`banner`, `render` (tool lines, spinner, diffs), `app` (the prompt_toolkit
+application), `cli` (the argparse surface).
+
+- [x] **Hermes-style chrome** — non-fullscreen `Application`: spinner line,
+  status bar (`model │ mode │ session │ cwd │ state`), bronze rules around a
+  multiline input, slash-command completion menu. Transcript prints into normal
+  scrollback through `patch_stdout`, so it stays scrollable and copyable.
+- [x] **Live streaming** — the TUI calls `service.run_turn` directly with
+  `sink=` + `on_token=`, so tokens appear as generated and `tool_started` /
+  `tool_finished` become emoji-prefixed transcript lines. Turns run on a worker
+  thread; **Ctrl+C cancels a turn in flight** via `should_cancel`.
+- [x] **Namma's own artwork** — a diya (lamp + flame) emblem, drawn as centered
+  tokens on a fixed grid, replaces Hermes's caduceus. The six-row block wordmark
+  is **rendered at runtime from `assistant_name()`**, never hardcoded, so
+  renaming the assistant renames the banner (CLAUDE.md rule).
+- [x] **Skins** — `~/.namma_agent/skins/<name>.yaml` overrides any palette key,
+  spinner faces/verbs, or the artwork; `/skin` switches at runtime.
+- [x] **Degradation** — truecolor → 256 → 16 → no-color, and unicode → ASCII,
+  both detected once and applied everywhere (`NAMMA_TUI_COLOR`,
+  `NAMMA_TUI_ASCII`, `NO_COLOR`). Legacy Windows `conhost` gets ANSI-16 + an
+  ASCII panel box. Without `rich`/`prompt_toolkit`, or without a TTY, the plain
+  REPL runs instead — the TUI deps are **optional**.
+- [x] **CLI surface** — `namma [-z|-c|-r|-m|--mode|--yolo|--skin|--tui|--cli|
+  --no-color|--ascii]` plus `chat, gateway, serve, sessions (list/browse/resume/
+  rename), model (list/set), config (show/path/edit/get/set), skills
+  (list/enable/disable), tools, mcp, memory (status/recall/remember), status,
+  doctor, logs, setup, version`.
+- [x] **Gateway split** — a terminal session suppresses the messaging gateway
+  (`comms.inbound_enabled=False`) so Telegram doesn't interleave turns with the
+  terminal; `namma gateway` is the messaging-only mode, mirroring Hermes.
+- [x] **Entry point** — `python -m namma_agent` routes subcommands/flags to the
+  new CLI. `--server`, `--setup`, `--version`, `--configure`, `--onboard` are
+  untouched (installers depend on them); `--chat` now auto-upgrades to the TUI
+  on a TTY and still falls back to the REPL everywhere else.
+- [x] **Tests** — 69 offline tests in `tests/test_tui.py`; full suite
+  **1130 pass, 3 skipped** across three randomized-order runs. New code is
+  ruff-clean.
+
+Wave 2 (not started): inline approval / sudo / clarify panels above the input,
+`/diff` rendering wired to the checkpoint snapshots, and a `/model` picker widget.
+
+**Not ported** (Hermes-specific, no Namma analogue — deliberately not stubbed):
+`nous` account/billing/subscription, `codex` runtime switching, `claw`, `portal`,
+`acp` pairing, `blueprint`/`kanban`/`cron` swarm tooling, and the dashboard
+auth/enroll commands.
+
+---
+
 ## Declined
 - [✗] **God Mode skill** — Hermes's GODMODE is an auto-jailbreak skill whose explicit purpose is to defeat a model's safety filters and "lock it jailbroken." Will not build or port. Everything else on the list stands.
 

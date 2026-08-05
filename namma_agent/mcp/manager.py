@@ -21,6 +21,7 @@ from typing import Optional
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 from namma_agent.mcp.client import StdioMCPClient
+from namma_agent.mcp.widgets import augment_widget_result, widget_resource_uri
 
 
 def _safe(part: str) -> str:
@@ -94,11 +95,30 @@ class MCPManager:
         schema = tool.get("inputSchema") or {"type": "object", "properties": {}}
         description = f"[{server}] " + (tool.get("description") or f"MCP tool {tool_name}")
 
-        def handler(args: dict, _client=client, _tool=tool_name, _timeout=call_timeout) -> ToolResult:
+        # Tools that render into an MCP-Apps UI widget return an ack ("Displayed!")
+        # rather than an answer — and this host has no widget renderer, so nothing
+        # reaches the user. Flag them so the result can be repaired into a real
+        # artifact link (see namma_agent.mcp.widgets) instead of a false success.
+        widget_uri = widget_resource_uri(tool)
+        if widget_uri:
+            logger.info("[mcp] %s.%s renders into widget %s — bridging",
+                        server, tool_name, widget_uri)
+
+        def handler(args: dict, _client=client, _tool=tool_name, _timeout=call_timeout,
+                    _widget=widget_uri) -> ToolResult:
             try:
-                return ToolResult(ok=True, content=_client.call_tool(_tool, args, timeout=_timeout))
+                content = _client.call_tool(_tool, args, timeout=_timeout)
             except Exception as exc:  # noqa: BLE001
                 return ToolResult(ok=False, content="", error=f"MCP error: {exc}")
+            if _widget:
+                # `data["url"]` is load-bearing: it's what makes the agent place the
+                # rendered diagram in the answer instead of trusting the model to
+                # re-paste the markdown (which it reliably does not).
+                content, data = augment_widget_result(
+                    content, args, _widget,
+                    lambda name, a: _client.call_tool(name, a, timeout=_timeout))
+                return ToolResult(ok=True, content=content, data=data or None)
+            return ToolResult(ok=True, content=content)
 
         registry.register(reg_name, description, schema, handler)
         return 1

@@ -121,6 +121,24 @@ def test_memory_settings_roundtrip(svc, monkeypatch, tmp_path):
     assert "prefetch: false" in local and "salience_min_chars: 40" in local
 
 
+def test_memory_low_quality_endpoint_lists_the_review_queue(svc):
+    junk = svc.engram.store.add_item("The assistant ran a shell command last session")
+    good = svc.engram.store.add_item("Santhosh is allergic to shellfish")
+    svc.engram.store.set_quality(junk, 0.0)
+    svc.engram.store.set_quality(good, 1.0)
+    out = svc.memory_low_quality()
+    assert out["ok"] and [i["id"] for i in out["items"]] == [junk]
+    assert out["memory_quality"] == 0.5 and out["junk"] == 1
+
+
+def test_memory_status_carries_storage_quality(svc):
+    item = svc.engram.store.add_item("Santhosh studies at KARE")
+    assert svc.memory_status()["memory_quality"] is None      # never audited
+    svc.engram.store.set_quality(item, 1.0)
+    st = svc.memory_status()
+    assert st["memory_quality"] == 1.0 and st["scored"] == 1
+
+
 def test_memory_environment_endpoint(svc):
     out = svc.memory_environment()
     assert out["ok"] and out["environment"]["home"]

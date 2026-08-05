@@ -1,0 +1,17 @@
+{
+  "id": "8c733df64c80",
+  "session_id": "274b5896-e0a7-46e6-a242-1bd6f012706c",
+  "tool": "write_file",
+  "created_at": "2026-08-03T18:23:59+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\AppData\\Local\\Temp\\export_pdf.ps1",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}
