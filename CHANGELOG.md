@@ -3,7 +3,7 @@
 All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased]
+## [2.3.2]
 
 ### Added
 - **Self-hosting (Phase 6)**: `server.host`/`server.port` bind config
