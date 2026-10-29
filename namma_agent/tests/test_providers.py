@@ -196,3 +196,167 @@ def test_chain_streams_through_callback():
     chain = ProviderChain([FakeProvider(available=True, reply="streamed")])
     chain.generate([{"role": "user", "content": "hi"}], stream=True, on_token=got.append)
     assert got == ["streamed"]
+
+
+# --------------------------------------------------------------------------
+# OpenAI parameter adaptation (max_completion_tokens & temperature)
+# --------------------------------------------------------------------------
+
+def test_openai_reasoning_and_completion_tokens_hints():
+    # OpenAI provider defaults to max_completion_tokens
+    prov_openai = OpenAIProvider(model="gpt-4o")
+    assert prov_openai._prefers_max_completion_tokens() is True
+    assert prov_openai._is_reasoning_model() is False
+
+    # Reasoning models require max_completion_tokens and drop temperature
+    for m in ("o1-preview", "o1-mini", "o3-2025-04-16", "o4-mini-2025-04-16"):
+        p = OpenAICompatProvider(model=m)
+        assert p._is_reasoning_model() is True
+        assert p._prefers_max_completion_tokens() is True
+
+    # Next-gen GPT-5/6 models require max_completion_tokens
+    for m in ("gpt-5.4-mini", "gpt-6.1-sol"):
+        p = OpenAICompatProvider(model=m)
+        assert p._prefers_max_completion_tokens() is True
+
+    # Third-party local models retain max_tokens
+    local_p = OpenAICompatProvider(model="llama3.1", base_url="http://localhost:11434/v1")
+    assert local_p._prefers_max_completion_tokens() is False
+    assert local_p._is_reasoning_model() is False
+
+
+def test_openai_generate_adaptive_parameter_repair(monkeypatch):
+    calls = []
+
+    class DummyClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    if "max_tokens" in kwargs:
+                        raise RuntimeError("Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.")
+                    
+                    class DummyChoice:
+                        message = type("Msg", (), {"content": "recovered", "tool_calls": None, "reasoning_content": ""})()
+                        finish_reason = "stop"
+                    
+                    return type("Resp", (), {"choices": [DummyChoice()], "usage": None})()
+
+    prov = OpenAICompatProvider(model="custom-model", base_url="http://custom/v1")
+    monkeypatch.setattr(prov, "_client", lambda: DummyClient())
+
+    resp = prov.generate([{"role": "user", "content": "hi"}])
+    assert resp.content == "recovered"
+    # First call had max_tokens; second call adapted to max_completion_tokens
+    assert "max_tokens" in calls[0]
+    assert "max_completion_tokens" in calls[1]
+
+
+def test_openai_reasoning_effort_none_for_gpt56_tools(monkeypatch):
+    p = OpenAICompatProvider(model="gpt-5.6-terra")
+    assert p._requires_reasoning_effort_none_for_tools() is True
+
+    calls = []
+
+    class DummyClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    class DummyChoice:
+                        message = type("Msg", (), {"content": "tool-ready", "tool_calls": None, "reasoning_content": ""})()
+                        finish_reason = "stop"
+                    return type("Resp", (), {"choices": [DummyChoice()], "usage": None})()
+
+    monkeypatch.setattr(p, "_client", lambda: DummyClient())
+
+    # Pure chat has no reasoning_effort injected
+    p.generate([{"role": "user", "content": "hi"}], tools=None)
+    assert "reasoning_effort" not in calls[0]
+
+    # Tool calls automatically include reasoning_effort="none"
+    p.generate([{"role": "user", "content": "call it"}], tools=[{"name": "t", "parameters": {}}])
+    assert calls[1].get("reasoning_effort") == "none"
+
+
+def test_openai_adaptive_reasoning_effort_repair(monkeypatch):
+    calls = []
+
+    class DummyClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    if kwargs.get("reasoning_effort") != "none":
+                        raise RuntimeError(
+                            "Function tools with reasoning_effort are not supported for gpt-5.6-terra in /v1/chat/completions. "
+                            "To use function tools, use /v1/responses or set reasoning_effort to 'none'."
+                        )
+                    class DummyChoice:
+                        message = type("Msg", (), {"content": "ok", "tool_calls": None, "reasoning_content": ""})()
+                        finish_reason = "stop"
+                    return type("Resp", (), {"choices": [DummyChoice()], "usage": None})()
+
+    # Generic model where proactive didn't fire, but server rejects with error
+    p = OpenAICompatProvider(model="custom-hybrid-model")
+    monkeypatch.setattr(p, "_client", lambda: DummyClient())
+
+    resp = p.generate([{"role": "user", "content": "hi"}], tools=[{"name": "t", "parameters": {}}])
+    assert resp.content == "ok"
+    assert "reasoning_effort" not in calls[0]
+    assert calls[1].get("reasoning_effort") == "none"
+
+
+def test_openai_temperature_restricted_for_gpt56(monkeypatch):
+    p = OpenAICompatProvider(model="gpt-5.6-terra", temperature=0.3)
+    assert p._is_temperature_restricted_model() is True
+
+    calls = []
+
+    class DummyClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    class DummyChoice:
+                        message = type("Msg", (), {"content": "title", "tool_calls": None, "reasoning_content": ""})()
+                        finish_reason = "stop"
+                    return type("Resp", (), {"choices": [DummyChoice()], "usage": None})()
+
+    monkeypatch.setattr(p, "_client", lambda: DummyClient())
+
+    p.generate([{"role": "user", "content": "summarize"}])
+    # Temperature 0.3 is proactively excluded so OpenAI doesn't 400
+    assert "temperature" not in calls[0]
+
+
+def test_openai_adaptive_temperature_unsupported_value_repair(monkeypatch):
+    calls = []
+
+    class DummyClient:
+        class chat:
+            class completions:
+                @staticmethod
+                def create(**kwargs):
+                    calls.append(kwargs)
+                    if "temperature" in kwargs:
+                        raise RuntimeError(
+                            "Unsupported value: 'temperature' does not support 0.3 with this model. Only the default (1) value is supported."
+                        )
+                    class DummyChoice:
+                        message = type("Msg", (), {"content": "ok", "tool_calls": None, "reasoning_content": ""})()
+                        finish_reason = "stop"
+                    return type("Resp", (), {"choices": [DummyChoice()], "usage": None})()
+
+    p = OpenAICompatProvider(model="some-model", temperature=0.3)
+    monkeypatch.setattr(p, "_client", lambda: DummyClient())
+
+    resp = p.generate([{"role": "user", "content": "hi"}])
+    assert resp.content == "ok"
+    assert "temperature" in calls[0]
+    assert "temperature" not in calls[1]
+

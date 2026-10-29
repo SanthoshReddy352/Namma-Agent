@@ -1,0 +1,17 @@
+{
+  "id": "4d6066760ea1",
+  "session_id": "e60cfde0-5232-4dcb-a84a-37b52517d99f",
+  "tool": "write_file",
+  "created_at": "2026-08-10T14:34:29+00:00",
+  "entries": [
+    {
+      "path": "D:\\AGI\\combine_frags.py",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

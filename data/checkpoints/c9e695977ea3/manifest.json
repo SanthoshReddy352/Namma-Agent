@@ -1,0 +1,17 @@
+{
+  "id": "c9e695977ea3",
+  "session_id": "e60cfde0-5232-4dcb-a84a-37b52517d99f",
+  "tool": "write_file",
+  "created_at": "2026-08-10T14:33:50+00:00",
+  "entries": [
+    {
+      "path": "D:\\AGI\\_frag_c.py",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}

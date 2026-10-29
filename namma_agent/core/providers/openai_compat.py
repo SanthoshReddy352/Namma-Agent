@@ -186,6 +186,46 @@ class OpenAICompatProvider(Provider):
             for t in tools
         ]
 
+    # -- model capability hints --------------------------------------------
+
+    def _is_reasoning_model(self) -> bool:
+        """True for models that use internal chain-of-thought and reject sampling knobs
+        like `temperature` on OpenAI."""
+        m = (self.model or "").lower()
+        return (
+            m.startswith(("o1", "o3", "o4"))
+            or "/o1" in m
+            or "/o3" in m
+            or "/o4" in m
+        )
+
+    def _is_temperature_restricted_model(self) -> bool:
+        """True for models that reject custom temperature on OpenAI (only default 1 supported)."""
+        m = (self.model or "").lower()
+        return (
+            self._is_reasoning_model()
+            or m.startswith("gpt-5.6")
+            or "5.6-" in m
+        )
+
+    def _prefers_max_completion_tokens(self) -> bool:
+        """OpenAI's official API, reasoning models (o1/o3/o4), and next-gen models (gpt-5/gpt-6)
+        require `max_completion_tokens` instead of the legacy `max_tokens`."""
+        m = (self.model or "").lower()
+        return (
+            self._is_reasoning_model()
+            or m.startswith(("gpt-5", "gpt-6"))
+            or self.name == "openai"
+            or not self.base_url
+            or "api.openai.com" in (self.base_url or "")
+        )
+
+    def _requires_reasoning_effort_none_for_tools(self) -> bool:
+        """Models like gpt-5.6 series default to server-side reasoning effort in chat completions,
+        which rejects function tools unless reasoning_effort is explicitly set to 'none'."""
+        m = (self.model or "").lower()
+        return m.startswith("gpt-5.6") or "5.6-" in m
+
     # -- generate ----------------------------------------------------------
 
     def generate(
@@ -203,11 +243,21 @@ class OpenAICompatProvider(Provider):
         body: dict = {
             "model": self.model,
             "messages": wire_messages,
-            "max_tokens": self.max_tokens,
-            "temperature": self.temperature,
         }
+        if self.max_tokens and self.max_tokens > 0:
+            if self._prefers_max_completion_tokens():
+                body["max_completion_tokens"] = self.max_tokens
+            else:
+                body["max_tokens"] = self.max_tokens
+
+        # Reasoning models and gpt-5.6 series reject custom temperature values on OpenAI endpoints
+        if not self._is_temperature_restricted_model() and self.temperature is not None:
+            body["temperature"] = self.temperature
+
         if wire_tools:
             body["tools"] = wire_tools
+            if self._requires_reasoning_effort_none_for_tools():
+                body["reasoning_effort"] = "none"
 
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
@@ -217,6 +267,46 @@ class OpenAICompatProvider(Provider):
                 return self._generate_once(client, body)
             except Exception as exc:  # noqa: BLE001
                 last_exc = exc
+                err_str = str(exc).lower()
+
+                # Adaptive parameter repair for endpoints/models with strict parameter rules
+                adapted = False
+                if "max_tokens" in err_str and (
+                    "max_completion_tokens" in err_str
+                    or "unsupported" in err_str
+                    or "support" in err_str
+                ):
+                    if "max_tokens" in body:
+                        body["max_completion_tokens"] = body.pop("max_tokens")
+                        adapted = True
+                elif "max_completion_tokens" in err_str and (
+                    "unsupported" in err_str
+                    or "support" in err_str
+                ):
+                    if "max_completion_tokens" in body:
+                        body["max_tokens"] = body.pop("max_completion_tokens")
+                        adapted = True
+                if "temperature" in err_str and (
+                    "unsupported" in err_str
+                    or "support" in err_str
+                    or "default" in err_str
+                    or "invalid" in err_str
+                ):
+                    if "temperature" in body:
+                        body.pop("temperature", None)
+                        adapted = True
+                if "reasoning_effort" in err_str and (
+                    "none" in err_str
+                    or "set reasoning_effort" in err_str
+                    or "support" in err_str
+                ):
+                    body["reasoning_effort"] = "none"
+                    adapted = True
+
+                if adapted:
+                    logger.info("[%s] adapted request parameters after error: %s; retrying immediately", self.name, exc)
+                    continue
+
                 logger.warning("[%s] attempt %d failed: %s", self.name, attempt + 1, exc)
                 if attempt < self.max_retries - 1:
                     time.sleep(2 ** attempt)

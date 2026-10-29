@@ -1,0 +1,17 @@
+{
+  "id": "2d6167d7e5ba",
+  "session_id": "4380a9d9-b71e-49a8-946b-d519764420e2",
+  "tool": "write_file",
+  "created_at": "2026-08-06T06:19:10+00:00",
+  "entries": [
+    {
+      "path": "C:\\Users\\santh\\Desktop\\OCR\\debug_ocr.py",
+      "kind": "absent",
+      "stored": "",
+      "size": 0,
+      "manifest": [],
+      "truncated": false
+    }
+  ],
+  "restored_at": ""
+}
