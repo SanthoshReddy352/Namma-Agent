@@ -33,7 +33,7 @@
 | | |
 |---|---|
 | Version | 2.3.2 (`namma_agent/version.py`) |
-| Test suite | **1,440 passed, 3 skipped** (2026-11-26, Phase 9 W1 slice 6; 1,439 after slice 5; 1,437 after slice 4; 1,424 after slice 1; 1,420 after Phase 5/6; 1,312 after Phase 3) |
+| Test suite | **1,583 passed, 3 skipped** (2026-11-26, Phase 9 integration: W1 + W2 + W3 + Phase 10 merged; web UI 106 passed; desktop shell 8 passed; 1,440 after W1 slice 6; 1,439 after slice 5; 1,437 after slice 4; 1,424 after slice 1; 1,420 after Phase 5/6; 1,312 after Phase 3) |
 | Web UI tests | **84 passed** — `cd namma_agent/webui && npm test` (Vitest + React Testing Library; 63 after W1 slice 5; 51 after slice 4; 38 after slice 3; 34 after slice 2; 29 after slice 1) |
 | Run | `python -m namma_agent --server` → http://127.0.0.1:8000 (desktop: `python -m namma_agent`) |
 | Test | `.venv/Scripts/python.exe -m pytest namma_agent/tests -q` (no API key needed) |
@@ -1609,6 +1609,13 @@ From `STAND_OUT.md`:
 
 ## 10. Change log
 
+- **2026-11-26 (Phase 9 integration):**
+  - Merged into `phase9-integration` for one PR to `main`:
+    - `phase9-w1`, plus the main checkout's uncommitted W1 polish;
+    - W2 (`claude/phase9-w2-providers-051bcf`), Phase 10 (`claude/phase10-memory-graph-05e8d1`) and W3 (`claude/phase9-w3-desktop-57ffaf`).
+  - Only change-log conflicts, with both sides kept.
+  - Python 1,583 passed / 3 skipped; ruff clean; web UI 106 passed and builds; desktop shell 8 passed.
+  - A live smoke in the Electron window: title bar, band buttons, Appearance, a theme switch.
 - **2026-11-26 (Phase 9 W1, slice 6):**
   - Fixed the blank Settings → Appearance (a missing import); error boundaries around Settings sections and pages; a render test for every section.
   - New chats appear in the sidebar at once as "Untitled session" (pulsing while working); the model's title replaces it after the first reply.
