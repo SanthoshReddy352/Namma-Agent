@@ -1,0 +1,64 @@
+# Namma Agent desktop: electron-builder configuration (Phase 9 W3).
+# Build:  npm run dist        (stages the backend + Python runtime, then NSIS)
+# Nothing is ever published by these scripts (--publish never). The `publish`
+# block below only tells electron-updater where to look for updates.
+appId: com.namma.agent            # also the AUMID on the Start-menu shortcut (toasts carry it)
+productName: Namma Agent
+copyright: Namma Agent contributors
+
+directories:
+  output: out
+  buildResources: resources
+
+files:
+  - src/**/*
+  - resources/icon.png
+  - resources/icon.ico
+  - resources/tray*.png
+  - package.json
+  - "!**/*.map"
+
+# The local engine ships next to the app, outside app.asar:
+#   resources/backend/namma_agent   the Python app (+ its built web UI)
+#   resources/python                a relocatable CPython with every dependency
+# Both are produced by scripts/stage.js.
+extraResources:
+  - from: stage/backend
+    to: backend
+  - from: stage/python
+    to: python
+
+protocols:
+  - name: Namma Agent
+    schemes: [namma]
+
+publish:
+  provider: github
+  owner: SanthoshReddy352
+  repo: Namma-Agent
+  releaseType: release
+
+win:
+  target: [nsis]
+  icon: resources/icon.ico
+  executableName: Namma Agent
+
+nsis:
+  oneClick: false                 # assisted installer: shows progress and the install dir
+  perMachine: false               # per-user install: no admin prompt (%LOCALAPPDATA%\Programs)
+  allowElevation: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Namma Agent
+  uninstallDisplayName: Namma Agent
+  installerIcon: resources/icon.ico
+  uninstallerIcon: resources/icon.ico
+  deleteAppDataOnUninstall: false # the uninstaller asks instead (resources/installer.nsh)
+  include: resources/installer.nsh
+  artifactName: NammaAgentSetup-${version}.${ext}
+
+linux:                            # unverified (no Linux runner here); see PROGRESS.md
+  target: [AppImage]
+  icon: resources/icon.png
+  category: Utility

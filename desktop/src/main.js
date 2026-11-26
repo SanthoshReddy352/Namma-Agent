@@ -38,6 +38,10 @@ if (!app.requestSingleInstanceLock()) {
   process.exit(0);
 }
 
+// A bug in a handler should be logged, not crash the shell or pop a dialog.
+process.on("uncaughtException", (err) => { try { log(`uncaught: ${err && err.stack || err}`); } catch { /* ignore */ } });
+process.on("unhandledRejection", (err) => { try { log(`unhandled rejection: ${err && err.stack || err}`); } catch { /* ignore */ } });
+
 const userData = app.getPath("userData");
 const logDir = path.join(userData, "logs");
 const store = new Store(path.join(userData, "desktop-settings.json"), {
@@ -254,11 +258,17 @@ function showNotification({ title, body, action }) {
 }
 
 function onBusEvent(msg) {
-  if (msg.type === "desktop_notify") { showNotification(msg); return; }
+  if (msg.type === "desktop_notify") {
+    log(`notify: ${String(msg.title || "").slice(0, 80)}`);
+    showNotification(msg);
+    return;
+  }
   if (msg.type !== "desktop_command") return;
   log(`command ${msg.action}`);
   if (msg.action === "focus") showWindow();
-  else if (msg.action === "update_check") updater.check({ userInitiated: true });
+  // The web UI checks on its own (update banner, About tab), so a forwarded
+  // check is quiet: the shell only speaks up when an update actually exists.
+  else if (msg.action === "update_check") updater.check();
   else if (msg.action === "update_apply") updater.install();
   else if (msg.action === "uninstall") runUninstaller();
 }
@@ -440,6 +450,15 @@ app.whenReady().then(() => {
   boot();
   if (app.isPackaged) setTimeout(() => updater.check(), 30000);
 });
+
+// Test hook for driving the shell from a Node inspector session (verification
+// of the tray menu etc.). Off unless NAMMA_DESKTOP_DEBUG=1.
+if (process.env.NAMMA_DESKTOP_DEBUG === "1") {
+  globalThis.__nammaDesktop = {
+    get tray() { return tray; }, get win() { return win; }, get backend() { return backend; },
+    store, showNotification, handleDeepLink, buildTrayMenu, setLoginItem, loginItem, updater,
+  };
+}
 
 let finalQuit = false;
 app.on("before-quit", (e) => {

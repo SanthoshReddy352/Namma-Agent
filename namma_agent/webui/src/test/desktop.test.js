@@ -26,6 +26,26 @@ describe("toHex", () => {
   });
 });
 
+describe("paintedColorAt", () => {
+  it("composites a modal's translucent scrim over the band instead of reading it as black", async () => {
+    const { paintedColorAt } = await import("../desktop.js");
+    const scrim = document.createElement("div");
+    scrim.style.backgroundColor = "rgba(0, 0, 0, 0.5)";
+    const clear = document.createElement("div");
+    const band = document.createElement("div");
+    band.style.backgroundColor = "rgb(200, 200, 200)";
+    const page = document.createElement("div");
+    page.style.backgroundColor = "rgb(255, 0, 0)";
+    document.body.append(scrim, clear, band, page);
+    const doc = { elementsFromPoint: () => [scrim, clear, band, page] };
+    expect(paintedColorAt(1, 1, doc)).toBe("#646464");
+    // Nothing opaque underneath: composite over the fallback (the theme --bg).
+    const lone = { elementsFromPoint: () => [scrim] };
+    expect(paintedColorAt(1, 1, lone, "255 255 255")).toBe("#808080");
+    expect(paintedColorAt(1, 1, { elementsFromPoint: () => [clear] })).toBeNull();
+  });
+});
+
 describe("in the browser", () => {
   it("is a no-op without the preload", async () => {
     const mod = await import("../desktop.js");
