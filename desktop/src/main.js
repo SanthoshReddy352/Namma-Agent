@@ -35,6 +35,30 @@ if (process.env.NAMMA_DESKTOP_USER_DATA) app.setPath("userData", process.env.NAM
 // otherwise make the installed app appear as "Electron" in Start and in toasts.
 if (process.platform === "win32") app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.dev`);
 
+// Windows names and badges a toast from the Start-menu shortcut carrying the
+// app's AUMID. The installer creates "Namma Agent.lnk" for com.namma.agent; a
+// development run has none, so Electron would create "Electron.lnk" (Electron's
+// name and atom icon) on the first toast. Give dev runs their own shortcut with
+// the brand icon instead, and remove an Electron.lnk that claimed our dev AUMID.
+function ensureDevShortcut() {
+  if (app.isPackaged || process.platform !== "win32") return;
+  const dir = path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs");
+  const aumid = `${APP_ID}.dev`;
+  try {
+    const ok = shell.writeShortcutLink(path.join(dir, "Namma Agent (dev).lnk"), "create", {
+      target: process.execPath,
+      args: `"${app.getAppPath()}"`,
+      appUserModelId: aumid,
+      icon: path.join(RESOURCES, "icon.ico"),
+      iconIndex: 0,
+      description: "Namma Agent (development run)",
+    });
+    if (!ok) log("dev shortcut: writeShortcutLink failed");
+    const stray = path.join(dir, "Electron.lnk");
+    if (fs.existsSync(stray) && shell.readShortcutLink(stray).appUserModelId === aumid) fs.unlinkSync(stray);
+  } catch (e) { log(`dev shortcut: ${e.message}`); }
+}
+
 // ── single instance ─────────────────────────────────────────────────────────
 if (!app.requestSingleInstanceLock()) {
   app.quit();
@@ -463,6 +487,7 @@ app.on("open-url", (e, url) => { e.preventDefault(); if (app.isReady()) handleDe
 
 app.whenReady().then(() => {
   if (app.isPackaged) app.setAsDefaultProtocolClient(PROTOCOL);
+  ensureDevShortcut();
   Menu.setApplicationMenu(null);
   registerIpc();
   permissions();
