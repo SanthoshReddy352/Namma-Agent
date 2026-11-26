@@ -1,0 +1,26 @@
+flowchart TB
+    subgraph Frontend["Frontend — namma_agent/webui (React + Vite + Tailwind)"]
+        App[App.jsx] --- Hook[useNammaAgent hook<br/>WS client]
+        App --- Composer & Sidebar & Settings & Message
+        Hook -. Web Speech API .- Voice[ReadAloud / mic dictation]
+    end
+
+    subgraph Backend["Backend — namma_agent/"]
+        API[server/api.py<br/>FastAPI + /ws] --> SVC[service.py<br/>NammaAgentService]
+        SVC --> AG[core/agent.py<br/>Agent]
+        SVC --> NAR[core/narration.py]
+        SVC --> EV[core/events.py<br/>fanout]
+        AG --> PROV[core/providers/*<br/>Provider + ProviderChain]
+        AG --> REG[core/tools.py<br/>ToolRegistry]
+        AG --> DB[core/memory.py<br/>Database SQLite]
+        AG --> PERS[core/persona.py]
+        AG --> SK[core/skills.py<br/>SkillStore]
+        REG --> TOOLS[tools/*.py<br/>auto-discovered]
+        SVC --> RR[core/reminder_runner.py]
+        SVC --> CM[comms/*<br/>Telegram/Discord]
+        SVC --> MC[mcp/*<br/>MCP client]
+        TOOLS --> BC[core/browser_controller.py<br/>Playwright]
+    end
+
+    Hook <-->|JSON over WebSocket| API
+    App -->|REST| API
