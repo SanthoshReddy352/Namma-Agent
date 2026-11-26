@@ -698,22 +698,99 @@ class NammaAgentService(SetupMixin):
         Native memory is always on — there is no offline state."""
         return self.engram.status()
 
+    def _graph_half_life(self) -> float:
+        return float(getattr(self.engram.consolidator, "half_life_days", 30.0) or 30.0)
+
     def memory_graph(self, include_expired: bool = False,
                      as_of: str = "") -> dict:
-        """The knowledge graph as {nodes, edges} for the Memory tab's force layout,
-        straight from SQLite. ``as_of`` (ISO timestamp) time-travels the graph to
-        what memory knew at that moment (the history slider)."""
-        g = self.engram.store.graph(include_expired=include_expired,
-                                    as_of=(as_of or "").strip() or None)
-        ids = {n["id"] for n in g["nodes"]}
-        nodes = [{"id": n["id"], "label": n["name"], "type": n.get("type") or "thing",
-                  "color": ""} for n in g["nodes"]]
-        edges = [{"source": e["src"], "target": e["dst"],
-                  "relation": (e.get("rel") or "").replace("_", " "),
-                  "expired": bool(e.get("expired_at"))}
-                 for e in g["edges"] if e.get("src") in ids and e.get("dst") in ids]
+        """The knowledge graph (Phase 10 primitives) for the Memory tab: typed,
+        deduplicated entities and typed, directed relations, each node carrying
+        its rank score. ``as_of`` (ISO timestamp) time-travels the graph to what
+        memory knew at that moment (the history slider)."""
+        kg = self.engram.store.kg
+        g = kg.snapshot(include_expired=include_expired,
+                        as_of=(as_of or "").strip() or None)
+        ranks = {r["id"]: r for r in kg.ranked(limit=10_000,
+                                               half_life_days=self._graph_half_life())}
+        degree: dict = {}
+        for e in g["edges"]:
+            if not e.get("expired_at"):
+                degree[e["src"]] = degree.get(e["src"], 0) + 1
+                degree[e["dst"]] = degree.get(e["dst"], 0) + 1
+        nodes = [{"id": n["id"], "label": n["name"], "type": n["type"],
+                  "aliases": n["aliases"], "attributes": n["attributes"],
+                  "is_self": n["is_self"], "degree": degree.get(n["id"], 0),
+                  "score": (ranks.get(n["id"]) or {}).get("score", 0.0)}
+                 for n in g["nodes"]]
+        edges = [{"id": e["id"], "source": e["src"], "target": e["dst"],
+                  "rel": e["rel"], "relation": e["rel"].replace("_", " "),
+                  "directed": not e["symmetric"], "confidence": e.get("confidence"),
+                  "support": e.get("support", 0), "item_id": e.get("item_id"),
+                  "valid_from": e.get("valid_from"), "created_at": e.get("created_at"),
+                  "expired": bool(e.get("expired_at")),
+                  "superseded_by": e.get("superseded_by")}
+                 for e in g["edges"]]
         return {"ok": True, "nodes": nodes, "edges": edges,
                 "counts": {"nodes": len(nodes), "edges": len(edges)}}
+
+    def memory_graph_entity(self, entity_id: str) -> dict:
+        """One entity in focus: attributes, aliases, relations (superseded ones
+        flagged) and the source facts behind them."""
+        hood = self.engram.store.kg.neighbourhood(entity_id)
+        if hood is None:
+            return {"ok": False, "error": "no such entity"}
+        rank = next((r for r in self.engram.store.kg.ranked(
+            limit=10_000, half_life_days=self._graph_half_life())
+            if r["id"] == entity_id), None)
+        return {"ok": True, **hood, "rank": rank}
+
+    def memory_graph_schema(self) -> dict:
+        """The schema derived from the live graph (types, relation types and
+        the type pairs each relation actually connects)."""
+        return {"ok": True, **self.engram.store.kg.schema()}
+
+    def memory_graph_ranked(self, limit: int = 50, include_self: bool = True) -> dict:
+        """Entities by centrality/salience/recency, every component returned."""
+        return {"ok": True,
+                "weights": {"centrality": 0.45, "salience": 0.30, "recency": 0.25},
+                "half_life_days": self._graph_half_life(),
+                "items": self.engram.store.kg.ranked(
+                    limit=limit, half_life_days=self._graph_half_life(),
+                    include_self=include_self)}
+
+    def memory_graph_search(self, query: str, limit: int = 20) -> dict:
+        """Entities by name/alias, plus the facts that match the words."""
+        query = (query or "").strip()
+        if not query:
+            return {"ok": True, "entities": [], "facts": []}
+        facts = self.engram.store.search_items(
+            " OR ".join(w for w in query.replace('"', " ").split() if w) or query,
+            limit=limit)
+        return {"ok": True, "entities": self.engram.store.kg.search(query, limit=limit),
+                "facts": [{"id": f["id"], "text": f["text"], "kind": f.get("kind")}
+                          for f in facts]}
+
+    def memory_graph_rebuild(self) -> dict:
+        """Re-derive the graph from the facts (the migration, on demand)."""
+        return {"ok": True, **self.engram.store.kg.rebuild()}
+
+    def memory_graph_merge(self, source_id: str, target_id: str) -> dict:
+        """Fold one entity into another (a manual alias — survives rebuilds)."""
+        if not source_id or not target_id or source_id == target_id:
+            return {"ok": False, "error": "pick two different entities"}
+        done = self.engram.store.kg.merge(source_id, target_id, source="manual")
+        return {"ok": done, **({} if done else {"error": "no such entity"})}
+
+    def memory_graph_update_entity(self, entity_id: str, name: str = "",
+                                   type: str = "") -> dict:
+        """Rename an entity and/or change its type from the Memory page."""
+        kg = self.engram.store.kg
+        changed = False
+        if name.strip():
+            changed |= kg.rename(entity_id, name)
+        if type.strip():
+            changed |= kg.set_type(entity_id, type)
+        return {"ok": changed, **({} if changed else {"error": "nothing changed"})}
 
     def memory_recall(self, query: str, k: int = 8, include_expired: bool = False) -> dict:
         """Fused recall (BM25 + graph + episodic, RRF-merged) with provenance."""

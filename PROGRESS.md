@@ -1116,6 +1116,178 @@ After the W1 shell:
 - personas Caesar, Cicero, Augustus, Seneca, Aurelius;
 - original portraits.
 
+### Phase 10 — Memory graph and its primitives — `[x]` 2026-11-26
+
+The owner: the Memory graph was "very absurd" — not built properly, Schema and Ranked
+"not working properly", "not maintaining proper relations between entities". This phase
+rebuilds the graph as a derived, typed structure over Engram's facts and redesigns the
+Memory page. Branch `claude/phase10-memory-graph-05e8d1` (from `phase9-w1`).
+
+#### Audit (2026-11-26) — what the graph produced, and why it was wrong
+
+Method: `scripts/seed_memory_graph.py` replays 16 realistic turns through the REAL write
+pipeline (`EngramWriter.process`) with a scripted model returning the kind of output a
+cloud model returns (inconsistent subjects, synonym predicates, phrase/literal objects, a
+city move, a restatement). Seeded into a scratch DB and viewed on a scratch server
+(`NAMMA_DATA_DIR` etc. pointed at a temp folder). The owner's real DB was only read
+read-only (`immutable=1`) for aggregates: 2 entities, both type `thing`, one relation whose
+object is a clause, still live although its fact had left recall.
+
+On the seed (20 facts) the old graph had **21 entities and 19 live edges**:
+- **Every entity was type `thing`.** `add_relation` never passed a type and the extractor
+  never asked for one. So **Schema** showed one bubble, and the frontend drops same-type
+  edges, so it had **zero edges**. **Ranked** was one column of 21 nodes sorted by raw degree,
+  labels overlapping.
+- **The user was four nodes**: `user`, `the user`, `I`, `Santhosh`. Normalisation was
+  lower-case plus whitespace only. `user -has_name-> Santhosh` was an edge, not an identity.
+- **Duplicates**: `Namma Agent` and `Namma Agent project`. `Santhosh -loves-> Python` and
+  `-likes-> python` were two edges (one relation per fact row, no dedup).
+- **Relations pointing at text**: `user -age-> "21"` and
+  `user -wants_github_tool_access-> "read-only repositories and issues only"` were nodes.
+- **Untyped predicates**: free-form snake_case (`is_building`, `built_with`, `collaborates_with`)
+  with no synonyms, no inverse handling, and no symmetric relations.
+- **Supersession only half-reflected**: the resolver's UPDATE expired the old edge, but the
+  orphan `Bangalore` node stayed in the graph. A contradiction the resolver missed (it
+  often ADDs) was never caught at graph level. `archive()` never expired edges (the
+  real-data case above). Approved pending facts never reached the graph.
+- **Ranking computed from nothing meaningful**: degree only (no importance, frequency or
+  recency). The graph view's node size was degree too.
+- Facts without a triple (raw explicit remembers) never linked to any entity.
+
+#### Data model and primitives — `namma_agent/core/engram/graph.py` (new)
+- [x] **Entity**: canonical key `norm` (stable id = uuid5), display `name` (most-used surface
+  form; longer wins ties, so full name over acronym; the user's own name for the self
+  entity), `type` from a vocabulary (person, organization, place, project, technology,
+  animal, event, concept, product). Unknown types pass through, so the schema reflects the
+  data. Also `aliases` (surface forms with counts), `is_self`, and attributes.
+- [x] **Alias table** (`memory_entity_aliases`): every lookup key maps to an entity. `auto` rows
+  are rebuilt; `name` rows come from has_name facts; `manual` rows (user merge or rename)
+  survive rebuilds. User-chosen display names are pinned in `memory_meta`.
+- [x] **Relation**: canonical snake_case `rel`, directed `src → dst`, `confidence` (noisy-OR over
+  supporting facts), bi-temporal `valid_from` / `created_at` / `expired_at`, and `superseded_by`
+  (the replacing relation). One row per live (src, rel, dst); each asserting fact is a row in
+  `memory_relation_sources`.
+- [x] **Attribute** (`memory_attributes`): literals (numbers, dates, emails, URLs), lower-case
+  clauses and `age`/`birthday`/… hang off the entity, with the same lifecycle as relations.
+- [x] **Resolution**: case, whitespace, article and possessive folding. "Full Name (ACR)"
+  registers both keys. Generic suffixes ("… project", "… programming language") are dropped
+  for matching and display. "A Kumar" keeps its initial. `user` / `the user` / `I` / `me` / `my`
+  resolve to the self entity. Bare pronouns never become nodes. A has_name fact makes the
+  name an alias of the self entity and **merges** a node created earlier under that name.
+- [x] **Predicates**: 114 synonym/inverse spellings map onto 22 canonical relations (`loves` → `likes`,
+  `is_building` → `works_on`, `built_with` → `uses`, …). Inverse spellings are flipped
+  (`employs` → `works_at`, `sister_of` → `has_sister`). Symmetric relations (`works_with`,
+  `friend_of`, `married_to`, …) dedupe in either direction.
+- [x] **Typing**: model types win. Otherwise types are inferred from the predicate's
+  range/domain (has_pet → animal, lives_in → place, works_on: person → project) or a
+  technology lexicon; `concept` is the fallback.
+- [x] **Contradictions**: a functional predicate (`lives_in`, `studies_at`, `born_in`, `from`,
+  `married_to`, `works_as`) keeps one live object per subject; `likes` ⇄ `dislikes` replace
+  each other. The loser gets `expired_at` + `superseded_by`. A fact whose only graph content
+  was the superseded relation is invalidated too (history kept).
+- [x] **Lifecycle**: invalidate and archive call `item_gone`. A relation expires only when no
+  other live fact asserts it. Hard delete removes sources, then orphan entities.
+  `approve_item` links the approved fact.
+- [x] **Schema** (`MemoryGraph.schema`) is derived from the live graph: types with count,
+  attribute keys and examples; relation kinds with count, symmetric/functional flags and
+  the (source type → target type) pairs they really connect.
+- [x] **Ranking** (`MemoryGraph.ranked`):
+  `score = 0.45·centrality + 0.30·salience + 0.25·recency`, where:
+  - centrality = weighted PageRank on the undirected live graph (weight = supporting
+    facts × confidence), normalised to the max;
+  - salience = 0.7·max importance of supporting facts + 0.3·min(1, log2(1+mentions)/4),
+    where mentions = summed fact frequency;
+  - recency = 0.5^(days since newest supporting fact was seen / half-life), with the
+    half-life from `memory.consolidate.half_life_days` (30).
+
+  Every component is returned.
+- [x] **Write pipeline on the user-selected model**: the extraction and consolidator promote
+  prompts ask for canonical names, `"user"` for the user, a preferred predicate vocabulary,
+  and `subject_type` / `object_type`. The calls still go through the provider getter (the
+  Settings model, never a hardcoded one). Types are stored on `memory_items`
+  (new columns), and `EngramWriter._apply` links through `store.link_item`.
+  `merge_triple_duplicates` now folds through entity resolution.
+- [x] **Migration**: `MemoryGraph.rebuild()` re-derives the graph from the facts in time
+  order, so the history slider keeps working. It replays every fact (live, superseded or
+  archived), plus relations that never had a fact (the Cognee import). It runs once when
+  `graph_version < 2` (on open) and on demand from `POST /api/memory/graph/rebuild` (the
+  page's **Rebuild** button). It is idempotent.
+- [x] **API** (`server/api.py` → `service.py`):
+  - `GET /api/memory/graph` — typed nodes with aliases, attributes, degree and score; edges
+    with id, rel, directed, confidence, support, source fact, valid_from, expired and
+    superseded_by;
+  - `GET /api/memory/graph/nodes` and `/edges`;
+  - `/entity/{id}` (neighbourhood + source facts + rank);
+  - `/schema`, `/ranked`, `/search?q=`;
+  - `POST /api/memory/graph/merge`, `POST /entity/{id}` (rename/retype) and `/rebuild`.
+  - `EngramStore.graph()` / `add_relation()` / `upsert_entity()` / `entity_items()` stay as
+    wrappers. Recall's mention keys exclude the self entity (so "I"/"my" don't pull the hub).
+
+**Result on the same seed after migration: 14 entities, 15 live relations, all typed.**
+- The user is one node named "Santhosh" with `age` and the GitHub preference as attributes.
+- `Namma Agent project` is an alias of Namma Agent; KARE is an alias of the full college name.
+- `loves` + `likes` became one `likes` edge with support 2 and confidence 0.91.
+- Bangalore is superseded: out of the live view, kept in history.
+- Schema: 8 types and 13 relation kinds with real type pairs.
+- Ranked: Santhosh 0.98, Arjun 0.52, Namma Agent 0.51, Python 0.49, …
+
+#### Memory page redesign (`webui/`)
+- [x] `components/memory/graphModel.js` (pure, tested):
+  - type → theme chart token (`--chart-1…8`, `concept` = `--fg-subtle`);
+  - deterministic force layout (Fruchterman–Reingold, precomputed, landscape gravity — the
+    same memory always draws the same way, nothing jitters);
+  - parallel-edge fan-out, neighbourhood and alias-aware search.
+- [x] `components/MemoryGraph.jsx` rewritten (canvas, no graph library):
+  - nodes coloured by type and sized by rank; the self entity has an accent ring;
+  - directed arrowheads (none on symmetric relations), relation labels as pills with
+    collision avoidance, screen-constant text at any zoom, superseded edges dashed in history;
+  - click to focus (the neighbourhood stays lit), drag nodes, pan, wheel/buttons zoom, Fit,
+    a labels toggle, and Esc/+/−/0 keys;
+  - a type legend that hides/shows types; it re-frames when the details panel opens;
+  - colours are re-read on theme/dark class changes.
+- [x] `components/memory/EntityPanel.jsx`: type, aliases, attributes, live relations (direction,
+  support, confidence), superseded relations with when, source facts (superseded struck
+  through, "mentions it" for raw facts), rename/retype, and "Same as another entity…" merge.
+- [x] `components/memory/SchemaView.jsx`: an SVG type diagram at 1:1 pixel scale (aggregated
+  type→type relations, self-type loops), entity-type cards and a relation-kind table with
+  type-pair chips.
+- [x] `components/memory/RankedView.jsx`: score plus centrality/salience/recency bars, links ·
+  facts, last seen, and the formula in a caption. Click to focus.
+- [x] `views/MemoryView.jsx`:
+  - an Explore card with Graph/Schema/Ranked tabs (the last tab is remembered), entity
+    search with alias hits, History slider, Rebuild and the details panel;
+  - the existing core-memory editor, Ask, Facts browser, Remember/Improve, Environment and
+    Forget, restyled;
+  - semantic tokens only, `components/ui` primitives, Tabler icons, translucent surfaces;
+    `dark:` pairs: 6 → 0 in these two files.
+- [x] Verified on the scratch server (seeded DB migrated on open):
+  - Graph, focus + panel, Schema, Ranked;
+  - Imperium light/dark, default dark, classic light, mono dark (Schema) and slate light
+    (Ranked);
+  - screenshots were taken in-session; the before/after notes are in the session-notes folder.
+
+#### Tests
+- [x] `namma_agent/tests/test_memory_graph.py` (38): canonicalisation, resolution (self, has_name
+  merge, acronym, suffix, case, initials, pronouns), typing, attributes, dedup + noisy-OR,
+  symmetric, inverse, functional and likes/dislikes supersession with fact retirement,
+  archive/hard-delete/approve lifecycle, manual merge surviving rebuild, writer extraction
+  with a mocked model on the provider getter, schema, PageRank/ranking formula, legacy-data
+  migration plus time-travel history, the full seed, and the API surface via TestClient.
+- [x] `test_engram_phase2.py`: the hard-delete test now expects the self entity "You"
+  (the GC behaviour it guards is unchanged).
+- [x] `webui/src/test/memory.test.jsx` (15): graph model, MemoryGraph controls/legend/focus,
+  Schema, Ranked, and MemoryView tabs + search → focus → entity panel facts.
+- [x] Full suites: **Python 1,475 passed / 3 skipped** (1,437 before); **web UI 66 passed**
+  (51 before); `vite build` OK.
+
+#### Not done / not verified
+- [ ] Not run against a live model (no key given for this task). The extraction prompt's new
+  fields are covered with a scripted model only.
+- [ ] Entity resolution is rule-based. Synonyms with no shared key ("VS Code" vs "Visual Studio
+  Code") stay separate until merged by hand in the panel (the merge is remembered).
+- [ ] The functional-predicate list is fixed in code; `works_at` is deliberately left out
+  (people can hold two jobs).
+
 ---
 
 ## 4. UI/UX plan
@@ -1379,6 +1551,11 @@ From `STAND_OUT.md`:
   - OpenRouter PKCE sign-in, with the key stored in the vault. An explicit `active_model` default.
   - `opencode` and custom endpoints no longer share `OPENAI_API_KEY`; borrowed adapters read only their own key var.
   - Python 1,515 passed / 3 skipped.
+- **2026-11-26 (Phase 10 — memory graph and its primitives):**
+  - Audit on a seeded scratch instance: 21 entities all typed `thing`, the user split into 4 nodes, literals and clauses as nodes, duplicate synonym edges; Schema had one type and zero edges; Ranked was raw degree.
+  - New `core/engram/graph.py`: typed entities with aliases/attributes, canonical directed relations with sources, confidence and supersession, derived schema, PageRank/salience/recency ranking, rebuild-from-facts migration; `/api/memory/graph/*` endpoints.
+  - Memory page redesigned: deterministic typed graph with labelled directed edges, focus + entity panel with source facts, working Schema and Ranked tabs, merge/rename.
+  - Python 1,475 passed / 3 skipped; web UI 66 passed.
 - **2026-11-26 (Phase 9 W1, slice 4):**
   - The chat background is painted, crumpled paper built from the owner's Desktop art. It follows the theme, light/dark and the mode. The slice-3 painting is removed.
   - Settings split into 22 modules; Providers + Models → **Model**, Config + Servers → **MCP**; the old links still work.

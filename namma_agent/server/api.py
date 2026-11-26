@@ -189,6 +189,18 @@ class MemoryForgetBody(BaseModel):
     hard: bool = False       # hard-delete instead of invalidate
 
 
+class MemoryGraphMergeBody(BaseModel):
+    """Phase 10: fold entity ``source`` into ``target``."""
+    source: str = ""
+    target: str = ""
+
+
+class MemoryGraphEntityBody(BaseModel):
+    """Phase 10: rename / retype an entity."""
+    name: str = ""
+    type: str = ""
+
+
 class MemoryCoreBody(BaseModel):
     block: str = "user"      # user | agent
     action: str = "add"      # add | replace | remove
@@ -1438,6 +1450,51 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """The knowledge graph as {nodes, edges}. ``as_of`` (ISO timestamp)
         time-travels to what memory knew at that moment (the history slider)."""
         return service.memory_graph(include_expired=include_expired, as_of=as_of)
+
+    # Phase 10 graph primitives: nodes/edges come from /api/memory/graph; these
+    # are the focused reads and the two entity-management writes.
+    @app.get("/api/memory/graph/nodes")
+    def memory_graph_nodes(include_expired: bool = False, as_of: str = ""):
+        g = service.memory_graph(include_expired=include_expired, as_of=as_of)
+        return {"ok": True, "nodes": g["nodes"], "count": len(g["nodes"])}
+
+    @app.get("/api/memory/graph/edges")
+    def memory_graph_edges(include_expired: bool = False, as_of: str = ""):
+        g = service.memory_graph(include_expired=include_expired, as_of=as_of)
+        return {"ok": True, "edges": g["edges"], "count": len(g["edges"])}
+
+    @app.get("/api/memory/graph/entity/{entity_id}")
+    def memory_graph_entity(entity_id: str):
+        """Neighbourhood: attributes, aliases, relations and source facts."""
+        return service.memory_graph_entity(entity_id)
+
+    @app.post("/api/memory/graph/entity/{entity_id}")
+    def memory_graph_update_entity(entity_id: str, body: MemoryGraphEntityBody):
+        return service.memory_graph_update_entity(entity_id, name=body.name,
+                                                  type=body.type)
+
+    @app.get("/api/memory/graph/schema")
+    def memory_graph_schema():
+        """Entity types + relation types derived from the live graph."""
+        return service.memory_graph_schema()
+
+    @app.get("/api/memory/graph/ranked")
+    def memory_graph_ranked(limit: int = 50, include_self: bool = True):
+        """Entities by centrality / salience / recency (components included)."""
+        return service.memory_graph_ranked(limit=limit, include_self=include_self)
+
+    @app.get("/api/memory/graph/search")
+    def memory_graph_search(q: str = "", limit: int = 20):
+        return service.memory_graph_search(q, limit=limit)
+
+    @app.post("/api/memory/graph/merge")
+    def memory_graph_merge(body: MemoryGraphMergeBody):
+        return service.memory_graph_merge(body.source, body.target)
+
+    @app.post("/api/memory/graph/rebuild")
+    def memory_graph_rebuild():
+        """Re-derive the whole graph from the stored facts."""
+        return service.memory_graph_rebuild()
 
     @app.get("/api/memory/items")
     def memory_items(kind: str = "", include_expired: bool = False):
