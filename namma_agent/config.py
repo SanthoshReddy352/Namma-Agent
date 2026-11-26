@@ -29,7 +29,19 @@ def _state_dir() -> Optional[Path]:
     default dev/desktop layout. When set (Docker, systemd), the Settings overlay
     and ``.env`` live there too, so UI edits survive an image rebuild (BUG-11)."""
     d = os.environ.get("NAMMA_DATA_DIR", "").strip()
-    return Path(d).expanduser() if d else None
+    if d:
+        return Path(d).expanduser()
+    if _desktop_mode():
+        # Phase 9 W3: under the Electron shell state never lands in the
+        # CWD-relative ``data/`` (the install dir) — it lives in the per-user
+        # app-data folder. The shell passes NAMMA_DATA_DIR; this is the fallback.
+        from namma_agent.core.desktop import default_data_dir
+        return default_data_dir()
+    return None
+
+
+def _desktop_mode() -> bool:
+    return os.environ.get("NAMMA_DESKTOP", "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def env_file() -> Path:
@@ -240,8 +252,7 @@ def data_dir() -> Path:
     Read at import time by some modules, so set the var before launch (systemd
     ``EnvironmentFile=`` and docker-compose ``environment:`` both do).
     """
-    d = os.environ.get("NAMMA_DATA_DIR", "").strip()
-    return Path(d).expanduser() if d else Path("data")
+    return _state_dir() or Path("data")
 
 
 def server_bind(config: Optional[dict] = None) -> tuple[str, int]:
@@ -252,7 +263,10 @@ def server_bind(config: Optional[dict] = None) -> tuple[str, int]:
     srv = cfg.get("server") or {}
     host = (os.environ.get("NAMMA_HOST", "").strip()
             or str(srv.get("host") or "127.0.0.1").strip() or "127.0.0.1")
-    port = int(os.environ.get("PORT") or srv.get("port") or 8000)
+    # NAMMA_PORT is what `namma serve --port` sets (and the desktop shell passes);
+    # PORT is the container convention. Either beats the config file.
+    port = int(os.environ.get("NAMMA_PORT", "").strip() or os.environ.get("PORT")
+               or srv.get("port") or 8000)
     return host, port
 
 

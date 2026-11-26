@@ -1107,8 +1107,85 @@ Its own session, branch `claude/phase9-w2-providers-051bcf`. Single catalogue, H
 - `[x]` **UI group names:** settled as option A (2026-11-26). W2 keeps the spec's groups and the `groups` order list. W1 made `providerContract.js` / `ModelWizard.jsx` follow the server's `groups`, with icons for Subscriptions, Gateways and China, and nothing hidden. That change is on `phase9-w1`, uncommitted as of this note, and joins this branch at merge. The UI doesn't read `?connected=` / `?oauth_error=` yet.
 - `[!]` **Not verified:** a completed OpenRouter sign-in (needs the owner's account); a real `verify_provider` call per provider (owner's keys); Ramp Router and Meta Model API use the Responses API in Hermes and may need a Responses adapter.
 
-#### W3 — Electron desktop app — `[ ]`
-Its own session. `desktop/`: NSIS installer and uninstaller, tray, toasts, autostart, deep links, auto-update, and backend hooks under `NAMMA_DESKTOP=1`.
+#### W3 — Electron desktop app — `[~]` (built, installed, uninstalled and verified on Windows; open items below)
+Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`desktop/README.md`](desktop/README.md).
+- [x] **Electron shell** (`desktop/`, Electron 45.3.4).
+  - `src/main.js`: single instance (a second launch forwards its argv and focuses the window), splash, then the error page (last output, Retry, Open logs folder), remembered window state that never restores off-screen (`windowState.js`).
+  - Backend: `src/backend.js` starts `python -m namma_agent serve` on a stable free port (last used, else 47821 upward, else any). It passes `NAMMA_DESKTOP=1`, a per-launch `NAMMA_AUTH_TOKEN` and `NAMMA_DATA_DIR=%APPDATA%\Namma Agent\data`. The shell injects the token as `X-Namma-Token` on every page request including the `/ws` upgrade, so the page never holds it. Quitting runs `/api/shutdown` and then kills the process tree.
+  - Locked down: contextIsolation, sandbox, no Node in the renderer. External links open in the browser. Permissions are limited to mic, clipboard and notifications from the app's own origin.
+- [x] **Custom title bar** (`titleBarStyle: "hidden"` + `titleBarOverlay`, 34px).
+  - `webui/src/desktop.js` sends the colour actually painted under the native controls plus the theme ink. Translucent dialog scrims are composited; one was first read as solid black under the Settings modal.
+  - It re-sends on `<html>` class changes, layout changes and resizes, and the window background follows the theme on the next launch.
+  - Drag fix: the band's tool clusters render before the `.app-drag` headers, and Chromium applies drag regions in document order, so their buttons were swallowed as window drags. Proved live: no pointer events reached the page. `desktop.js` adds trailing no-drag boxes over the clusters.
+- [x] **Native features:**
+  - tray (Show, New chat, Start at login, Keep running when closed, Check for updates…, Open logs folder, Quit); close hides to the tray with a one-time hint;
+  - native toasts from `desktop_notify`, received over `/ws` (`src/bus.js`);
+  - start at login (`app.setLoginItemSettings`, value `NammaAgent`, `--hidden`);
+  - `namma://` deep links on a strict route allowlist (`deeplink.js`);
+  - `electron-updater` against GitHub Releases. The shell reports its state to the backend (`POST /api/desktop/update-state`), so the web UI's **Update available** banner and Settings → About work unchanged. **Update now** downloads, quits, installs silently and relaunches.
+  - The release workflow's new `desktop` job uploads `NammaAgentSetup-<ver>.exe`, its `.blockmap` and `latest.yml`; CI runs the shell tests.
+- [x] **Backend hooks under `NAMMA_DESKTOP=1`:**
+  - `core/desktop.py`: event sink, `desktop_notify` / `desktop_command`, the per-user data dir, a parent-PID watchdog;
+  - `notifications.py`: posts to the bus instead of PowerShell; the status honours the Windows mute for AUMID `com.namma.agent`;
+  - `updater.py`, `uninstaller.py`: defer to the shell;
+  - `autostart.py`: registers the shell exe with `--hidden`, matching the tray;
+  - `config.py`: `data_dir()` default; `NAMMA_PORT` now honoured, because `namma serve --port` used to be ignored;
+  - `app.py`: attaches the sink;
+  - `api.py`: `/ws` accepts the injected header; `/api/uninstall` no longer kills the backend under the shell.
+- [x] **Packaging** (electron-builder 26.18.1, NSIS 3.12 toolset, per user, no admin; `npm run dist` → `out/NammaAgentSetup-2.3.2.exe`, 254 MB).
+  - Bundles the backend from this checkout plus a relocatable CPython 3.12 with every dependency (the 2.3.1 self-contained runtime, topped up to `requirements.txt`; the top-up added `rich` and `prompt_toolkit`).
+  - The uninstaller asks "Also delete your chats, settings and API keys?" (default No), stops a leftover backend, and removes `namma://`, the Run value and the updater cache.
+- **Tests:**
+  - Python `test_desktop.py` (27): mode and sink, the bus replacing PowerShell, `/api/notify` → `/ws` end to end, focus/update/uninstall hand-offs, data dir, `NAMMA_PORT`, autostart, the WS header, the watchdog, the update state reaching /api/update/check.
+  - Web UI `desktop.test.js` (7). Shell `npm test` (8: deep links, window bounds, interpreter lookup, port choice).
+  - Totals: Python **1,464 passed / 3 skipped**; web UI **58 passed**; ruff clean.
+- **Verified live, in the real Electron window** (screenshots in the session's shared notes folder `w3-proof/`; the real `data/` and `~/.namma_agent` were not touched by any run):
+  - all five themes, light and dark (Imperium included): the overlay blends with no strip, and the glyphs follow the live class change;
+  - the controls dim under the Settings modal; drag moves the window, and double-click maximizes;
+  - min / max-restore / close, where close goes to the tray and a tray click restores;
+  - band buttons (sidebar, side panel, Settings) after the fix;
+  - tray menu and New chat (Projects → a fresh chat);
+  - native toasts: `/api/notify` and the page's "Send test notification" arrived through the bus, as "Namma Agent" with the brand icon once installed;
+  - deep links through the Windows protocol handler (`namma://settings/notifications`, `/behavior`);
+  - single instance (a second launch adds no process);
+  - quit stops the backend cleanly (cleanup ran, exit 0, no processes left), and a force-killed shell takes Python with it;
+  - start at login from the tray and from Settings writes and removes the same real Run value;
+  - the updater reaches the feed, and a manual check says no release is published.
+- **Verified install/uninstall** (outside Claude's MSIX identity, see the finding below):
+  - installed from Explorer over a running copy, which the installer closed; real Add/Remove entry "Namma Agent 2.3.2 · Namma Agent contributors · 875 MB"; Start-menu and desktop shortcuts carrying AUMID `com.namma.agent`;
+  - launched from the Start menu;
+  - uninstalled from **Settings → Apps** with the app running (the uninstaller closed it) and "Yes, delete". The registry and file check afterwards found nothing left: no entry, shortcut, `namma://` key, Run or StartupApproved value, install dir, updater cache or app data.
+  - A first, keep-data uninstall kept `%APPDATA%\Namma Agent` as intended. It is the run that exposed the empty install dir and updater cache left behind, both fixed since.
+- **Verified 2026-11-26, owner follow-ups** (real context, installer from Explorer; the real `data/` and `~/.namma_agent` were byte-identical before and after):
+  - **Update flow, end to end**, with a local feed (`NAMMA_DESKTOP_UPDATE_URL`) serving a 2.3.3 build to an installed 2.3.2:
+    - the shell found 2.3.3, and `/api/update/check` returned `update_available` 2.3.2 → 2.3.3;
+    - the banner showed **Update now / Later**, and Settings → About showed **Update to 2.3.3**;
+    - clicking it downloaded the update, stopped the backend and quit; the NSIS installer ran silently (about 3.5 min) and relaunched the app;
+    - the exe, Windows Settings → Apps and About all read **2.3.3**, and About said "You're on the latest version".
+  - **In-app uninstall** (Settings → About → Danger zone → *Uninstall everything*): the app closed itself, and the uninstaller ran without asking again (`--delete-app-data`; *keep my data* passes `--keep-app-data`). The real-system check found nothing left.
+  - **Start-menu icon:** it showed Electron's atom because Windows had cached an icon for the AUMID from the dev run's `Electron.lnk`. With that shortcut removed and the installer now refreshing the icon cache (`ie4uinit -show`), Start shows the brand icon.
+  - Windows 11 asks once which app should open a `namma://` link from a newly installed handler (standard behaviour); the user picks *Always*.
+- **Found and fixed while verifying:**
+  - **NSIS 3.0.4.1's `System.dll` crashed the installer at start-up** (access violation; 3 of 5 launches). With the NSIS 3.12 toolset, 3 of 3 opened and no new crash dumps appeared.
+  - Dev runs posted toasts under the real AUMID, so Electron created a Start shortcut `Electron.lnk` for `com.namma.agent`, and Windows then named the installed app "Electron" in Start and in toasts. Dev runs now use `com.namma.agent.dev`; the stray shortcut was removed.
+  - `getLoginItemSettings().openAtLogin` misreads quoted args on Windows, so the shell now reads its Run entry from `launchItems`.
+  - Forwarded update checks were made quiet: the web UI checks on every load.
+  - Updater logs are first lines only, and the "no release yet" message is informational.
+- **Testing finding:** processes started from the Claude desktop app inherit its MSIX package identity, so their AppData and HKCU writes are virtualized into `%LOCALAPPDATA%\Packages\Claude_*`. The first install and uninstall, launched from the agent's shell, wrote the Add/Remove entry only to that private hive. Real-system checks must launch through Explorer (or the user). The virtualized test leftovers were deleted.
+- **Open:**
+  - `[!]` Code signing: the installer is unsigned, so SmartScreen will warn on downloaded copies. It needs the owner's certificate.
+  - `[ ]` Electron fuses (RunAsNode, inspect) are still on; turn them off for release builds (`electronFuses`).
+  - `[ ]` Safe mode on the error page: the backend has no safe-mode switch yet.
+  - `[ ]` The global show/hide shortcut (Ctrl+Alt+N) is registered but not verified live.
+  - `[ ]` An update from a real GitHub release is untested until the first desktop release is tagged; the local-feed update is verified. The release workflow's `desktop` job hasn't run on GitHub yet.
+  - `[ ]` Cold first start after install took about 20 s (Phase 7 targets under 4 s). Not measured warm or optimised; lazy start-up of MCP and comms is still open.
+  - `[ ]` Linux AppImage: configured, not built or verified (no bundled runtime on Linux; it uses `python3` from PATH).
+  - `[ ]` WhatsApp QR session still defaults to `~/.namma_agent` (`comms/whatsapp_qr.py`), not the desktop data dir.
+  - `[ ]` The tray icon is faint at 16px (the light bust); it needs a higher-contrast tray glyph.
+  - **Webui items for the main session** (outside W3's files):
+    - `AppearanceTab.jsx` is missing its `shared.jsx` import on `phase9-w1`, so `/settings/appearance` crashes (already fixed in the main checkout, uncommitted);
+    - `Titlebar.jsx`: render the tool clusters after the headers so `desktop.js`'s drag fix can go;
+    - the right-pane tabs clip ("Fil…") at narrow widths.
 
 #### W4 — Roman characters — `[ ]`
 After the W1 shell:
@@ -1556,6 +1633,13 @@ From `STAND_OUT.md`:
   - New `core/engram/graph.py`: typed entities with aliases/attributes, canonical directed relations with sources, confidence and supersession, derived schema, PageRank/salience/recency ranking, rebuild-from-facts migration; `/api/memory/graph/*` endpoints.
   - Memory page redesigned: deterministic typed graph with labelled directed edges, focus + entity panel with source facts, working Schema and Ranked tabs, merge/rename.
   - Python 1,475 passed / 3 skipped; web UI 66 passed.
+- **2026-11-26 (Phase 9 W3):**
+  - Electron desktop app in `desktop/`: custom title bar via `titleBarOverlay` (all five themes, light and dark), tray, native toasts from `desktop_notify`, start at login, `namma://`, electron-updater (unpublished), single instance.
+  - Per-user NSIS installer and uninstaller (bundled CPython; keep-or-delete data prompt).
+  - Backend hooks under `NAMMA_DESKTOP=1`.
+  - Built, installed and uninstalled on Windows from Explorer and Settings → Apps.
+  - Fixed along the way: an NSIS 3.0.4.1 start-up crash (moved to the 3.12 toolset), title-bar drag regions, and the dev AUMID polluting the installed app's name.
+  - Python 1,461 passed / 3 skipped; web UI 58 passed; shell 8 passed.
 - **2026-11-26 (Phase 9 W1, slice 4):**
   - The chat background is painted, crumpled paper built from the owner's Desktop art. It follows the theme, light/dark and the mode. The slice-3 painting is removed.
   - Settings split into 22 modules; Providers + Models → **Model**, Config + Servers → **MCP**; the old links still work.

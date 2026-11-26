@@ -35,6 +35,15 @@ def launch_command() -> str:
     preferred so login doesn't flash a console. Paths are quoted for the
     registry's command-line parsing.
     """
+    from namma_agent.core import desktop
+
+    shell = os.environ.get("NAMMA_DESKTOP_EXE", "").strip()
+    if desktop.enabled() and shell:
+        # Phase 9 W3: launch the Electron app (hidden, to the tray), not a bare
+        # Python backend. Same value name and quoting Electron's own
+        # setLoginItemSettings({name: "NammaAgent", args: ["--hidden"]}) writes,
+        # so the tray toggle and Settings always agree.
+        return f'"{shell}" --hidden'
     exe = sys.executable or "python"
     if platform.system() == "Windows":
         pythonw = Path(exe).with_name("pythonw.exe")

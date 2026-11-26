@@ -64,6 +64,18 @@ jobs:
       - name: Run v2 test suite
         run: python -m pytest namma_agent/tests/ -q
 
+  # Phase 9 W3: the desktop shell's pure logic (deep links, window bounds,
+  # interpreter lookup, port choice). Needs no Electron download.
+  desktop:
+    name: Desktop shell unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --test desktop/test/shell.test.js
+
   # Phase 6b: the server image must build and come up healthy. Builds the real
   # multi-stage image (UI included), boots it with the compose memory bounds,
   # and smoke-tests the auth-exempt /api/health endpoint. Also records the

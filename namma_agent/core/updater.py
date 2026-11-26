@@ -75,7 +75,16 @@ def latest_release(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict | Non
 
 
 def check_for_update(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict:
-    """Compare the installed version to the latest published one."""
+    """Compare the installed version to the latest published one.
+
+    Under the desktop app (``NAMMA_DESKTOP=1``) the Electron shell owns updates
+    (electron-updater): the check is forwarded to it as a ``desktop_command`` and
+    the answer says ``managed_by: "desktop"`` — the shell reports progress with
+    its own native UI. The version comparison is still returned for display."""
+    from namma_agent.core import desktop
+
+    if desktop.enabled():
+        return _desktop_check(repo, timeout)
     cur = current_version()
     latest = latest_release(repo, timeout)
     if not latest or not latest.get("version"):
@@ -87,13 +96,53 @@ def check_for_update(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict:
             "published_at": latest.get("published_at")}
 
 
+_ACTIVE = ("available", "downloading", "ready")
+
+
+def _desktop_check(repo: str, timeout: float) -> dict:
+    """Desktop app: ask the shell's electron-updater to check (unless it already
+    knows of an update) and wait briefly for its answer, so the web UI's banner
+    and Settings → About show a real "Update available" on first load."""
+    from namma_agent.core import desktop
+
+    cur = os.environ.get("NAMMA_DESKTOP_VERSION", "").strip() or current_version()
+    state = desktop.update_state()
+    if state.get("status") not in _ACTIVE:
+        seq = desktop.update_seq()
+        if desktop.command("update_check"):
+            state = desktop.wait_update_state(seq, min(timeout, 8.0))
+    status = state.get("status") or "unknown"
+    latest = state.get("version") or None
+    return {
+        "current": cur,
+        "latest": latest if status in _ACTIVE else (latest or cur),
+        "update_available": status in _ACTIVE and bool(latest),
+        "status": status,
+        "progress": state.get("progress"),
+        "error": state.get("error"),
+        "managed_by": "desktop",
+        "html_url": f"https://github.com/{repo}/releases/tag/v{latest}" if status in _ACTIVE and latest else None,
+    }
+
+
 def _update_script() -> Path:
     return _REPO_ROOT / "installers" / ("update.ps1" if os.name == "nt" else "update.sh")
 
 
 def apply_update() -> dict:
     """Launch the platform update script **detached** so it can update files and
-    relaunch the app after this process exits. Returns immediately."""
+    relaunch the app after this process exits. Returns immediately.
+
+    Desktop installs never run the git-pull script (it assumes a source checkout,
+    a ``.venv`` and port 8000): the request is handed to the Electron shell,
+    which downloads and installs the new NSIS build with electron-updater."""
+    from namma_agent.core import desktop
+
+    if desktop.enabled():
+        if desktop.command("update_apply"):
+            return {"started": True, "managed_by": "desktop"}
+        return {"started": False, "managed_by": "desktop",
+                "error": "the desktop app is not connected"}
     script = _update_script()
     if not script.exists():
         return {"started": False, "error": f"updater script not found: {script}"}

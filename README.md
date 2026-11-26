@@ -80,15 +80,38 @@ it remembers you — that's Namma.
 
 ## Quick start
 
-**Want the desktop app?** The one-click installers create the environment,
-install dependencies, configure your first AI provider, add a shortcut, and
-launch. See **[docs/INSTALL.md](docs/INSTALL.md)**:
+### Install the desktop app (Windows, recommended)
 
-- **Windows:** double-click `installers\install.bat`
+1. Open the **[latest release](https://github.com/SanthoshReddy352/Namma-Agent/releases/latest)**
+   and download **`NammaAgentSetup-<version>.exe`**.
+2. Run it. It installs for your user only (no admin prompt) into
+   `%LOCALAPPDATA%\Programs\Namma Agent`, and adds Start-menu and desktop shortcuts.
+   Python and everything else are bundled: nothing to install first.
+   The installer isn't code-signed yet, so Windows SmartScreen may say "Windows protected
+   your PC". Choose **More info → Run anyway**.
+3. Start **Namma Agent** from the Start menu. The first window walks you through
+   connecting an AI provider.
+
+Your chats, settings and keys live in `%APPDATA%\Namma Agent`.
+
+- **Updates:** the app checks the newest GitHub release when it starts. When a newer
+  version exists, a banner says **Update available**. **Update now** (the banner or
+  Settings → About) downloads it, restarts and installs it. The tray menu also has
+  **Check for updates…**.
+- **Uninstall:** use Windows **Settings → Apps → Namma Agent → Uninstall**, or the app's
+  **Settings → About → Danger zone**. You choose whether to keep your data.
+
+**Other platforms**, or the classic installer: the one-click installers create the
+environment, install dependencies, configure your first AI provider, add a shortcut,
+and launch. See **[docs/INSTALL.md](docs/INSTALL.md)**:
+
+- **Windows (classic):** `NammaAgentInstaller-<version>.exe` from the release, or `installers\install.bat`
 - **macOS:** double-click `installers/Install Namma Agent.command`
 - **Linux:** `bash installers/install.sh`
 
-To set it up manually instead, from the project root:
+### Run from source
+
+From the project root:
 
 ```bash
 python3 -m venv .venv
@@ -135,19 +158,65 @@ cd ../..
 For UI development with hot-reload, run `npm run dev` in `namma_agent/webui` (Vite dev
 server) alongside `python -m namma_agent --server`.
 
-### 3 · Run it
+### 3 · Run it: in the browser or as the native app
 
-```bash
-python -m namma_agent              # native desktop window (pywebview)
-python -m namma_agent --server     # backend only — open http://127.0.0.1:8000
-```
+The same web UI runs in both. Pick one:
 
-`--server` is the most reliable first run (no GUI dependency). The chat UI is at
-**http://127.0.0.1:8000**.
+| | Command | What you get |
+|---|---|---|
+| **Browser (website)** | `python -m namma_agent serve` | The backend plus the UI at **http://127.0.0.1:8000**. Open it in any browser. `--port 8100` / `--host` change the address. The legacy spelling `python -m namma_agent --server` still works. |
+| **Native desktop app** | `cd desktop`, `npm ci` once, then `npm start` | The Electron app: custom title bar, tray, native notifications, `namma://` links. It starts its own backend on a free port (from 47821), so it can run alongside a browser instance. |
+| Legacy window | `python -m namma_agent` | The older pywebview window, kept as a fallback for one release. |
+
+The browser route is the most reliable first run (no GUI dependency).
+**Don't run two backends on the same data at once.** A browser instance and the desktop
+app each poll Telegram/WhatsApp and write the same database. When testing both, point one
+at scratch data (see *Developing the desktop app* below).
 
 **That's it — memory included.** Engram is in-process and needs no setup, no
 Docker, no extra services. Tell the assistant something about yourself, open a
 new chat later, and ask it back.
+
+### Developing the desktop app
+
+Prerequisites: everything in *Run from source* (the `.venv` and a built `webui/dist`), plus Node 20+.
+
+```bash
+cd desktop
+npm ci                 # Electron + electron-builder (first time only)
+npm start              # run the app from source against your .venv
+npm test               # the shell's unit tests (deep links, window state, ports…)
+npm run dist           # build the installer → desktop/out/NammaAgentSetup-<version>.exe
+```
+
+- **Which Python the app uses:** in a dev run, the nearest `.venv` walking up from the repo
+  (a git worktree uses the main checkout's). Set `NAMMA_DESKTOP_PYTHON` to override.
+  Web UI changes need `npm run build` in `namma_agent/webui`, then **F5** in the app.
+- **Keep test runs off your real data:** set these before `npm start`:
+  - `NAMMA_DESKTOP_USER_DATA`: the app's own folder (window state, logs);
+  - `NAMMA_DATA_DIR`, `NAMMA_USER_CONFIG` and `NAMMA_ENV_FILE`: the backend's data;
+  - `NAMMA_VAULT_BACKEND=file` and `NAMMA_WHATSAPP_SESSION`.
+
+  Point them all at a scratch folder.
+- **Test the installer:** run `desktop/out/NammaAgentSetup-<version>.exe`, then launch it
+  from the Start menu, and uninstall from Settings → Apps.
+  - **From the Claude desktop app** (or any MSIX-packaged tool), start the installer with
+    `explorer.exe <path>`. Child processes of a packaged app get their AppData and
+    registry writes virtualized, so the install wouldn't register for real.
+  - **Real-system checks:** read state with a script launched the same way.
+- **Test an update end to end, without publishing anything:**
+  1. Build and install version A (`npm run dist`).
+  2. Bump `namma_agent/version.py`, then build version B into its own folder:
+     `npx electron-builder --win nsis --publish never -c.extraMetadata.version=<B> -c.directories.output=out-update`.
+  3. Serve that folder: `python -m http.server 47900 --directory desktop/out-update`.
+  4. Start the installed app with `NAMMA_DESKTOP_UPDATE_URL=http://127.0.0.1:47900/`.
+  5. The **Update available** banner appears; **Update now** downloads B, restarts and installs it.
+- **Logs:** `%APPDATA%\Namma Agent\logs\desktop.log` (shell) and `backend.log` (Python).
+  The tray has **Open logs folder**.
+- Details (architecture, IPC, events, packaging): **[desktop/README.md](desktop/README.md)**.
+- Releasing: push a `v<version>` tag (see [docs/RELEASING.md](docs/RELEASING.md)). The
+  release workflow builds `NammaAgentSetup-<version>.exe`, its `.blockmap` and
+  `latest.yml` and attaches them to the release, which is what installed apps update from.
 
 ### Want it always-on? Run it on a server for $0
 

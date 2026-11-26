@@ -517,6 +517,16 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         focused = bool(launcher is not None and launcher.focus_window())
         return {"ok": True, "focused": focused}
 
+    @app.post("/api/desktop/update-state")
+    def desktop_update_state(body: dict):
+        """The desktop shell reports electron-updater's state here (Phase 9 W3),
+        so /api/update/check can tell the web UI an update is available."""
+        from namma_agent.core import desktop
+        if not desktop.enabled():
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "not running under the desktop app"}, status_code=404)
+        return {"ok": True, "state": desktop.set_update_state(body or {})}
+
     # -- inbound webhooks (Slack / WhatsApp) -------------------------------
     # These platforms can't be polled, so they push events here. We ACK fast and
     # run the agent turn on a background thread (Slack requires a <3s response).
@@ -1204,7 +1214,9 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
         from namma_agent.core.uninstaller import apply_uninstall
         result = apply_uninstall(body.scope)
-        if result.get("started"):
+        # Desktop app: the Electron shell runs the NSIS uninstaller and quits,
+        # stopping this backend itself, so don't race it by exiting first.
+        if result.get("started") and not result.get("shell_exits"):
             # Let the HTTP response flush, then shut the backend down so the
             # uninstaller can delete the (now-unlocked) install directory.
             threading.Timer(1.0, service.shutdown).start()
@@ -2153,7 +2165,10 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     async def ws(websocket: WebSocket):
         # Phase 6a: same token as /api/* (?token= on the WS URL — headers are
         # awkward from browsers). 4401 = our "unauthorized" close code.
-        if not _token_ok(websocket.query_params.get("token")):
+        # The desktop shell injects X-Namma-Token on every request to its
+        # backend (including this upgrade), so the page never holds the token.
+        if not _token_ok(websocket.query_params.get("token")
+                         or websocket.headers.get("x-namma-token")):
             await websocket.close(code=4401)
             return
         await websocket.accept()
