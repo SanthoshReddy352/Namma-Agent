@@ -1,5 +1,5 @@
 import { isDesktop } from "../../desktop.js";
-import { IconLayoutSidebar, IconLayoutSidebarRight, IconSettings } from "@tabler/icons-react";
+import { IconLayoutSidebarLeftCollapse, IconLayoutSidebarLeftExpand, IconLayoutSidebarRight, IconSettings } from "@tabler/icons-react";
 
 // Phase 9 — the titlebar the Hermes way. There is no full-width titlebar row:
 // every top-edge panel (sidebar, main view, side panel) draws its own 34px
@@ -12,29 +12,36 @@ import { IconLayoutSidebar, IconLayoutSidebarRight, IconSettings } from "@tabler
 // Nothing sits in the centre. Empty band space drags the window on desktop.
 
 
+// The band's tools match the sidebar's own icons: a 28px rounded hit area with
+// a 17px icon at the same stroke, centred in the 34px band. The sidebar toggle
+// sits on the same vertical axis as the logo and the collapsed rail's icons
+// (34px from the left edge), and its icon says what it will do.
 function ToolButton({ label, onClick, pressed, children }) {
   return (
     <button type="button" onClick={onClick} aria-label={label} title={label} aria-pressed={pressed}
-            className={`app-no-drag grid place-items-center h-6 w-6 rounded-sm transition-colors duration-fast hover:bg-surface-sunken ${pressed ? "text-accent" : "text-fg-muted hover:text-fg"}`}>
+            className={`app-no-drag grid place-items-center h-7 w-7 rounded-lg transition-colors duration-fast hover:bg-surface-press ${pressed ? "text-accent bg-accent-wash" : "text-fg-muted hover:text-fg"}`}>
       {children}
     </button>
   );
 }
 
-export function TitlebarClusters({ onToggleSidebar, onOpenSettings, rightPaneOpen, onToggleRightPane }) {
+const ICON = { size: 17, stroke: 1.75, "aria-hidden": true };
+
+export function TitlebarClusters({ onToggleSidebar, sidebarCollapsed = false, onOpenSettings, rightPaneOpen, onToggleRightPane }) {
+  const SidebarIcon = sidebarCollapsed ? IconLayoutSidebarLeftExpand : IconLayoutSidebarLeftCollapse;
   return (
     <>
       <div data-chrome data-titlebar-cluster="left" className="titlebar-cluster-left fixed z-[35] flex items-center gap-1">
-        <ToolButton label="Toggle sidebar" onClick={onToggleSidebar}>
-          <IconLayoutSidebar size={14} stroke={1.8} aria-hidden="true" />
+        <ToolButton label={sidebarCollapsed ? "Expand sidebar" : "Collapse sidebar"} onClick={onToggleSidebar}>
+          <SidebarIcon {...ICON} />
         </ToolButton>
       </div>
       <div data-chrome data-titlebar-cluster="right" className="titlebar-cluster-right fixed z-[35] flex items-center gap-1">
         <ToolButton label="Settings" onClick={onOpenSettings}>
-          <IconSettings size={14} stroke={1.8} aria-hidden="true" />
+          <IconSettings {...ICON} />
         </ToolButton>
         <ToolButton label={rightPaneOpen ? "Hide side panel" : "Show side panel"} onClick={onToggleRightPane} pressed={rightPaneOpen}>
-          <IconLayoutSidebarRight size={14} stroke={1.8} aria-hidden="true" />
+          <IconLayoutSidebarRight {...ICON} />
         </ToolButton>
       </div>
     </>

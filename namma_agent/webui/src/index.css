@@ -127,12 +127,12 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
   /* Width of the native window controls (Electron titleBarOverlay); 0 in a browser. */
   --titlebar-wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
   --titlebar-tools-right: max(0.75rem, var(--titlebar-wco-right));
-  --titlebar-tools-width: 52px;                  /* two 24px tools + gap */
+  --titlebar-tools-width: 60px;                  /* two 28px tools + gap */
   --titlebar-reserve-right: calc(var(--titlebar-tools-right) + var(--titlebar-tools-width) + 0.75rem);
-  --titlebar-reserve-left: 50px;                 /* 14px inset + 24px tool + gap */
+  --titlebar-reserve-left: 58px;                 /* 20px inset + 28px tool + gap */
 }
-.titlebar-cluster-left { top: 5px; left: 14px; }
-.titlebar-cluster-right { top: 5px; right: var(--titlebar-tools-right); }
+.titlebar-cluster-left { top: 3px; left: 20px; }   /* centre on the 34px rail/logo axis */
+.titlebar-cluster-right { top: 3px; right: var(--titlebar-tools-right); }
 
 /* ── Brand art (Phase 9) ───────────────────────────────────────────────────
    Single-colour masks tinted by tokens, so they follow light/dark themes. */

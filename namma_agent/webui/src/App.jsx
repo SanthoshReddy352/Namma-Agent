@@ -229,6 +229,7 @@ function Shell() {
   return (
     <div className="h-full flex flex-col bg-bg text-fg">
       <TitlebarClusters onToggleSidebar={() => window.dispatchEvent(new Event("namma-toggle-sidebar"))}
+                        sidebarCollapsed={collapsed}
                         onOpenSettings={() => openSettings()}
                         rightPaneOpen={rightPane} onToggleRightPane={() => setRightPane(!rightPane)} />
       <div className="flex-1 flex min-h-0">

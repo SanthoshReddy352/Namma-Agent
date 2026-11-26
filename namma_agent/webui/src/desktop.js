@@ -141,10 +141,10 @@ export function handleShellEvent(ev) {
 export const DRAG_FIX_CSS = `
 #root::after, body::after {
   content: ""; position: fixed; z-index: 2147483647; pointer-events: none;
-  top: 5px; height: 24px; -webkit-app-region: no-drag; app-region: no-drag;
+  top: 3px; height: 28px; -webkit-app-region: no-drag; app-region: no-drag;
 }
-#root::after { left: 14px; width: 24px; }
-body::after { right: var(--titlebar-tools-right, 0.75rem); width: var(--titlebar-tools-width, 52px); }
+#root::after { left: 20px; width: 28px; }
+body::after { right: var(--titlebar-tools-right, 0.75rem); width: var(--titlebar-tools-width, 60px); }
 `;
 
 function installDragFix() {
