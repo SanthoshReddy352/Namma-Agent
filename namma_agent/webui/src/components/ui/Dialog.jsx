@@ -75,7 +75,7 @@ export default function Dialog({
   }, [open]);
 
   if (!open) return null;
-  const width = size === "sm" ? "w-[400px]" : size === "lg" ? "w-[880px]" : "w-[480px]";
+  const width = size === "sm" ? "w-[400px]" : size === "lg" ? "w-[880px]" : size === "xl" ? "w-[1120px]" : "w-[480px]";
   return (
     <div className="fixed inset-0 z-modal grid place-items-center bg-black/40 p-4"
          onMouseDown={(e) => { if (dismissOnBackdrop && e.target === e.currentTarget) onClose?.(); }}>

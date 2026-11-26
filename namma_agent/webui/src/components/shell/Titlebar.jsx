@@ -47,9 +47,8 @@ export function TitlebarClusters({ onToggleSidebar, onOpenSettings, rightPaneOpe
 export function PanelTitlebar({ children, reserveLeft = false, reserveRight = false, className = "", slotRef, surface = "chat" }) {
   return (
     <div data-chrome
-         className={`panel-titlebar relative flex items-center gap-2 shrink-0 h-[var(--titlebar-height)] min-w-0 border-b border-border ${surface === "chat" ? "bg-bg" : "bg-surface-sunken"} ${isDesktop() ? "app-drag" : ""} ${reserveLeft ? "pl-[var(--titlebar-reserve-left)]" : "pl-4"} ${reserveRight ? "pr-[var(--titlebar-reserve-right)]" : "pr-3"} ${className}`}>
+         className={`panel-titlebar relative flex items-center gap-2 shrink-0 h-[var(--titlebar-height)] min-w-0 border-b border-border/60 ${surface === "chat" ? "bg-bg/45 backdrop-blur-md" : "bg-surface-sunken"} ${isDesktop() ? "app-drag" : ""} ${reserveLeft ? "pl-[var(--titlebar-reserve-left)]" : "pl-4"} ${reserveRight ? "pr-[var(--titlebar-reserve-right)]" : "pr-3"} ${className}`}>
       <div ref={slotRef} className="flex items-center gap-2 min-w-0 flex-1 overflow-hidden">{children}</div>
-      {surface === "chat" && <div aria-hidden="true" className="pointer-events-none absolute left-0 right-0 top-full h-4 bg-gradient-to-b from-bg to-transparent" />}
     </div>
   );
 }

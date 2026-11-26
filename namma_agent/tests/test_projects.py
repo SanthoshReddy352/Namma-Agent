@@ -140,3 +140,24 @@ def test_project_rest_flow():
     assert detail["memory"][0]["content"] == "vegetarian"
 
     assert client.delete(f"/api/projects/{pid}").json()["deleted"] is True
+
+
+def test_a_started_chat_is_listed_untitled_until_its_first_reply():
+    """Phase 9: a chat shows in the sidebar as soon as it starts (you can leave it
+    working and come back); the model's title replaces "Untitled session" once the
+    first reply lands, and a chat with a reply but no title falls back to its
+    first message."""
+    from namma_agent.core.memory import UNTITLED_SESSION
+
+    db = Database(":memory:")
+    chat = db.create_session()
+    db.add_turn(chat, "user", "plan my week")
+    [row] = [s for s in db.list_sessions() if s["id"] == chat]
+    assert row["title"] == UNTITLED_SESSION == "Untitled session" and row["pending"] is True
+
+    db.add_turn(chat, "assistant", "Here's a plan…")
+    [row] = [s for s in db.list_sessions() if s["id"] == chat]
+    assert row["title"] == "plan my week" and row["pending"] is False
+
+    assert db.set_auto_title(chat, "Weekly Plan")
+    assert next(s for s in db.list_sessions() if s["id"] == chat)["title"] == "Weekly Plan"

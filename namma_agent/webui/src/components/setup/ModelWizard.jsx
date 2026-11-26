@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { IconArrowLeft, IconCheck, IconCircleCheck, IconCloud, IconExternalLink, IconKey, IconLogin2, IconSearch, IconServer2, IconStack2, IconStar } from "@tabler/icons-react";
+import { IconArrowLeft, IconCheck, IconCircleCheck, IconCloud, IconCreditCard, IconExternalLink, IconKey, IconLogin2, IconSearch, IconServer2, IconStack2, IconStar, IconWorld } from "@tabler/icons-react";
 import { SecretField } from "../SetupUI.jsx";
-import { PROVIDER_GROUPS, connectProvider, listModels, loadProviders, startOAuth } from "../../providerContract.js";
+import { PROVIDER_GROUPS, connectProvider, listModels, loadCatalog, startOAuth } from "../../providerContract.js";
 
 // Phase 9 W1: the model wizard — first-run onboarding AND Settings → Model use
 // this one component (plan: "the same component is reused in Settings → Model").
@@ -12,7 +12,11 @@ import { PROVIDER_GROUPS, connectProvider, listModels, loadProviders, startOAuth
 //   5 Done
 // Built on src/providerContract.js, so it already speaks W2's contract.
 export const WIZARD_STEPS = ["Provider", "Sign in", "Model", "Test", "Done"];
-const GROUP_ICON = { Popular: IconStar, Aggregators: IconStack2, Cloud: IconCloud, Local: IconServer2 };
+// Icons per catalogue group (W2's names + the fallback ones); unknown groups get a generic one.
+const GROUP_ICON = {
+  Popular: IconStar, Aggregators: IconStack2, Gateways: IconStack2, Subscriptions: IconCreditCard,
+  China: IconWorld, Cloud: IconCloud, Local: IconServer2,
+};
 
 // Hyphens, dots, underscores and spaces count as the same thing ("llama32" finds "llama-3.2").
 export const looseKey = (s) => String(s || "").toLowerCase().replace(/[\s._\-/:]+/g, "");
@@ -20,6 +24,7 @@ export const looseMatch = (hay, q) => !q || looseKey(hay).includes(looseKey(q));
 
 export default function ModelWizard({ variant = "onboarding", onDone, onCancel }) {
   const [providers, setProviders] = useState(null);
+  const [groupList, setGroupList] = useState(PROVIDER_GROUPS);
   const [query, setQuery] = useState("");
   const [provider, setProvider] = useState(null);
   const [step, setStep] = useState(0);
@@ -32,7 +37,7 @@ export default function ModelWizard({ variant = "onboarding", onDone, onCancel }
   const [oauthMsg, setOauthMsg] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
 
-  useEffect(() => { loadProviders().then(setProviders); }, []);
+  useEffect(() => { loadCatalog().then((c) => { setProviders(c.providers); setGroupList(c.groups); }); }, []);
 
   const needsAuth = provider && provider.auth !== "none";
   const needsEndpoint = !!provider?.needs_base_url;
@@ -77,8 +82,8 @@ export default function ModelWizard({ variant = "onboarding", onDone, onCancel }
 
   const groups = useMemo(() => {
     const list = (providers || []).filter((p) => looseMatch(`${p.label} ${p.id} ${p.group}`, query));
-    return PROVIDER_GROUPS.map((g) => ({ g, items: list.filter((p) => p.group === g) })).filter((x) => x.items.length);
-  }, [providers, query]);
+    return groupList.map((g) => ({ g, items: list.filter((p) => p.group === g) })).filter((x) => x.items.length);
+  }, [providers, query, groupList]);
   const shownModels = useMemo(() => models.models.filter((m) => looseMatch(m, mq)).slice(0, 200), [models.models, mq]);
 
   return (
@@ -96,7 +101,7 @@ export default function ModelWizard({ variant = "onboarding", onDone, onCancel }
           {providers === null && <p className="text-sm text-fg-muted">Loading providers…</p>}
           {providers && groups.length === 0 && <p className="text-sm text-fg-muted">No provider matches “{query}”.</p>}
           {groups.map(({ g, items }) => {
-            const GIcon = GROUP_ICON[g];
+            const GIcon = GROUP_ICON[g] || IconStack2;
             return (
               <div key={g}>
                 <div className="flex items-center gap-1.5 mb-2 text-2xs font-semibold uppercase tracking-wider text-fg-subtle">

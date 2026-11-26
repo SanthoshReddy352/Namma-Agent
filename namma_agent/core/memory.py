@@ -274,6 +274,9 @@ def action_record(steps: list) -> str:
     return "[actions: tools that really ran in this turn]\n" + "\n".join(lines)
 
 
+# Sidebar label for a chat that has started but has no reply (or title) yet.
+UNTITLED_SESSION = "Untitled session"
+
 class Database:
     """Thread-safe single-connection SQLite store."""
 
@@ -695,8 +698,10 @@ class Database:
 
     def list_sessions(self, limit: int = 50, project_id: Optional[str] = None,
                       include_learning: bool = False) -> list[dict]:
-        """Recent chat sessions for the sidebar: id, timestamps, a title (custom
-        rename else first user message), summary, project_id. Learning-Room
+        """Recent chat sessions for the sidebar: id, timestamps, a title, summary,
+        project_id. Title: the user's rename or the model's auto-title; a chat
+        still waiting for its first reply is "Untitled session" (so it shows up
+        the moment it starts); otherwise the first user message. Learning-Room
         sessions are excluded unless ``include_learning``; pass ``project_id`` to
         list only one project's chats (use the sentinel ``""`` for unfiled chats)."""
         where = ["EXISTS (SELECT 1 FROM turns t WHERE t.session_id=s.id)"]
@@ -714,7 +719,8 @@ class Database:
             rows = self.conn.execute(
                 "SELECT s.id, s.created_at, s.updated_at, s.summary, s.project_id, s.model, s.title AS custom_title, "
                 "(SELECT t.content FROM turns t WHERE t.session_id=s.id AND t.role='user' "
-                " ORDER BY t.id LIMIT 1) AS first_msg "
+                " ORDER BY t.id LIMIT 1) AS first_msg, "
+                "EXISTS (SELECT 1 FROM turns t WHERE t.session_id=s.id AND t.role='assistant') AS answered "
                 "FROM sessions s "
                 f"WHERE {' AND '.join(where)} "
                 "ORDER BY s.updated_at DESC LIMIT ?",
@@ -725,7 +731,9 @@ class Database:
             d = dict(r)
             custom = (d.pop("custom_title", None) or "").strip()
             first = (d.pop("first_msg", None) or "").strip()
-            title = custom or first
+            answered = bool(d.pop("answered", 0))
+            d["pending"] = not answered
+            title = custom or (first if answered else UNTITLED_SESSION)
             d["title"] = (title[:60] + "…") if len(title) > 60 else (title or "New chat")
             out.append(d)
         return out

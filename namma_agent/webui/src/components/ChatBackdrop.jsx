@@ -8,26 +8,27 @@
 //   2. mode paint     — counter-strokes + the ink splatter, in the current
 //                       mode's colour (--paint-b): Agent gold, Chat
 //                       terracotta, Setup teal. A mode change blooms it;
-//   3. line art       — the ink-dripping hand, the theatre masks and the
-//                       reaching hands, in the theme's ink;
+//   3. line art       — the ink-dripping hand (from the top edge), the hand
+//                       rising from the bottom edge and the theatre masks,
+//                       feathered out of their corners, in the theme's ink;
 //   4. crumpled paper — multiplied on light themes, soft-light on dark;
 //   5. veil           — the theme's background down the reading column.
 // While a turn runs, the drip hand's ink slowly pulses ("the ink is flowing").
 // Purely decorative: aria-hidden, never intercepts clicks.
-export const BACKDROP_LAYERS = ["wash-a", "wash-b", "art-drip", "art-masks", "art-hands", "paper", "veil"];
+export const BACKDROP_LAYERS = ["wash-a", "wash-b", "art-drip", "art-masks", "art-rise", "paper", "veil"];
 export const MODE_PAINTS = { agent: "gold", chat: "terracotta", setup: "teal" };
 
-export default function ChatBackdrop({ mode = "agent", busy = false }) {
+export default function ChatBackdrop({ mode = "agent", busy = false, variant = "chat" }) {
   const m = MODE_PAINTS[mode] ? mode : "agent";
   return (
-    <div aria-hidden="true" data-testid="chat-backdrop" data-mode={m} data-busy={busy ? "true" : undefined}
+    <div aria-hidden="true" data-testid="chat-backdrop" data-mode={m} data-variant={variant} data-busy={busy ? "true" : undefined}
          className="chat-bg pointer-events-none absolute inset-0 overflow-hidden">
       <div className="chat-bg-layer chat-bg-wash chat-bg-wash-a" data-layer="wash-a" />
       {/* Re-keyed on mode so the bloom animation replays on every switch. */}
       <div key={m} className="chat-bg-layer chat-bg-wash chat-bg-wash-b" data-layer="wash-b" />
       <div className="chat-bg-art chat-bg-art-drip" data-layer="art-drip" />
       <div className="chat-bg-art chat-bg-art-masks" data-layer="art-masks" />
-      <div className="chat-bg-art chat-bg-art-hands" data-layer="art-hands" />
+      <div className="chat-bg-art chat-bg-art-rise" data-layer="art-rise" />
       <div className="chat-bg-layer chat-bg-paper" data-layer="paper" />
       <div className="chat-bg-layer chat-bg-veil" data-layer="veil" />
     </div>

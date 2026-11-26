@@ -47,7 +47,7 @@ export default function RightPane({ runs = [], todos = [], messages = [], onClos
       </div>
       <div role="tabpanel" className="flex-1 min-h-0 overflow-y-auto p-3">
         {tab === "runs" && (runs.length
-          ? <RunsPanel runs={runs} />
+          ? <RunsPanel runs={runs} docked={false} />
           : <p className="text-sm text-fg-muted">No sub-agents in this chat yet. When the agent delegates work, each Legatus shows up here.</p>)}
         {tab === "plan" && (todos.length
           ? <TodoPanel todos={todos} />

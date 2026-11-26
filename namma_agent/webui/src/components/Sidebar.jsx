@@ -6,19 +6,20 @@ import { isDesktop } from "../desktop.js";
 import { IconAffiliate, IconChevronRight, IconDots, IconDownload, IconEdit, IconFolder, IconPencil, IconSchool, IconSearch, IconSettings, IconTrash, IconX } from "@tabler/icons-react";
 import ProfileRail from "./shell/ProfileRail.jsx";
 
-// Gemini-style navigation rail: a slim icon rail that expands on hover, or pins
-// open via the hamburger. Icons are hand-drawn thin-stroke line marks in the
-// spirit of claude.ai. Nav: New chat · Projects · Learning Room, then Recent
-// chats, with Settings pinned to the bottom.
-export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDelete, onRename, onFile, onConfirm, onOpenSettings, onManagePersonas, collapsed, onToggle, name = "Namma Agent" }) {
+// The sidebar (Phase 9, Hermes layout). Open or a slim rail — only the
+// titlebar's sidebar button changes it (no expand-on-hover, no collapse when
+// the pointer leaves). The titlebar band holds just that button; the brand
+// (highlighted medallion + name) sits on its own row below, so nothing
+// squeezes the toggle. Nav: New chat · Projects · Learning Room · Memory, then
+// search + Recent chats, the profile rail, and Settings.
+export default function Sidebar({ sessions, projects = [], busySessions = [], onNew, onOpen, onDelete, onRename, onFile, onConfirm, onOpenSettings, onManagePersonas, collapsed, onToggle, name = "Namma Agent" }) {
   const [pinned, setPinned] = useState(() => localStorage.getItem("namma-sidebar-pinned") !== "false");
-  const [hovered, setHovered] = useState(false);
   // Cross-chat search: ≥2 chars swaps the Recent list for grouped results.
   const [query, setQuery] = useState("");
   const [results, setResults] = useState(null); // null = not searching
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const expanded = pinned || hovered;
+  const expanded = pinned;
 
   useEffect(() => {
     const q = query.trim();
@@ -45,56 +46,52 @@ export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDele
     <button
       onClick={() => navigate(to)}
       title={label}
-      className={`flex items-center gap-3 rounded-full h-10 transition-colors w-full
-        ${expanded ? "px-3" : "px-0 justify-center"}
+      aria-current={active ? "page" : undefined}
+      className={`relative flex items-center gap-3 rounded-lg h-9 transition-colors w-full
+        ${expanded ? "px-2.5" : "px-0 justify-center"}
         ${active
-          ? "bg-brand-wash text-brand-deep dark:bg-night-panel dark:text-brand-soft"
-          : "text-fg-muted hover:bg-paper-sink dark:hover:bg-night-panel"}`}
+          ? "bg-accent-wash text-fg font-medium"
+          : "text-fg-muted hover:text-fg hover:bg-surface-press"}`}
     >
-      <span className="shrink-0 grid place-items-center w-7">{icon}</span>
+      {active && <span aria-hidden="true" className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-accent" />}
+      <span className={`shrink-0 grid place-items-center w-6 ${active ? "text-accent" : ""}`}>{icon}</span>
       {expanded && <span className="truncate text-base">{label}</span>}
     </button>
   );
 
   return (
-    // Outer wrapper reserves rail width and grows whenever the sidebar is expanded
-    // (pinned OR hovered), so the work area slides over smoothly and the panel never
-    // covers the chat header / breadcrumbs.
-    <div
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
-      className={`relative shrink-0 transition-[width] duration-200 ${expanded ? "w-64" : "w-[68px]"}`}
-    >
-      <div
-        onMouseEnter={() => setHovered(true)}
-        onMouseLeave={() => setHovered(false)}
-        className={`absolute inset-y-0 left-0 z-30 flex flex-col
-          bg-surface-hover          border-r border-border transition-[width] duration-200
-          ${expanded ? "w-64" : "w-[68px]"} ${hovered && !pinned ? "shadow-pop" : ""}`}
-      >
-        {/* Header in the titlebar band (Hermes layout). The sidebar toggle is
-            the fixed left titlebar cluster drawn over this row. */}
-        <div data-chrome className={`flex items-center gap-2 shrink-0 h-[var(--titlebar-height)] pl-[var(--titlebar-reserve-left)] pr-3 ${isDesktop() ? "app-drag" : ""}`}>
-          {expanded && (
-            <button onClick={() => navigate("/")} className="flex items-center gap-2 min-w-0">
-              <Logo size={18} />
-              <span className="font-serif text-base tracking-tight truncate">{name}</span>
-            </button>
-          )}
+    <aside aria-label="Sidebar" data-expanded={expanded ? "true" : "false"}
+           className={`sidebar relative shrink-0 flex flex-col bg-surface-hover border-r border-border transition-[width] duration-200 ${expanded ? "w-64" : "w-[68px]"}`}>
+        {/* The titlebar band: only the sidebar toggle (the fixed left cluster)
+            lives here, with the rest left free to drag the window. */}
+        <div data-chrome className={`shrink-0 h-[var(--titlebar-height)] ${isDesktop() ? "app-drag" : ""}`} />
+
+        {/* Brand row: the highlighted medallion + the assistant's name. */}
+        <div className={`shrink-0 ${expanded ? "px-3 pt-2 pb-3" : "pt-2 pb-3 flex justify-center"}`}>
+          <button onClick={() => navigate("/")} title={name} aria-label={`${name} — home`}
+                  className={`flex items-center gap-2.5 min-w-0 rounded-xl ${expanded ? "w-full px-1.5 py-1 hover:bg-surface-press" : ""}`}>
+            <Logo size={expanded ? 34 : 36} variant="medallion" />
+            {expanded && (
+              <span className="min-w-0 text-left leading-tight">
+                <span className="block font-serif text-md font-semibold tracking-tight truncate text-fg">{name}</span>
+                <span className="block text-2xs text-fg-subtle truncate">Your personal agent</span>
+              </span>
+            )}
+          </button>
         </div>
 
-        {/* New chat — prominent pill */}
+        {/* New chat — the one prominent button */}
         <div className={`px-3 ${expanded ? "" : "flex justify-center"}`}>
           <button aria-label="New chat" onClick={onNew} title="New chat"
-            className={`flex items-center gap-3 rounded-full bg-surface-raised border border-border hover:shadow-soft transition
-              ${expanded ? "px-4 h-11 w-full" : "h-11 w-11 justify-center"}`}>
+            className={`flex items-center gap-2.5 rounded-lg bg-accent text-accent-fg shadow-soft hover:opacity-90 transition
+              ${expanded ? "px-3 h-10 w-full" : "h-10 w-10 justify-center"}`}>
             <ComposeIcon />
             {expanded && <span className="text-base font-medium">New chat</span>}
           </button>
         </div>
 
         {/* Primary nav */}
-        <nav className="px-3 mt-2 space-y-0.5">
+        <nav aria-label="Pages" className="px-3 mt-3 space-y-0.5">
           {navItem("/projects", <FolderIcon />, "Projects", pathname.startsWith("/projects"))}
           {navItem("/learning", <CapIcon />, "Learning Room", pathname.startsWith("/learning"))}
           {navItem("/memory", <MemoryIcon />, "Memory", pathname.startsWith("/memory"))}
@@ -111,20 +108,21 @@ export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDele
                   onChange={(e) => setQuery(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Escape") setQuery(""); }}
                   placeholder="Search chats…"
-                  className="w-full h-9 rounded-full pl-9 pr-8 text-sm bg-paper-panel dark:bg-night-panel
-                             border border-line dark:border-night-line outline-none
-                             focus:border-brand-soft placeholder:text-ink-faint dark:placeholder:text-night-faint"
+                  aria-label="Search chats"
+                  className="w-full h-8 rounded-lg pl-9 pr-8 text-sm bg-surface-raised text-fg border border-border outline-none
+                             focus:border-accent placeholder:text-fg-subtle"
                 />
                 {query && (
                   <button onClick={() => setQuery("")} title="Clear search"
+                          aria-label="Clear search"
                           className="absolute right-2 top-1/2 -translate-y-1/2 h-5 w-5 grid place-items-center rounded-full
-                                     text-ink-faint hover:text-ink dark:hover:text-night-ink">
+                                     text-fg-subtle hover:text-fg">
                     <XIcon />
                   </button>
                 )}
               </div>
             </div>
-            <div className="mt-3 px-5 text-2xs uppercase tracking-wider text-fg-subtle">
+            <div className="mt-4 px-5 text-2xs font-semibold uppercase tracking-wider text-fg-subtle">
               {results !== null ? "Search results" : "Recent"}
             </div>
             <div className="flex-1 overflow-y-auto px-2 py-1 space-y-0.5 mt-1">
@@ -135,7 +133,7 @@ export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDele
                   )}
                   {results.map((r) => (
                     <button key={r.session_id} onClick={() => onOpen(r.session_id)}
-                            className="w-full text-left rounded-xl px-3 py-2 hover:bg-paper-sink dark:hover:bg-night-panel transition">
+                            className="w-full text-left rounded-xl px-3 py-2 hover:bg-surface-press transition">
                       <div className="flex items-baseline gap-2">
                         <span className="truncate text-base text-fg-soft">{r.title}</span>
                         {r.date && <span className="ml-auto shrink-0 text-2xs text-fg-subtle">{r.date}</span>}
@@ -150,7 +148,7 @@ export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDele
                     <div className="px-3 py-4 text-sm text-fg-subtle">No conversations yet.</div>
                   )}
                   {sessions?.map((s) => (
-                    <ChatRow key={s.id} s={s} projects={projects}
+                    <ChatRow key={s.id} s={s} projects={projects} working={busySessions.includes(s.id)}
                              onOpen={onOpen} onDelete={onDelete} onRename={onRename} onFile={onFile} onConfirm={onConfirm} />
                   ))}
                 </>
@@ -168,20 +166,19 @@ export default function Sidebar({ sessions, projects = [], onNew, onOpen, onDele
         {/* Settings pinned to bottom */}
         <div className="px-3 pb-3 pt-1">
           <button aria-label="Settings" onClick={onOpenSettings} title="Settings"
-            className={`flex items-center gap-3 rounded-full h-10 text-fg-soft hover:bg-paper-sink dark:hover:bg-night-panel w-full
+            className={`flex items-center gap-3 rounded-lg h-9 text-fg-muted hover:text-fg hover:bg-surface-press w-full
               ${expanded ? "px-3" : "px-0 justify-center"}`}>
             <span className="shrink-0 grid place-items-center w-7"><GearIcon /></span>
             {expanded && <span className="text-base">Settings</span>}
           </button>
         </div>
-      </div>
-    </div>
+    </aside>
   );
 }
 
 // One recent-chat row: open on click, with a ⋯ menu for rename / add-to-project /
 // delete. Rename swaps the label for an inline input.
-function ChatRow({ s, projects, onOpen, onDelete, onRename, onFile, onConfirm }) {
+function ChatRow({ s, projects, working = false, onOpen, onDelete, onRename, onFile, onConfirm }) {
   const [menu, setMenu] = useState(null); // null | {top, left}
   const [sub, setSub] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -211,17 +208,19 @@ function ChatRow({ s, projects, onOpen, onDelete, onRename, onFile, onConfirm })
           autoFocus value={draft} onChange={(e) => setDraft(e.target.value)}
           onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
-          className="w-full rounded-lg px-3 py-1.5 text-base bg-paper-panel dark:bg-night border border-brand-soft outline-none"
+          className="w-full rounded-lg px-3 py-1.5 text-base bg-surface-raised text-fg border border-accent outline-none"
         />
       </div>
     );
   }
 
   return (
-    <div className="group relative flex items-center rounded-full hover:bg-paper-sink dark:hover:bg-night-panel transition">
-      <button onClick={() => onOpen(s.id)}
-              className="flex-1 text-left truncate pl-4 pr-2 py-2 text-base text-fg-soft">
-        {s.title}
+    <div className="group relative flex items-center rounded-lg hover:bg-surface-press transition">
+      <button onClick={() => onOpen(s.id)} data-pending={s.pending ? "true" : undefined}
+              className="flex-1 min-w-0 flex items-center gap-2 text-left pl-4 pr-2 py-2 text-base text-fg-soft">
+        {/* Still working on its first reply: a quiet pulse; the model names it after. */}
+        {working && <span aria-label="Working" title="Working on a reply" className="h-1.5 w-1.5 shrink-0 rounded-full bg-accent animate-pulse" />}
+        <span className={`truncate ${s.pending ? "italic text-fg-muted" : ""}`}>{s.title}</span>
       </button>
       <button aria-label="More" ref={btnRef} title="More" onClick={openMenu}
               className={`pr-3 pl-1 text-ink-faint hover:text-fg transition ${menu ? "opacity-100" : "opacity-0 group-hover:opacity-100"}`}>
@@ -279,13 +278,13 @@ function ChatRow({ s, projects, onOpen, onDelete, onRename, onFile, onConfirm })
 // ── Icons (thin-stroke line marks, claude.ai-inspired) ───────────────────────
 const stroke = { fill: "none", stroke: "currentColor", strokeWidth: 1.7, strokeLinecap: "round", strokeLinejoin: "round" };
 const ComposeIcon = () => (<IconEdit size={18} stroke={1.7} aria-hidden="true" />);
-const FolderIcon = ({ size = 20 }) => (<IconFolder size={size} stroke={1.7} aria-hidden="true" />);
+const FolderIcon = ({ size = 18 }) => (<IconFolder size={size} stroke={1.7} aria-hidden="true" />);
 const MoreIcon = () => (<IconDots size={16} stroke={1.7} aria-hidden="true" />);
 const PencilIcon = () => (<IconPencil size={15} stroke={1.7} aria-hidden="true" />);
 const ChevronRight = () => (<IconChevronRight size={14} stroke={1.7} aria-hidden="true" />);
-const CapIcon = () => (<IconSchool size={20} stroke={1.7} aria-hidden="true" />);
+const CapIcon = () => (<IconSchool size={18} stroke={1.7} aria-hidden="true" />);
 // Memory = a small knowledge-graph mark (nodes + links).
-const MemoryIcon = () => (<IconAffiliate size={20} stroke={1.7} aria-hidden="true" />);
+const MemoryIcon = () => (<IconAffiliate size={18} stroke={1.7} aria-hidden="true" />);
 const TrashIcon = () => (<IconTrash size={14} stroke={1.7} aria-hidden="true" />);
 const DownloadIcon = () => (<IconDownload size={15} stroke={1.7} aria-hidden="true" />);
 const SearchIcon = () => (<IconSearch size={15} stroke={1.7} aria-hidden="true" />);

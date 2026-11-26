@@ -49,7 +49,7 @@ describe("brand art (owner's images)", () => {
   });
 
   it("ships the masks and icons the UI and installers reference", () => {
-    for (const f of ["logo-mask.png", "bg/wash-a.webp", "bg/wash-b.webp", "bg/paper.webp", "bg/paper-shade.webp", "bg/art-drip.webp", "bg/art-masks.webp", "bg/art-hands.webp", "favicon.ico", "icon-32.png", "icon-180.png", "icon-512.png"]) {
+    for (const f of ["logo-mask.png", "bg/wash-a.webp", "bg/wash-b.webp", "bg/paper.webp", "bg/paper-shade.webp", "bg/art-drip.webp", "bg/art-masks.webp", "bg/art-rise.webp", "favicon.ico", "icon-32.png", "icon-180.png", "icon-512.png"]) {
       expect(fs.existsSync(path.join(ROOT, "public", "brand", f))).toBe(true);
     }
     const html = fs.readFileSync(path.join(ROOT, "index.html"), "utf8");

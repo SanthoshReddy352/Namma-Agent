@@ -33,8 +33,8 @@
 | | |
 |---|---|
 | Version | 2.3.2 (`namma_agent/version.py`) |
-| Test suite | **1,437 passed, 3 skipped** (2026-11-26, Phase 9 W1 slice 4; 1,424 after slice 1; 1,420 after Phase 5/6; 1,312 after Phase 3) |
-| Web UI tests | **51 passed** — `cd namma_agent/webui && npm test` (Vitest + React Testing Library; 38 after W1 slice 3; 34 after slice 2; 29 after slice 1) |
+| Test suite | **1,440 passed, 3 skipped** (2026-11-26, Phase 9 W1 slice 6; 1,439 after slice 5; 1,437 after slice 4; 1,424 after slice 1; 1,420 after Phase 5/6; 1,312 after Phase 3) |
+| Web UI tests | **84 passed** — `cd namma_agent/webui && npm test` (Vitest + React Testing Library; 63 after W1 slice 5; 51 after slice 4; 38 after slice 3; 34 after slice 2; 29 after slice 1) |
 | Run | `python -m namma_agent --server` → http://127.0.0.1:8000 (desktop: `python -m namma_agent`) |
 | Test | `.venv/Scripts/python.exe -m pytest namma_agent/tests -q` (no API key needed) |
 | Lint | `.venv/Scripts/python.exe -m ruff check namma_agent` |
@@ -1019,6 +1019,55 @@ Slice 1 landed 2026-11-25. Everything marked `[x]` is verified live.
     - Settings → Model at `/settings/models`: the wizard against the real local Ollama (live list, then Connect & test showing the real "does not support chat" error);
     - `/settings/servers` → MCP; the side panel's four tabs; the dark-mode Projects, Memory and Settings views.
   - **Not verified live:** a successful wizard connect (no chat model on this machine; covered by a mocked test); Files/Preview with real generated media (mocked test); OpenRouter sign-in (needs W2).
+- [x] **Slice 5 (2026-11-26, owner feedback): polish, sub-agent details, page redesigns.**
+  - **Corner art:**
+    - 7.png's two hands are dropped; both arms end mid-image, so they looked like they started in blank space. A hand rising from below (20.png) replaces them at the bottom-right.
+    - Every art piece is cropped to its drawing and sits flush with a screen edge (the drip hand on the top edge, the rising hand on the bottom edge).
+    - An intersected gradient mask feathers each piece out of its edge or corner. The art is printed into the paper (`mix-blend-mode` multiply on light themes, screen on dark).
+  - **Legibility:**
+    - the reading-column veil is up to 66% light / 60% dark;
+    - transcript and page text get a soft halo in the background colour (`.chat-legible`) and weight 450 (bold 650);
+    - verified in the browser: near-black text in light mode, crisp in dark.
+  - **Translucent chrome:** the painted paper now runs under the titlebar band (rendered once in `App.jsx`), the band is `bg-bg/45` with blur, and the composer, user bubbles and runs dock are frosted glass. Gallery pages get an evenly veiled "page" variant.
+  - **Sidebar** (`Sidebar.jsx`):
+    - no expand-on-hover and no collapse on leave; only the titlebar toggle changes it;
+    - the band row holds just the toggle; the brand (medallion + name + tagline) has its own row;
+    - accent "New chat", nav items with an accent bar for the active page, tokenised search.
+  - **Logo:** `Logo variant="medallion"`: an accent-wash coin with a glow, the statue's silhouette filled (new `logo-fill.png`) so the engraving no longer reads see-through, and a bolder line mask at small sizes (`logo-mask-bold.png`). Used in the sidebar and the home hero.
+  - **Home hero:** an 88px glowing medallion with a breathing halo (and Imperium's laurel); the greeting drops from 3xl to xl, semibold.
+  - **Settings** opens at 1,120px (`Dialog size="xl"`) with a wider nav and roomier content.
+  - **Scrollbars:** 4px, `--fg` at 12% opacity (26% on hover), no track and no buttons, app-wide; light and dark follow the theme.
+  - **Click sounds** (`sounds.js` `installClickSounds`): a soft synthesised tick on every press of a button, tab, option, switch or link. Disabled controls stay silent. It's a "Button clicks" toggle in Settings → Notifications, under the master volume.
+  - **Sub-agent details:**
+    - `core/delegation.py` now stores each run's exact brief (`meta.prompt`) and step limit, plus a live `meta.trail` (tool, one-line argument preview, outcome; last 40 steps, persisted on each step);
+    - `RunsPanel.jsx` opens each run to show: Brief, toolset/skill chips, Steps (live), Result/Error, and the sub-agent's own transcript (loaded on demand, refreshed while it runs).
+  - **Projects and Learning Room redesigned** on a shared `shell/PageShell.jsx`:
+    - common: a header block with the primary action and stats (the duplicate h-12 header is gone), and translucent lifting cards;
+    - Projects: tone-striped cards, search past four projects, an empty state with idea chips that pre-fill the dialog;
+    - Learning Room: a "Continue learning" card, progress rings, depth chips, "Next:" modules, suggested topics.
+    - The Memory page belongs to the Phase 10 session.
+  - **Tests:**
+    - `w1polish.test.jsx` (12): run details incl. transcript fetch; the sidebar never expanding on hover; the medallion; click-sound targeting + synthesis + toggle; corner feathering/blend; scrollbars; Settings width; both pages;
+    - two Python delegation tests (brief + trail, preview capping).
+    - Web UI **63 passed**; Python **1,439 passed / 3 skipped**.
+  - **Verified live** (scratch backend + Vite, seeded projects/topics/a finished sub-agent run; the real `data/` and `~/.namma_agent` were unchanged): home hero and sidebar, the corner art, the ISS chat in dark with the run expanded (brief, chips, two steps, result, transcript), Projects, the Learning Room, the Settings width.
+  - **Not verified live:** click sounds (the browser pane can't play audio to me; covered by a test with a mocked `AudioContext`), and the desktop title bar (W3).
+- [x] **Slice 6 (2026-11-26, owner bug reports):**
+  - **Settings → Appearance was a blank screen.** `settings/AppearanceTab.jsx` used `Section`/`Field`/`Select`/`Toggle` without importing them; the slice-4 split script skipped the import for a file that had none yet. The `ReferenceError` unmounted the whole React tree.
+    - Fixed the import, and scanned every split module for undeclared components and helpers (none left).
+    - New `ui/ErrorBoundary.jsx` around the Settings content (keyed per section) and around the routed page in `App.jsx`, so one broken section shows a message with "Try again" instead of a white window.
+    - New `settingsSections.test.jsx` renders all 19 sections with empty server replies and fails on any crash. Checked: it fails with the import removed.
+  - **New chats show in the sidebar immediately as "Untitled session".**
+    - The page adds the chat to the list on `session_started` (Learning-Room threads excepted) and re-syncs from the server 1.5 s later.
+    - `Database.list_sessions` titles an unanswered chat `UNTITLED_SESSION` and returns `pending`. The model's auto-title (unchanged, after the first reply) replaces it; with a reply but no title, the first message is used.
+    - The row pulses only while that chat has a turn in flight (`busySessions` from the hook), so a failed turn doesn't pulse forever.
+  - **Wizard follows the server's provider groups** (agreed with the W2 session). W2's catalogue groups are Popular / Subscriptions / Gateways / China / Cloud / Local, plus a top-level `groups` order list. The wizard's hard-coded four groups would have hidden 34 providers.
+    - `providerContract.js` `loadCatalog()` / `groupOrder()` use the server's order and append any group a provider carries that the list missed, so no provider is hidden. The old four groups are now only the fallback.
+    - `ModelWizard.jsx` has icons for Subscriptions, Gateways and China, and a generic icon for unknown groups.
+  - **Tests:** `test_projects.py` (untitled → first message → auto-title), the 19 section renders, a pending-row test, and a server-groups wizard test. Web UI **84 passed**; Python **1,440 passed / 3 skipped**.
+  - **Verified live** (scratch instance): Appearance renders (five swatches, dark toggle, log level). A prompt sent, then "New chat": the first chat was listed at once as a pulsing "Untitled session" and reopened from the sidebar with its message. The dummy model's turn then failed, so it stayed untitled; titling after a real reply is covered by the test.
+  - The real `data/` changed between 09:01 and 09:50 IST: owner use of the app, before this slice. Nothing was written there during this slice's scratch runs.
+  - The W2, W3 and Phase 10 sessions stopped at once on the account's usage limit (resets 12:20 IST); they can be resumed.
 - [ ] **Left for W1 (blocked or deliberately left):**
   - `[!]` OAuth sign-in and an explicit `active_model` need W2's endpoints. The UI already calls them and falls back.
   - `[!]` Persona portraits need W4.
@@ -1283,6 +1332,20 @@ From `STAND_OUT.md`:
 
 ## 10. Change log
 
+- **2026-11-26 (Phase 9 W1, slice 6):**
+  - Fixed the blank Settings → Appearance (a missing import); error boundaries around Settings sections and pages; a render test for every section.
+  - New chats appear in the sidebar at once as "Untitled session" (pulsing while working); the model's title replaces it after the first reply.
+  - The onboarding wizard follows the server's provider-group order (W2's six groups), so no provider is hidden.
+  - Web UI 84 passed; Python 1,440 passed / 3 skipped.
+- **2026-11-26 (Phase 9 W1, slice 5 + sessions):**
+  - The Phase 9 work so far was committed to the new branch `phase9-w1` (34aab7cd, not pushed).
+  - W2 (providers), W3 (Electron app + custom title bar) and a new Phase 10 (memory graph + Memory page) started in their own worktree sessions from that branch.
+  - In this tree:
+    - corner art feathered from the screen edges and blended into the paper; stronger legibility (halo + weight);
+    - translucent band, composer and bubbles; sidebar without hover-expand, with a brand row and the medallion logo; a glowing home hero;
+    - wider Settings; 4px faint scrollbars; Hermes-style click sounds;
+    - sub-agent brief / step trail / transcript; Projects and Learning Room redesigned.
+  - Web UI 63 passed; Python 1,439 passed / 3 skipped.
 - **2026-11-26 (Phase 9 W1, slice 4):**
   - The chat background is painted, crumpled paper built from the owner's Desktop art. It follows the theme, light/dark and the mode. The slice-3 painting is removed.
   - Settings split into 22 modules; Providers + Models → **Model**, Config + Servers → **MCP**; the old links still work.

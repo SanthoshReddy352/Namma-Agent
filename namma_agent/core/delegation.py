@@ -40,6 +40,7 @@ the chat it was started from.
 from __future__ import annotations
 
 import contextvars
+import json
 import threading
 import time
 import uuid
@@ -380,14 +381,39 @@ class DelegationManager:
         except Exception as exc:  # noqa: BLE001
             logger.debug("[delegation] publish failed: %s", exc)
 
+    TRAIL_MAX = 40          # steps kept per run for the UI's live trail
+
+    @staticmethod
+    def _preview(value: Any, cap: int = 160) -> str:
+        """One-line, capped preview of tool arguments/results for the trail."""
+        try:
+            text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            text = str(value)
+        text = " ".join(str(text).split())
+        return text if len(text) <= cap else text[: cap - 1] + "…"
+
     def _child_event(self, run: dict, event: str, payload: dict) -> None:
-        """Fold the child agent's own events into its run (live progress)."""
+        """Fold the child agent's own events into its run (live progress), and
+        keep a short trail of its steps (tool, argument preview, outcome) so the
+        UI can show what each sub-agent is actually doing."""
+        trail = run.setdefault("meta", {}).setdefault("trail", [])
         if event == "tool_started":
             run["current_tool"] = payload.get("tool") or ""
             run["steps"] = int(run.get("steps") or 0) + 1
+            trail.append({"tool": run["current_tool"], "args": self._preview(payload.get("args") or {}),
+                          "status": "running", "at": _now()})
+            del trail[:-self.TRAIL_MAX]
             self._emit(run)
         elif event == "tool_finished":
             run["current_tool"] = ""
+            tool = payload.get("tool") or ""
+            for step in reversed(trail):
+                if step.get("status") == "running" and step.get("tool") == tool:
+                    step["status"] = "ok" if payload.get("ok", True) else "error"
+                    step["result"] = self._preview(payload.get("summary") or "", 200)
+                    break
+            self._persist(run)
             self._emit(run)          # the UI would otherwise show a stale "running X"
 
     def _step_limit(self, spec: dict) -> int:
@@ -434,6 +460,9 @@ class DelegationManager:
             message = f"GOAL: {spec['goal']}"
             if spec.get("context"):
                 message += f"\n\nCONTEXT FROM THE MAIN AGENT:\n{spec['context']}"
+            # The exact brief the sub-agent received, for the UI.
+            run["meta"]["prompt"] = message[:6000]
+            run["meta"]["step_limit"] = self._step_limit(spec)
             result = child.process_turn(
                 message, session_id=run["child_session_id"],
                 should_cancel=lambda: cancel.is_set() or bool(parent_cancel and parent_cancel()),

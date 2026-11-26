@@ -234,3 +234,32 @@ describe("token migration", () => {
     expect(n).toBeLessThanOrEqual(100);     // 843 before Phase 9; the rest are one-off status tints
   });
 });
+
+describe("wizard groups follow the server (W2 catalogue)", () => {
+  it("shows W2's groups in the server's order and never hides a provider", async () => {
+    const { groupOrder } = await import("../providerContract.js");
+    expect(groupOrder([{ group: "Odd" }], ["Popular", "Gateways"])).toEqual(["Popular", "Gateways", "Odd"]);
+    expect(groupOrder([{ group: "Cloud" }], undefined)).toEqual(["Popular", "Aggregators", "Cloud", "Local"]);
+
+    vi.spyOn(globalThis, "fetch").mockImplementation((url) => {
+      if (String(url).endsWith("/api/providers")) {
+        return json({
+          groups: ["Popular", "Subscriptions", "Gateways", "China", "Cloud", "Local"],
+          providers: [
+            { id: "openai", label: "OpenAI", group: "Popular", auth: "api_key" },
+            { id: "copilot", label: "GitHub Copilot", group: "Subscriptions", auth: "oauth" },
+            { id: "groq", label: "Groq", group: "Gateways", auth: "api_key" },
+            { id: "kimi", label: "Kimi", group: "China", auth: "api_key" },
+            { id: "ollama", label: "Ollama", group: "Local", auth: "none" },
+          ],
+        });
+      }
+      return json({});
+    });
+    render(<ModelWizard />);
+    await screen.findByRole("radio", { name: /Kimi/ });
+    const labels = screen.getAllByRole("radiogroup").map((g) => g.getAttribute("aria-label"));
+    expect(labels).toEqual(["Popular providers", "Subscriptions providers", "Gateways providers", "China providers", "Local providers"]);
+    for (const name of [/OpenAI/, /Copilot/, /Groq/, /Kimi/, /Ollama/]) expect(screen.getByRole("radio", { name })).toBeTruthy();
+  });
+});

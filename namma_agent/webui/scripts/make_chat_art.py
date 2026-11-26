@@ -10,7 +10,7 @@ colours it from theme tokens (CSS mask + background-color, or a blend mode):
                 owner's ink splatter (14.jpg)
   art-drip.webp the ink-dripping hand (19.png)
   art-masks.webp the theatre masks (10.png)
-  art-hands.webp the reaching hands (7.png)
+  art-rise.webp the hand rising from below (20.png)
 
 Masks are saved as white WebP with the paint in the alpha channel, so a plain
 CSS `mask` (alpha mode) works in every engine; the textures are greyscale.
@@ -228,8 +228,14 @@ def main(src: Path, out: Path) -> None:
     save_mask(np.clip(b * fall, 0, 1), out / "wash-b.webp")
 
     # Line art — each on its own canvas so CSS can place, tint and animate it.
-    for name, file, size in (("art-drip", "19.png", 900), ("art-masks", "10.png", 760), ("art-hands", "7.png", 1100)):
+    # 19.png: the hand hangs in from the top edge; 20.png: the hand rises from
+    # the bottom edge; 10.png: the masks. (7.png's two hands were dropped: both
+    # arms end mid-image, so they could never enter from a screen edge.)
+    for name, file, size in (("art-drip", "19.png", 900), ("art-masks", "10.png", 760), ("art-rise", "20.png", 900)):
         m = load_mask(src / file)
+        # Crop to the drawing so CSS can sit it flush against a screen edge.
+        ys, xs = np.nonzero(m > 0.05)
+        m = m[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
         img = Image.fromarray((np.clip(m * 1.15, 0, 1) * 255).astype(np.uint8), "L")
         img.thumbnail((size, size), Image.LANCZOS)
         img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))

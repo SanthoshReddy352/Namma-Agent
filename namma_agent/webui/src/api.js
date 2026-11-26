@@ -63,6 +63,9 @@ export const fetchConfiguredProviders = () => j("/api/configured_providers");
 export const saveConfiguredProviders = (providers) =>
   j("/api/configured_providers", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ providers }) });
 export const listSessions = () => j("/api/sessions");
+// Sidebar label for a chat that has started but has no reply/title yet
+// (mirrors core/memory.py UNTITLED_SESSION).
+export const UNTITLED_SESSION = "Untitled session";
 // Cross-chat keyword search (the sidebar search box): [{session_id, title, snippet, ...}]
 export const searchChats = (q) => j(`/api/search?q=${encodeURIComponent(q)}`);
 export const loadSession = (id) => j(`/api/sessions/${id}`);
@@ -605,6 +608,21 @@ export function useNammaAgent() {
           });
           setCurrentSid((c) => (c === ref ? sid : c));
         }
+        // List the chat in the sidebar right away as "Untitled session", so you
+        // can leave it working and come back to it; the model names it once the
+        // first reply lands (session_titled). Learning-Room threads aren't listed.
+        if (sid) {
+          const ctx = (dataRef.current[sid] || {}).context || {};
+          if (!ctx.topic) {
+            setSessions((list) => (list.some((x) => x.id === sid) ? list : [
+              { id: sid, title: UNTITLED_SESSION, pending: true, project_id: ctx.project?.id || null,
+                created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+              ...list,
+            ]));
+            // Then take the server's view once the user message is stored.
+            setTimeout(() => refreshSessions(), 1500);
+          }
+        }
         break;
       }
       case "token":
@@ -1100,8 +1118,10 @@ export function useNammaAgent() {
   }, [patch]);
 
   const cur = data[currentSid] || EMPTY;
+  // Chats with a turn in flight right now (the sidebar's "working" pulse).
+  const busySessions = Object.keys(data).filter((k) => ["thinking", "queued", "stopping"].includes(data[k]?.status));
   return {
-    connected, messages: cur.messages, timeline: cur.timeline, status: cur.status,
+    connected, messages: cur.messages, timeline: cur.timeline, status: cur.status, busySessions,
     todos: cur.todos || [],
     runs: cur.runs || [],
     chatContext: cur.context || null, suggestion: cur.suggestion || null, learningSignal,

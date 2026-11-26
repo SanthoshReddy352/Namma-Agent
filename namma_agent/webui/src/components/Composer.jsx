@@ -150,7 +150,7 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
   }
 
   return (
-    <div className="relative rounded-2xl border border-border bg-surface-raised shadow-soft">
+    <div className="relative rounded-2xl border border-border/80 bg-surface-raised/80 backdrop-blur-md shadow-soft">
       {dictErr && (
         <div role="alert" className="absolute -top-8 left-2 right-2 truncate text-sm text-danger">{dictErr}</div>
       )}

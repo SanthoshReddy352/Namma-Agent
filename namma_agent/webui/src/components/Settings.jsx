@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Dialog, IconButton, Skeleton } from "./ui/index.js";
 import SaveStatus from "./ui/SaveStatus.jsx";
+import ErrorBoundary from "./ui/ErrorBoundary.jsx";
 import { useAutosave } from "../useAutosave.js";
 import { DEFAULT_SETTINGS_TAB, sectionSlug, tabForSlug } from "../settingsSections.js";
 import { clearMemory, fetchProviders, fetchSettings, saveSettings } from "../api.js";
@@ -93,7 +94,7 @@ export default function Settings({ onClose, section, onSectionChange, theme, onT
   async function wipe(scope) { await clearMemory(scope); setCleared(scope); onMemoryCleared?.(); setTimeout(() => setCleared(""), 2500); }
 
   return (
-    <Dialog onClose={() => { auto.flush(); onClose(); }} size="lg" labelledBy="settings-title"
+    <Dialog onClose={() => { auto.flush(); onClose(); }} size="xl" labelledBy="settings-title"
             className="h-[86vh] flex flex-col overflow-hidden">
         <div className="flex items-center justify-between px-5 py-3 border-b border-border">
           <h2 id="settings-title" className="text-md font-semibold">Settings <span className="sr-only">— {tab}</span></h2>
@@ -105,7 +106,7 @@ export default function Settings({ onClose, section, onSectionChange, theme, onT
 
         <div className="flex-1 flex min-h-0">
           {/* Left tab nav — grouped, icon + label (Hermes-style) */}
-          <nav aria-label="Settings sections" className="w-48 shrink-0 border-r border-border p-2 overflow-y-auto">
+          <nav aria-label="Settings sections" className="w-56 shrink-0 border-r border-border p-2.5 overflow-y-auto">
             <input type="search" value={query} onChange={(e) => setQuery(e.target.value)}
                    aria-label="Search settings" placeholder="Search settings"
                    onKeyDown={(e) => { if (e.key === "Enter" && groups[0]?.tabs[0]) setTab(groups[0].tabs[0]); }}
@@ -128,9 +129,9 @@ export default function Settings({ onClose, section, onSectionChange, theme, onT
           </nav>
 
           {/* Right content */}
-          <div className="flex-1 overflow-y-auto p-5 text-sm space-y-7">
+          <div className="flex-1 overflow-y-auto px-8 py-6 text-sm space-y-7">
             {!data ? <Skeleton lines={6} className="h-5 w-full" /> : (
-              <>
+              <ErrorBoundary name={`settings/${tab}`} resetKey={tab} title={`The ${tab} section couldn't be shown.`}>
                 {tab === "Model" && <ModelTab catalog={providers} onSaved={onModelsChanged} />}
 
                 {tab === "Behavior" && <BehaviorTab form={form} />}
@@ -165,7 +166,7 @@ export default function Settings({ onClose, section, onSectionChange, theme, onT
                 {tab === "Status" && <StatusTab />}
 
                 {tab === "About" && <AboutTab />}
-              </>
+              </ErrorBoundary>
             )}
           </div>
         </div>

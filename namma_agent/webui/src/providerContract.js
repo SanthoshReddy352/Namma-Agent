@@ -15,7 +15,19 @@ import { fetchConfiguredModels, listProviderModels, onboardProvider, saveConfigu
 
 const LOCAL = new Set(["ollama", "lmstudio"]);
 const AGGREGATORS = new Set(["openrouter", "together", "opencode"]);
+// Fallback group order for servers without W2's catalogue. W2's server sends its
+// own `groups` order (Popular / Subscriptions / Gateways / China / Cloud / Local);
+// the wizard follows that, and shows any group it doesn't know at the end.
 export const PROVIDER_GROUPS = ["Popular", "Aggregators", "Cloud", "Local"];
+
+// The group order to show: the server's list, then any group a provider uses
+// that the list missed, so no provider is ever hidden.
+export function groupOrder(providers, serverGroups) {
+  const base = Array.isArray(serverGroups) && serverGroups.length ? serverGroups : PROVIDER_GROUPS;
+  const out = [...base];
+  for (const p of providers || []) if (p.group && !out.includes(p.group)) out.push(p.group);
+  return out;
+}
 const POPULAR = ["openai", "anthropic", "google", "openrouter"];
 
 export function normaliseProvider(p) {
@@ -49,8 +61,14 @@ async function json(url, opts) {
 }
 
 export async function loadProviders() {
+  return (await loadCatalog()).providers;
+}
+
+// Providers plus the group order the server wants them shown in.
+export async function loadCatalog() {
   const r = await json("/api/providers");
-  return (r?.providers || []).map(normaliseProvider);
+  const providers = (r?.providers || []).map(normaliseProvider);
+  return { providers, groups: groupOrder(providers, r?.groups) };
 }
 
 // OpenRouter PKCE (W2). Returns the URL to open, or null when the server can't.

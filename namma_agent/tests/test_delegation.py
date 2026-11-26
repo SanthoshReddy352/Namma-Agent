@@ -417,3 +417,30 @@ def test_standalone_manager_gives_orchestrators_a_delegate_tool():
 def test_type_errors_in_specs(tmp_path, bad):
     reg, *_ = _wire(_answer, tmp_path=tmp_path)
     assert not reg.execute("delegate_task", bad).ok
+
+
+def test_runs_record_the_brief_and_a_step_trail_for_the_ui(tmp_path):
+    """Phase 9: the UI shows each sub-agent's exact brief and what it did."""
+    def script(goal, messages, tools):
+        if not any(m.get("role") == "tool" for m in messages):
+            return LLMResponse(content="", tool_calls=[ToolCall(id="1", name="web_search",
+                                                                args={"query": "orbital speed of ISS"})])
+        return LLMResponse(content="found")
+
+    reg, _, _, _, events, _ = _wire(script, tmp_path=tmp_path)
+    reg.execute("delegate_task", {"goal": "find the ISS speed", "context": "user is a student"})
+    final = [p["run"] for e, p in events if e == "subagent"][-1]
+    meta = final["meta"]
+    assert meta["prompt"].startswith("GOAL: find the ISS speed")
+    assert "CONTEXT FROM THE MAIN AGENT:\nuser is a student" in meta["prompt"]
+    assert meta["step_limit"] > 0
+    [step] = meta["trail"]
+    assert step["tool"] == "web_search" and step["status"] in ("ok", "error")
+    assert "orbital speed of ISS" in step["args"]
+
+
+def test_trail_previews_are_one_line_and_capped():
+    from namma_agent.core.delegation import DelegationManager
+
+    p = DelegationManager._preview({"text": "a\n\nb  " + "x" * 400})
+    assert "\n" not in p and len(p) <= 160 and p.endswith("…")

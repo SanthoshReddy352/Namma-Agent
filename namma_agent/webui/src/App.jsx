@@ -10,6 +10,8 @@ import NotifyToasts from "./components/NotifyToasts.jsx";
 import { installClipboardShortcuts } from "./clipboard.js";
 import { setNotifyAppName } from "./notify.js";
 import ChatView from "./views/ChatView.jsx";
+import ChatBackdrop from "./components/ChatBackdrop.jsx";
+import ErrorBoundary from "./components/ui/ErrorBoundary.jsx";
 import { PanelTitlebar, TitlebarClusters } from "./components/shell/TitleBar.jsx";
 import StatusBar from "./components/shell/StatusBar.jsx";
 import RightPane from "./components/shell/RightPane.jsx";
@@ -220,6 +222,7 @@ function Shell() {
     openChat: (id) => { openSession(id); navigate("/"); },
     openSettings, rightPane, titleSlot,
   };
+  const onChatRoute = location.pathname === "/" || location.pathname.startsWith("/settings");
   const currentModelLabel = (namma_agent.configuredModels || []).find((m) => m.id === namma_agent.currentModel)?.label
     || config?.model || "";
 
@@ -230,7 +233,7 @@ function Shell() {
                         rightPaneOpen={rightPane} onToggleRightPane={() => setRightPane(!rightPane)} />
       <div className="flex-1 flex min-h-0">
       <Sidebar
-        sessions={sessions} projects={projects}
+        sessions={sessions} projects={projects} busySessions={namma_agent.busySessions}
         onNew={() => { newChat(); navigate("/"); }}
         onOpen={(id) => { openSession(id); navigate("/"); }}
         onDelete={removeSession}
@@ -242,7 +245,14 @@ function Shell() {
         name={assistantName}
       />
 
-      <div className="flex-1 flex flex-col min-w-0">
+      <div className="relative isolate flex-1 flex flex-col min-w-0">
+        {/* The painted background runs under the titlebar band too, so the band,
+            transcript, composer and page cards all sit on it. Pages get a calmer,
+            evenly veiled variant. */}
+        <div className="absolute inset-0 -z-10" aria-hidden="true">
+          <ChatBackdrop mode={namma_agent.mode} variant={onChatRoute ? "chat" : "page"}
+                        busy={onChatRoute && ["thinking", "queued", "stopping"].includes(namma_agent.status)} />
+        </div>
         {/* The main panel's header in the titlebar band. Chat views portal their
             title/breadcrumbs/actions into it; other pages show their name. */}
         <PanelTitlebar reserveRight={!rightPane} slotRef={setTitleSlot}>
@@ -251,7 +261,9 @@ function Shell() {
           )}
         </PanelTitlebar>
         <UpdateBanner />
-        <Outlet context={ctx} />
+        <ErrorBoundary name="page" resetKey={location.pathname} title="This page couldn't be shown.">
+          <Outlet context={ctx} />
+        </ErrorBoundary>
       </div>
       {rightPane && <RightPane runs={namma_agent.runs} todos={namma_agent.todos} messages={namma_agent.messages} onClose={() => setRightPane(false)} />}
       </div>

@@ -141,6 +141,22 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
 
 /* ── Brand art (Phase 9) ───────────────────────────────────────────────────
    Single-colour masks tinted by tokens, so they follow light/dark themes. */
+/* Small marks use a bolder line mask so the engraving survives. */
+.brand-logo-bold { -webkit-mask-image: url(/brand/logo-mask-bold.png) !important; mask-image: url(/brand/logo-mask-bold.png) !important; }
+/* The highlighted mark: a coin in the accent wash with a soft glow; the
+   statue's silhouette is filled so the engraving never reads see-through. */
+.brand-medallion {
+  background: radial-gradient(circle at 34% 28%, rgb(var(--surface-raised)) 0%, rgb(var(--accent-wash)) 58%, rgb(var(--accent) / 0.22) 100%);
+  box-shadow: 0 0 0 1px rgb(var(--accent) / 0.35), 0 0 0 5px rgb(var(--accent) / 0.07), 0 10px 30px -8px rgb(var(--accent) / 0.5);
+  overflow: hidden;
+}
+.brand-medallion-fill, .brand-medallion-ink {
+  -webkit-mask-position: 50% 12%; mask-position: 50% 12%;
+  -webkit-mask-size: 86% auto; mask-size: 86% auto;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.brand-medallion-fill { background-color: rgb(var(--surface-raised)); -webkit-mask-image: url(/brand/logo-fill.png); mask-image: url(/brand/logo-fill.png); }
+.brand-medallion-ink { background-color: rgb(var(--logo-ink)); -webkit-mask-image: url(/brand/logo-mask.png); mask-image: url(/brand/logo-mask.png); }
 .brand-logo {
   background-color: rgb(var(--logo-ink));
   -webkit-mask: url(/brand/logo-mask.png) center / contain no-repeat;
@@ -186,21 +202,49 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
 @keyframes chat-bg-drift { from { transform: translate3d(-0.6%, -0.4%, 0) scale(1.01); } to { transform: translate3d(0.6%, 0.5%, 0) scale(1.03); } }
 @keyframes chat-bg-bloom { from { opacity: 0; transform: scale(0.97); filter: blur(6px); } to { opacity: 1; transform: scale(1.01); filter: blur(0); } }
 
-/* The owner's line art, inked in the theme's ink, pinned to the corners. */
+/* The owner's line art, inked in the theme's ink and printed into the paper
+   (multiply on light themes, screen on dark). Each piece is cropped to its
+   drawing and sits flush with a screen edge; a second, intersected mask
+   feathers it out of that edge, so it reads as reaching in from the corner
+   rather than starting in empty space. */
+.chat-bg { --art-blend: multiply; }
+.dark .chat-bg { --art-blend: screen; }
 .chat-bg-art {
   position: absolute;
   background-color: rgb(var(--bg-ink) / var(--art-alpha));
-  -webkit-mask: var(--art) center / contain no-repeat;
-          mask: var(--art) center / contain no-repeat;
+  mix-blend-mode: var(--art-blend);
+  -webkit-mask: var(--art) center / 100% 100% no-repeat, var(--feather);
+  -webkit-mask-composite: source-in;
+          mask: var(--art) center / 100% 100% no-repeat, var(--feather);
+          mask-composite: intersect;
 }
-.chat-bg-art-drip  { --art: url(/brand/bg/art-drip.webp);  top: -2%; right: 3%; width: clamp(160px, 20vw, 320px); aspect-ratio: 1; transform-origin: 70% 0; }
-.chat-bg-art-masks { --art: url(/brand/bg/art-masks.webp); left: 1.5%; bottom: 4%; width: clamp(140px, 15vw, 260px); aspect-ratio: 1; transform: rotate(-6deg); }
-.chat-bg-art-hands { --art: url(/brand/bg/art-hands.webp); right: 2%; bottom: 1%; width: clamp(220px, 26vw, 460px); aspect-ratio: 750 / 363; }
+/* Top-right: the inked hand hangs in from the top edge; its drips fade out. */
+.chat-bg-art-drip {
+  --art: url(/brand/bg/art-drip.webp);
+  --feather: linear-gradient(to bottom, #000 0%, #000 55%, transparent 96%);
+  top: 0; right: clamp(24px, 7%, 140px);
+  height: clamp(220px, 48%, 460px); aspect-ratio: 350 / 640;
+  transform-origin: 50% 0;
+}
+/* Bottom-right: a hand rises from the bottom edge; the wrist melts into it. */
+.chat-bg-art-rise {
+  --art: url(/brand/bg/art-rise.webp);
+  --feather: linear-gradient(to top, transparent 0%, #000 26%, #000 100%);
+  bottom: 0; right: clamp(16px, 4%, 96px);
+  height: clamp(240px, 54%, 520px); aspect-ratio: 398 / 900;
+}
+/* Bottom-left: the masks, feathered from the corner outwards. */
+.chat-bg-art-masks {
+  --art: url(/brand/bg/art-masks.webp);
+  --feather: radial-gradient(130% 120% at 0% 100%, #000 55%, transparent 100%);
+  left: clamp(8px, 2%, 40px); bottom: clamp(8px, 3%, 40px);
+  height: clamp(150px, 30%, 300px); aspect-ratio: 515 / 731; transform: rotate(-6deg);
+}
 /* While a turn runs, the ink keeps flowing from the hand. */
 .chat-bg[data-busy] .chat-bg-art-drip { animation: chat-bg-ink 2.6s ease-in-out infinite; }
 @keyframes chat-bg-ink { 50% { background-color: rgb(var(--paint-b) / calc(var(--art-alpha) + 0.25)); transform: rotate(-1.2deg); } }
 /* Narrow chats: the art would sit under the text; keep only the paint. */
-@container (max-width: 760px) { .chat-bg-art-masks, .chat-bg-art-hands { display: none; } }
+@container (max-width: 760px) { .chat-bg-art-masks, .chat-bg-art-rise { display: none; } }
 
 .chat-bg-paper {
   background: url(/brand/bg/paper-shade.webp) center / cover no-repeat;
@@ -209,8 +253,12 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
 .dark .chat-bg-paper { background-image: url(/brand/bg/paper.webp); }
 
 /* The reading column stays calm: the theme's background, fading out sideways. */
-.chat-bg { --chat-veil: var(--bg); --chat-veil-alpha: 0.5; }
-.dark .chat-bg { --chat-veil-alpha: 0.42; }
+.chat-bg { --chat-veil: var(--bg); --chat-veil-alpha: 0.66; }
+.dark .chat-bg { --chat-veil-alpha: 0.6; }
+/* Gallery pages (Projects, Learning, Memory): wide grids, so an even veil
+   instead of a reading column; cards are translucent with their own blur. */
+.chat-bg[data-variant="page"] .chat-bg-veil { background: rgb(var(--chat-veil) / 0.42); }
+.dark .chat-bg[data-variant="page"] .chat-bg-veil { background: rgb(var(--chat-veil) / 0.4); }
 .chat-bg-veil {
   background: linear-gradient(90deg,
     rgb(var(--chat-veil) / 0) 0,
@@ -220,6 +268,16 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
     rgb(var(--chat-veil) / 0) calc(50% + 38rem),
     rgb(var(--chat-veil) / 0) 100%);
 }
+
+/* Home hero: a slow, soft glow behind the medallion. */
+.hero-halo { background: radial-gradient(circle, rgb(var(--accent) / 0.22) 0%, rgb(var(--accent) / 0.08) 45%, transparent 70%); animation: hero-breathe 5s ease-in-out infinite; }
+@keyframes hero-breathe { 50% { transform: scale(1.08); opacity: 0.75; } }
+
+/* Text over the painted background: a soft halo in the background colour
+   lifts every glyph off the paper, and body text is a touch heavier. */
+.chat-legible { text-shadow: 0 0 1px rgb(var(--bg) / 0.7), 0 0 10px rgb(var(--bg) / 0.9), 0 0 2px rgb(var(--bg) / 0.8); font-weight: 450; }
+.chat-legible :is(strong, b, h1, h2, h3, h4, th) { font-weight: 650; }
+.chat-legible :is(pre, code, table, .no-halo, button, input, textarea) { text-shadow: none; }
 
 /* Composer: the placeholder stays on one line (ellipsis), never a scrollbar. */
 .composer-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -238,19 +296,14 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
 }
 
 /* Scrollbars — thin, sleek, site-wide. Subtle by default; darken on hover. */
-* { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.18) transparent; }
-.dark * { scrollbar-color: rgba(255,255,255,0.16) transparent; }
-::-webkit-scrollbar { width: 7px; height: 7px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: rgba(0,0,0,0.16); border-radius: 999px;
-  border: 1px solid transparent; background-clip: padding-box;
-  transition: background 0.2s;
-}
-::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.30); }
-.dark ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); }
-.dark ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
-::-webkit-scrollbar-corner { background: transparent; }
+/* Ultra-thin, faint scrollbars app-wide: a 3px hairline in the text colour at
+   low opacity that firms up a little on hover. No track, no arrows. */
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--fg) / 0.12) transparent; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { background: rgb(var(--fg) / 0.12); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--fg) / 0.26); }
 
 /* ── Markdown rendering (clean formatting, no raw * or ###) ─────────────── */
 .md { font-size: 15px; /* = text-prose */ line-height: 1.7; word-wrap: break-word; }

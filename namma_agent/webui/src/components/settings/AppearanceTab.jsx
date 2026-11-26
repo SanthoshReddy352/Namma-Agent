@@ -1,4 +1,5 @@
 import { IconCheck } from "@tabler/icons-react";
+import { Section, Field, Select, Toggle } from "./shared.jsx";
 // Settings → AppearanceTab (split out of Settings.jsx, Phase 9 W1).
 
 
