@@ -381,3 +381,15 @@ def test_parent_watchdog_needs_a_pid(monkeypatch):
     monkeypatch.delenv("NAMMA_DESKTOP_PARENT_PID", raising=False)
     assert desktop.start_parent_watchdog(lambda: None) is False
     assert desktop.start_parent_watchdog(lambda: None, pid=os.getpid()) is False
+
+
+def test_whatsapp_qr_session_lives_in_the_desktop_data_dir(monkeypatch, tmp_path):
+    from namma_agent.comms import whatsapp_qr
+    monkeypatch.setenv("NAMMA_WHATSAPP_SESSION", str(tmp_path / "pinned.sqlite3"))
+    assert whatsapp_qr.session_db_path() == tmp_path / "pinned.sqlite3"   # the override wins
+    monkeypatch.delenv("NAMMA_WHATSAPP_SESSION")
+    monkeypatch.setenv("NAMMA_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("NAMMA_DESKTOP", "1")
+    assert whatsapp_qr.session_db_path() == tmp_path / "data" / "whatsapp_qr.sqlite3"
+    monkeypatch.delenv("NAMMA_DESKTOP")
+    assert whatsapp_qr.session_db_path().parent.name == ".namma_agent"

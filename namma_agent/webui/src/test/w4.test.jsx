@@ -65,3 +65,13 @@ describe("Roman personas", () => {
     await waitFor(() => expect(screen.getByRole("radio", { name: "Persona: Aria" }).textContent).toBe("AR"));
   });
 });
+
+describe("side panel", () => {
+  it("keeps its tabs out of the titlebar band, so the window controls never clip them", async () => {
+    const { default: RightPane } = await import("../components/shell/RightPane.jsx");
+    render(<RightPane runs={[]} todos={[]} messages={[]} />);
+    const tabs = screen.getByRole("tablist", { name: "Side panel" });
+    expect(tabs.closest("[data-chrome]")).toBeNull();
+    expect(screen.getAllByRole("tab").map((t) => t.textContent)).toEqual(["Runs", "Plan", "Files", "Preview"]);
+  });
+});

@@ -211,9 +211,11 @@ function handleDeepLink(raw) {
 
 // ── tray ────────────────────────────────────────────────────────────────────
 
+// The app icon's fine engraving is a grey smudge at 16 px, so the tray uses
+// its own solid coin (scripts/make_tray_icons.py). On Windows the multi-size
+// .ico lets the shell pick the frame for the display's scale.
 function trayIcon() {
-  const img = nativeImage.createFromPath(path.join(RESOURCES, process.platform === "win32" ? "icon.ico" : "tray.png"));
-  return process.platform === "win32" ? img.resize({ width: 16, height: 16 }) : img;
+  return nativeImage.createFromPath(path.join(RESOURCES, process.platform === "win32" ? "tray.ico" : "tray.png"));
 }
 
 function buildTrayMenu() {

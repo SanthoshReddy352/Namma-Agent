@@ -15,7 +15,8 @@ Env-gated:
                         randoms can't drive your agent. Leave empty to accept DMs
                         from anyone (personal boxes only).
 
-The linked session persists in ``~/.namma_agent/whatsapp_qr.sqlite3`` — scan once,
+The linked session persists in ``~/.namma_agent/whatsapp_qr.sqlite3`` (the desktop
+app's data folder under the Electron shell; see :func:`session_db_path`) — scan once,
 then it reconnects on its own. ``neonize`` is an optional dependency: when it isn't
 installed the channel simply reports unavailable (``pip install neonize``).
 """
@@ -33,10 +34,22 @@ from namma_agent.comms.inbound import InboundBridge
 from namma_agent.core.logger import logger
 
 _MAX_CHARS = 4000  # under WhatsApp's ~4096 text body limit
-# NAMMA_WHATSAPP_SESSION overrides the location (the test suite points it at a
-# temp file so runs never touch the developer's linked session).
-_SESSION_DB = Path(os.environ.get("NAMMA_WHATSAPP_SESSION")
-                   or "~/.namma_agent/whatsapp_qr.sqlite3").expanduser()
+def session_db_path() -> Path:
+    """Where the linked session is stored.
+
+    ``NAMMA_WHATSAPP_SESSION`` wins (the test suite points it at a temp file so
+    runs never touch the developer's linked session). Under the desktop app it
+    lives in the per-user data folder with the rest of the app's state, so
+    "Uninstall everything" removes it too. Otherwise ``~/.namma_agent``.
+    """
+    override = os.environ.get("NAMMA_WHATSAPP_SESSION", "").strip()
+    if override:
+        return Path(override).expanduser()
+    from namma_agent.core import desktop
+    if desktop.enabled():
+        from namma_agent.config import data_dir
+        return Path(data_dir()) / "whatsapp_qr.sqlite3"
+    return Path("~/.namma_agent/whatsapp_qr.sqlite3").expanduser()
 
 
 def whatsapp_mode() -> str:
@@ -87,7 +100,7 @@ class WhatsAppQRChannel:
         # environment *live* on every use, so changing NAMMA_WHATSAPP_TO in Settings
         # takes effect without a restart (and a mistyped number is corrected at once).
         self._to_override = to.lstrip("+") if to is not None else None
-        self._db_path = db_path or _SESSION_DB
+        self._db_path = db_path or session_db_path()
         self._client = None
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()

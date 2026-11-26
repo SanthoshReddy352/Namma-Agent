@@ -34,16 +34,19 @@ export default function RightPane({ runs = [], todos = [], messages = [], onClos
     // chat as a drawer instead, so it never squeezes the conversation.
     <aside aria-label="Side panel"
            className="w-80 max-w-[85vw] shrink-0 flex flex-col border-l border-border bg-surface max-lg:fixed max-lg:top-0 max-lg:bottom-7 max-lg:right-0 max-lg:z-30 max-lg:shadow-overlay">
-      <div data-chrome className={`flex items-center gap-1 h-[var(--titlebar-height)] pl-2 pr-[var(--titlebar-reserve-right)] border-b border-border ${isDesktop() ? "app-drag" : ""}`}>
-        <div role="tablist" aria-label="Side panel" className="flex items-center gap-0.5 min-w-0 overflow-x-auto">
-          {RIGHT_PANE_TABS.map((t) => (
-            <button key={t.id} role="tab" type="button" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
-                    className={`h-6 px-2 rounded-sm text-sm shrink-0 ${tab === t.id ? "bg-accent-wash text-fg font-medium" : "text-fg-muted hover:text-fg"}`}>
-              {t.label}
-              {counts[t.id] > 0 && <span className="ml-1 text-xs text-fg-subtle">{counts[t.id]}</span>}
-            </button>
-          ))}
-        </div>
+      {/* The band row sits under the fixed tools (Settings, panel toggle) and,
+          on desktop, the window controls: together they take most of a 320px
+          panel, so the tabs get their own row below it and never clip. */}
+      <div data-chrome className={`h-[var(--titlebar-height)] shrink-0 ${isDesktop() ? "app-drag" : ""}`} />
+      <div role="tablist" aria-label="Side panel"
+           className="flex items-center gap-0.5 px-2 h-9 shrink-0 border-b border-border overflow-x-auto">
+        {RIGHT_PANE_TABS.map((t) => (
+          <button key={t.id} role="tab" type="button" aria-selected={tab === t.id} onClick={() => setTab(t.id)}
+                  className={`h-7 px-2.5 rounded-md text-sm shrink-0 ${tab === t.id ? "bg-accent-wash text-fg font-medium" : "text-fg-muted hover:text-fg hover:bg-surface-hover"}`}>
+            {t.label}
+            {counts[t.id] > 0 && <span className="ml-1 text-xs text-fg-subtle">{counts[t.id]}</span>}
+          </button>
+        ))}
       </div>
       <div role="tabpanel" className="flex-1 min-h-0 overflow-y-auto p-3">
         {tab === "runs" && (runs.length

@@ -75,8 +75,12 @@ test("locate: dev runs find the nearest .venv walking up", () => {
 });
 
 test("pickPort prefers the last port, then the stable one, skipping busy ports", async () => {
+  // If something (a running dev app) already holds the stable port, it is the blocker.
   const blocker = net.createServer();
-  await new Promise((r) => blocker.listen(PREFERRED_PORT, "127.0.0.1", r)).catch(() => {});
+  const owned = await new Promise((r) => {
+    blocker.once("error", () => r(false));
+    blocker.listen(PREFERRED_PORT, "127.0.0.1", () => r(true));
+  });
   try {
     const p = await pickPort(null);
     assert.notEqual(p, PREFERRED_PORT);
@@ -84,6 +88,20 @@ test("pickPort prefers the last port, then the stable one, skipping busy ports",
     const again = await pickPort(p);
     assert.equal(again, p);
   } finally {
-    await new Promise((r) => blocker.close(r));
+    if (owned) await new Promise((r) => blocker.close(r));
+  }
+});
+
+test("every icon main.js loads ships in resources/ and in the packaged files", () => {
+  const fs = require("fs");
+  const dir = path.join(__dirname, "..");
+  const main = fs.readFileSync(path.join(dir, "src", "main.js"), "utf8");
+  const builder = fs.readFileSync(path.join(dir, "electron-builder.yml"), "utf8");
+  const names = new Set([...main.matchAll(/"((?:icon|tray)[^"]*\.(?:ico|png))"/g)].map((m) => m[1]));
+  assert.ok(names.has("tray.ico"), "Windows tray uses its own high-contrast icon");
+  for (const n of names) {
+    assert.ok(fs.existsSync(path.join(dir, "resources", n)), `resources/${n} exists`);
+    const listed = builder.includes(`resources/${n}`) || (n.startsWith("tray") && n.endsWith(".png") && builder.includes("resources/tray*.png"));
+    assert.ok(listed, `resources/${n} is packaged`);
   }
 });

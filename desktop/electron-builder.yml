@@ -20,6 +20,7 @@ files:
   - resources/icon.png
   - resources/icon.ico
   - resources/tray*.png
+  - resources/tray.ico
   - package.json
   - "!**/*.map"
 
@@ -32,6 +33,18 @@ extraResources:
     to: backend
   - from: stage/python
     to: python
+
+# Release hardening (Electron fuses, flipped in the packaged binary only; dev
+# runs from node_modules keep --inspect). Nothing here uses ELECTRON_RUN_AS_NODE
+# or NODE_OPTIONS, and the app only ever loads from its own app.asar.
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  enableCookieEncryption: true
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
+  grantFileProtocolExtraPrivileges: false
 
 protocols:
   - name: Namma Agent
