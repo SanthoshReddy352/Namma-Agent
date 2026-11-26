@@ -3,7 +3,6 @@ import { createPortal } from "react-dom";
 import { useNavigate, useOutletContext } from "react-router-dom";
 import { clearMemory, downloadChat, learningModuleSession, listSkills, switchLearningModel, switchProjectModel } from "../api.js";
 import Logo from "../components/Logo.jsx";
-import Laurel from "../components/Laurel.jsx";
 import ModelPicker from "../components/ui/ModelPicker.jsx";
 import Message, { MessageActionsContext } from "../components/Message.jsx";
 import Timeline from "../components/Timeline.jsx";
@@ -208,11 +207,11 @@ export default function ChatView() {
           <div className="relative flex-1 grid place-items-center px-4">
             <div className="w-full max-w-2xl -mt-10">
               <div className="chat-legible text-center mb-7">
-                {/* The highlighted mark: a glowing medallion (with Imperium's laurel). */}
+                {/* The highlighted mark: a solid coin (opaque face, bold engraving)
+                    so it reads cleanly over the painted background in every theme. */}
                 <div className="relative mx-auto mb-5 h-[88px] w-[88px]">
                   <span aria-hidden="true" className="hero-halo absolute inset-[-28px] rounded-full" />
-                  <Laurel size={164} className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2" />
-                  <Logo size={88} variant="medallion" className="relative" />
+                  <Logo size={88} variant="medallion" solid className="relative" />
                 </div>
                 <h1 className="font-serif text-xl font-semibold tracking-tight text-fg">Hey, I'm {assistantName}.</h1>
                 <p className="mt-1.5 text-base text-fg-muted">

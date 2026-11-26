@@ -12,6 +12,8 @@
 // client-only (like the theme) and live in localStorage — there's no server side
 // to this feature.
 
+import { triggerHaptic, warmAudio } from "./haptics.js";
+
 const LS_ENABLED = "namma-sound-enabled";
 const LS_PRESET = "namma-sound-preset";
 const LS_VOLUME = "namma-sound-volume";
@@ -219,13 +221,31 @@ export function clickTarget(el) {
   return hit;
 }
 
+// Which of Hermes Agent's haptic intents a control gets (see haptics.js): the
+// same vocabulary Hermes uses on its buttons, menus, toggles and dialogs.
+export function clickIntent(el) {
+  if (!el) return "selection";
+  const label = (el.getAttribute("aria-label") || el.getAttribute("title") || "").toLowerCase();
+  const role = el.getAttribute("role") || "";
+  const type = (el.getAttribute("type") || "").toLowerCase();
+  if (type === "submit" || /^(send|submit)\b/.test(label)) return "submit";
+  if (role === "switch" || role === "checkbox" || role === "radio" || type === "checkbox" || type === "radio") return "crisp";
+  if (/^(close|dismiss|cancel)\b/.test(label)) return "close";
+  if (el.getAttribute("aria-haspopup") || el.getAttribute("aria-expanded") === "false") return "open";
+  return "selection";
+}
+
 let _clicksInstalled = false;
 export function installClickSounds(doc = typeof document !== "undefined" ? document : null) {
   if (!doc || _clicksInstalled) return () => {};
   _clicksInstalled = true;
+  warmAudio();
   const onDown = (e) => {
     if (e.button !== undefined && e.button !== 0) return;
-    if (clickTarget(e.target)) playSound("click");
+    const hit = clickTarget(e.target);
+    if (!hit || !soundsEnabled() || !soundEventEnabled("click")) return;
+    // Hermes Agent's click: web-haptics' audible pattern for this intent.
+    triggerHaptic(clickIntent(hit));
   };
   doc.addEventListener("pointerdown", onDown, { capture: true, passive: true });
   return () => { doc.removeEventListener("pointerdown", onDown, { capture: true }); _clicksInstalled = false; };

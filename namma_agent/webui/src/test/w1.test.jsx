@@ -10,7 +10,6 @@ import RightPane, { RIGHT_PANE_TABS } from "../components/shell/RightPane.jsx";
 import ProfileRail, { monogram, personaTone } from "../components/shell/ProfileRail.jsx";
 import ModelWizard, { WIZARD_STEPS, looseMatch } from "../components/setup/ModelWizard.jsx";
 import { normaliseProvider, setActiveModel, getActiveModel } from "../providerContract.js";
-import Laurel from "../components/Laurel.jsx";
 import { SETTINGS_TABS, tabForSlug } from "../settingsSections.js";
 import { THEMES } from "../components/settings/AppearanceTab.jsx";
 import { TAB_ICONS } from "../components/settings/icons.jsx";
@@ -211,14 +210,10 @@ describe("Imperium theme", () => {
     expect(css).toMatch(/:root, \.theme-default, \.theme-slate, \.theme-classic, \.theme-mono, \.theme-imperium \{/);
   });
 
-  it("draws the laurel as original SVG, hidden outside Imperium", () => {
-    const { container } = render(<Laurel size={80} />);
-    const svg = container.querySelector("svg.laurel");
-    expect(svg.getAttribute("aria-hidden")).toBe("true");
-    expect(svg.querySelectorAll("ellipse").length).toBe(36);              // 9 nodes × 2 leaves × 2 sides
+  it("shows no laurel around the home mark (owner: remove it)", () => {
+    expect(fs.existsSync(path.join(SRC, "components", "Laurel.jsx"))).toBe(false);
     const css = fs.readFileSync(path.join(SRC, "index.css"), "utf8");
-    expect(css).toMatch(/\.laurel \{ display: none; \}/);
-    expect(css).toMatch(/\.theme-imperium \.laurel \{ display: block;/);
+    expect(css).not.toMatch(/\.laurel\b/);
   });
 });
 

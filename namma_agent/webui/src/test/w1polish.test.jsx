@@ -11,7 +11,8 @@ import Logo from "../components/Logo.jsx";
 import Sidebar from "../components/Sidebar.jsx";
 import ProjectsView from "../views/ProjectsView.jsx";
 import LearningView, { nextModule, topicProgress } from "../views/LearningView.jsx";
-import { CLICKABLE, SOUND_EVENTS, clickTarget, installClickSounds } from "../sounds.js";
+import { CLICKABLE, SOUND_EVENTS, clickIntent, clickTarget, installClickSounds } from "../sounds.js";
+import { HAPTIC_INTENTS, _setEngine, triggerHaptic } from "../haptics.js";
 
 const SRC = path.resolve(__dirname, "..");
 const css = () => fs.readFileSync(path.join(SRC, "index.css"), "utf8");
@@ -99,18 +100,43 @@ describe("click sounds", () => {
     expect(SOUND_EVENTS.map((e) => e.id)).toContain("click");
   });
 
-  it("the global listener synthesises a short tick (and respects the toggle)", () => {
-    const osc = vi.fn(() => ({ type: "", frequency: { setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: (x) => x, start() {}, stop() {} }));
-    const gain = () => ({ gain: { value: 0, setValueAtTime() {}, exponentialRampToValueAtTime() {} }, connect: (x) => x });
-    window.AudioContext = vi.fn(function AC() { return { state: "running", currentTime: 0, destination: {}, createOscillator: osc, createGain: gain }; });
-    document.body.innerHTML = '<button id="b">go</button>';
+  it("plays Hermes Agent's haptic click for the control's intent (and respects the toggle)", () => {
+    localStorage.clear();
+    const trigger = vi.fn(() => Promise.resolve());
+    _setEngine({ trigger });
+    document.body.innerHTML = '<button id="b">go</button><button id="s" role="switch">t</button>'
+      + '<button id="x" aria-label="Close dialog">x</button><button id="m" aria-haspopup="listbox">m</button>'
+      + '<button id="send" aria-label="Send message">→</button>';
     const off = installClickSounds(document);
-    fireEvent.pointerDown(document.getElementById("b"), { button: 0 });
-    expect(osc).toHaveBeenCalledTimes(2);                 // transient + body
+    const at = (id, t) => { vi.spyOn(performance, "now").mockReturnValue(t); fireEvent.pointerDown(document.getElementById(id), { button: 0 }); };
+    at("b", 1000);
+    expect(trigger).toHaveBeenLastCalledWith(HAPTIC_INTENTS.selection.pattern, undefined);
+    at("s", 1300);
+    expect(trigger).toHaveBeenLastCalledWith(HAPTIC_INTENTS.crisp.pattern, undefined);
+    at("x", 1600);
+    expect(trigger).toHaveBeenLastCalledWith(HAPTIC_INTENTS.close.pattern, undefined);
+    at("m", 1900);
+    expect(trigger).toHaveBeenLastCalledWith(HAPTIC_INTENTS.open.pattern, undefined);
+    at("send", 2200);
+    expect(trigger).toHaveBeenLastCalledWith(HAPTIC_INTENTS.submit.pattern, undefined);
+    expect(clickIntent(document.getElementById("b"))).toBe("selection");
+    const n = trigger.mock.calls.length;
     localStorage.setItem("namma-sound-events", JSON.stringify({ click: false }));
-    fireEvent.pointerDown(document.getElementById("b"), { button: 0 });
-    expect(osc).toHaveBeenCalledTimes(2);
+    at("b", 5000);
+    expect(trigger).toHaveBeenCalledTimes(n);
     off();
+    vi.restoreAllMocks();
+  });
+
+  it("debounces selection taps and caps runaway loops like Hermes", () => {
+    const trigger = vi.fn(() => Promise.resolve());
+    _setEngine({ trigger });
+    expect(triggerHaptic("selection", 0)).toBe(true);
+    expect(triggerHaptic("selection", 20)).toBe(false);      // < 50 ms
+    for (let t = 100; t < 600; t += 100) triggerHaptic("crisp", t);
+    expect(triggerHaptic("crisp", 650)).toBe(false);         // 5 per second
+    expect(triggerHaptic("crisp", 1700)).toBe(true);
+    expect(triggerHaptic("nope", 3000)).toBe(false);
   });
 });
 

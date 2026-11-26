@@ -9,8 +9,11 @@
 //                  colour (so the engraving no longer reads see-through) and
 //                  the line work on top. Small sizes switch to a bolder line
 //                  mask so the detail survives.
+//  - `solid`     — the medallion on an opaque coin face with the bold engraving
+//                  at any size (the home screen's large mark), instead of the
+//                  translucent wash; reads cleanly on the painted background.
 // `size` is the square box in px.
-export default function Logo({ size = 28, className = "", title = "", variant = "plain" }) {
+export default function Logo({ size = 28, className = "", title = "", variant = "plain", solid = false }) {
   const a11y = { role: title ? "img" : undefined, "aria-label": title || undefined, "aria-hidden": title ? undefined : true };
   if (variant !== "medallion") {
     // Light themes: just the engraving. Dark themes (CSS): the same engraving
@@ -25,10 +28,10 @@ export default function Logo({ size = 28, className = "", title = "", variant = 
     );
   }
   return (
-    <span {...a11y} className={`brand-medallion relative inline-block shrink-0 align-middle rounded-full ${className}`}
+    <span {...a11y} className={`brand-medallion ${solid ? "brand-medallion-solid" : ""} relative inline-block shrink-0 align-middle rounded-full ${className}`}
           style={{ width: size, height: size }}>
       <span className="brand-medallion-fill absolute inset-0" />
-      <span className={`brand-medallion-ink absolute inset-0 ${size <= 40 ? "brand-logo-bold" : ""}`} />
+      <span className={`brand-medallion-ink absolute inset-0 ${size <= 40 || solid ? "brand-logo-bold" : ""}`} />
     </span>
   );
 }

@@ -56,11 +56,6 @@
 .theme-imperium .font-serif, .theme-imperium h1, .theme-imperium h2 {
   font-family: "Cinzel", "Trajan Pro", Georgia, serif; letter-spacing: 0.02em;
 }
-/* The laurel wreath (components/Laurel.jsx) appears in Imperium's empty states only. */
-.laurel { display: none; }
-.theme-imperium .laurel { display: block; color: rgb(var(--laurel)); }
-.theme-imperium { --laurel: 150 108 30; }
-.dark.theme-imperium, .dark .theme-imperium { --laurel: 214 172 84; }
 /* Mono needs a lighter accent in dark mode so primary buttons stay visible. */
 .theme-mono.dark { --brand: 82 82 91; --brand-deep: 113 113 122; }
 
@@ -169,6 +164,7 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
    scattered bright pixels with nothing behind it. So in the dark the mark is a
    light coin, as in daylight: an ivory face tinted by the theme accent, the
    silhouette filled, the engraving in dark ink. */
+:root { --coin-face: var(--paper-panel); --coin-ink: var(--logo-ink); }
 .dark {
   --coin-face: 247 245 239;
   --coin-ink: 28 31 46;
@@ -194,6 +190,16 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
   -webkit-mask-size: 84% auto; mask-size: 84% auto;
 }
 .dark .brand-logo-ink { background-color: rgb(var(--coin-ink)); }
+
+/* The solid medallion (home screen): an opaque coin face, a crisp rim and the
+   bold engraving, the same look as the small sidebar mark, just larger. */
+.brand-medallion-solid,
+.dark .brand-medallion-solid {
+  background: rgb(var(--coin-face));
+  box-shadow: 0 0 0 2px rgb(var(--accent) / 0.55), 0 0 0 7px rgb(var(--accent) / 0.10), 0 12px 32px -10px rgb(var(--accent) / 0.55);
+}
+.brand-medallion-solid .brand-medallion-fill { background-color: rgb(var(--coin-face)); }
+.brand-medallion-solid .brand-medallion-ink { background-color: rgb(var(--coin-ink)); }
 /* ── Chat background: painted, crumpled paper (Phase 9 W1, slice 4) ─────────
    Art from scripts/make_chat_art.py. Each layer is a mask or neutral texture
    coloured here from tokens: the theme accent, the mode's paint, the ink.  */
