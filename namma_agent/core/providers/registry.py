@@ -24,41 +24,35 @@ from namma_agent.core.logger import logger
 
 from .anthropic_provider import AnthropicProvider
 from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback
+from .bedrock_provider import BedrockProvider
+from .catalog import CATALOG, is_strict
+from .cloud_compat import AzureProvider, VertexProvider
 from .google_provider import GoogleProvider
 from .openai_compat import OpenAICompatProvider
 from .openai_provider import OpenAIProvider
 
-#: type string -> provider class. ``opencode``/``lmstudio``/``ollama`` are all
-#: OpenAI-compatible; they map to the same adapter (differ only by base_url).
-PROVIDER_TYPES: dict[str, type[Provider]] = {
-    "anthropic": AnthropicProvider,
+#: catalogue ``adapter`` -> the class that speaks that wire format.
+ADAPTERS: dict[str, type[Provider]] = {
     "openai": OpenAIProvider,
+    "anthropic": AnthropicProvider,
     "google": GoogleProvider,
-    "gemini": GoogleProvider,
     "openai_compat": OpenAICompatProvider,
-    "opencode": OpenAICompatProvider,
-    "lmstudio": OpenAICompatProvider,
-    "ollama": OpenAICompatProvider,
-    # Hosted OpenAI-compatible providers (Phase 5 catalogue).
-    "openrouter": OpenAICompatProvider,
-    "groq": OpenAICompatProvider,
-    "deepseek": OpenAICompatProvider,
-    "mistral": OpenAICompatProvider,
-    "xai": OpenAICompatProvider,
-    "together": OpenAICompatProvider,
+    "bedrock": BedrockProvider,
+    "vertex": VertexProvider,
+    "azure": AzureProvider,
 }
 
-#: Convenience defaults so a bare ``type: ollama`` just works.
+#: type string (catalogue id or alias) -> provider class. DERIVED from the
+#: catalogue (core/providers/catalog.py) — add a provider there, not here.
+PROVIDER_TYPES: dict[str, type[Provider]] = {
+    t: ADAPTERS[p["adapter"]] for p in CATALOG for t in (p["id"], *p["aliases"])
+}
+
+#: Per-type defaults so a bare ``type: groq`` just works: the catalogue's
+#: base_url and key env var (DERIVED from the catalogue, aliases included).
 _TYPE_DEFAULTS: dict[str, dict] = {
-    "lmstudio": {"base_url": "http://localhost:1234/v1"},
-    "ollama": {"base_url": "http://localhost:11434/v1"},
-    "opencode": {"base_url": "https://opencode.ai/zen/v1"},
-    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"},
-    "groq": {"base_url": "https://api.groq.com/openai/v1", "api_key_env": "GROQ_API_KEY"},
-    "deepseek": {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
-    "mistral": {"base_url": "https://api.mistral.ai/v1", "api_key_env": "MISTRAL_API_KEY"},
-    "xai": {"base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY"},
-    "together": {"base_url": "https://api.together.xyz/v1", "api_key_env": "TOGETHER_API_KEY"},
+    t: {k: v for k, v in (("base_url", p["base_url"]), ("api_key_env", p["key_env"])) if v}
+    for p in CATALOG for t in (p["id"], *p["aliases"])
 }
 
 
@@ -74,6 +68,10 @@ def build_provider(cfg: dict) -> Provider:
     for key, val in _TYPE_DEFAULTS.get(ptype, {}).items():
         if not cfg.get(key):        # "" / None from a profile still gets the default
             cfg[key] = val
+    if is_strict(ptype):
+        # Borrowed adapter: read only this provider's own key var, never the
+        # adapter's conventional one (OPENAI_API_KEY / ANTHROPIC_API_KEY).
+        cfg.setdefault("key_fallback", False)
     cls = PROVIDER_TYPES[ptype]
     return cls(**cfg)
 

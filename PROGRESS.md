@@ -1027,8 +1027,36 @@ Slice 1 landed 2026-11-25. Everything marked `[x]` is verified live.
   - The laurel isn't in the brand mark: that's the owner's logo art.
   - `npm audit` reports 20 pre-existing advisories (not introduced here).
 
-#### W2 — Provider & setup parity (backend) — `[ ]`
-Its own session. Single catalogue, Hermes' provider list, OpenRouter PKCE, explicit `active_model`.
+#### W2 — Provider & setup parity (backend) — `[~]` (backend done and verified; UI group names and a real OpenRouter sign-in are open)
+Its own session, branch `claude/phase9-w2-providers-051bcf`. Single catalogue, Hermes' provider list, OpenRouter PKCE, explicit `active_model`.
+- `[x]` **One catalogue:** `core/providers/catalog.py` `CATALOG`, 52 providers from Hermes Agent's registry (same env-var names and base URLs).
+  - Groups: Popular / Subscriptions / Gateways / China / Cloud / Local.
+  - Derived from it: `registry.PROVIDER_TYPES` and `_TYPE_DEFAULTS` (ids and aliases), `setup_wizard.PROVIDER_PRESETS` (every entry), and the live/fallback model lists.
+  - Namma's old ids are kept (`opencode`, `google`, `openai_compat`); Hermes' ids are aliases (`opencode-zen`, `gemini`, `custom`, `kimi`, …).
+  - Fixed: `opencode` → `OPENCODE_ZEN_API_KEY` and custom → `OPENAI_COMPAT_API_KEY`, so no two providers share a key. Explicit `api_key_env` in a user's config still wins.
+  - Types that borrow another adapter (every gateway; MiniMax and Tencent TokenPlan on the Anthropic adapter) read only their own key var (`key_fallback=False`). Before, a MiniMax entry could have sent `ANTHROPIC_API_KEY`.
+- `[x]` **New adapters:**
+  - `bedrock_provider.py` (Converse via boto3, optional; prints "pip install boto3" when it's missing);
+  - `cloud_compat.py`: Vertex (google-auth ADC, endpoint built from `GOOGLE_CLOUD_PROJECT` / `GOOGLE_CLOUD_LOCATION`) and Azure OpenAI / AI Foundry (`api_version` → `AzureOpenAI`, else the `/openai/v1` route);
+  - `AnthropicProvider` honours `base_url`.
+- `[x]` **`GET /api/providers`** returns the contract shape (`id, label, group, auth, key_env, key_url, base_url, needs_base_url, key_set, connected, docs_url`), plus `type`, `needs_key`, `key_prefix`, `auths`, a top-level `groups` order and `active`.
+  - `connected` is true when the key is set, the provider needs no key, cloud-SDK credentials are present, or a configured connection of that type has its own key.
+- `[x]` **OpenRouter PKCE** (`core/oauth.py`, stdlib only):
+  - `POST /api/providers/{id}/oauth/start` → `{authorize_url}`. Cross-origin starts are refused (CORS is `*`, so this stops login CSRF); loopback origins are allowed.
+  - OpenRouter echoes no `state`, so the single-use 10-minute nonce rides in the callback path, `/api/oauth/{id}/callback/{nonce}` (Hermes' approach). The contract path `/api/oauth/{id}/callback?state=` works too.
+  - The key goes to the vault via `setup_save_secret`, then the user is sent to `/settings/model?connected={id}`. A failure redirects to `?oauth_error=…&provider=…`.
+  - Callbacks are exempt from the access-token guard (the nonce guards them).
+- `[x]` **`GET/POST /api/active_model {model_id}`** is stored as `active_model:` in the user config.
+  - `provider_for()`, `setup_status.default_model` and `setup_save_model(make_default)` all use it. It also moves the model to the top of `models:`, so every "first in list" reader agrees.
+  - A stale or removed choice falls back to the first model; `""` clears it. `provider_ready()` is unchanged.
+- `[x]` **Tests:** `tests/test_provider_catalogue_w2.py` (78): uniqueness and completeness, no shared key vars, Hermes parity, every entry builds, derived defaults and presets, strict keys, the contract shape, PKCE (RFC 7636 vector, mocked exchange, expiry, replay, 403, cross-origin, token guard), `active_model` (default, persistence, effect, fallback), Bedrock/Vertex/Azure with mocked SDKs. Full suite **1,515 passed / 3 skipped**; ruff clean.
+- `[x]` **Verified live** on a scratch instance (isolated `NAMMA_DATA_DIR`, user config, `.env`, file vault; real `data/` and `~/.namma_agent` unchanged by name, size and mtime):
+  - `/api/providers` serves 52 rows in 6 groups;
+  - in Settings → Model → Add a model, the OpenRouter "Sign in" button calls `/oauth/start` and opens a real `openrouter.ai/auth?…code_challenge_method=S256` URL. OpenRouter accepts it and shows its sign-in page;
+  - forged callbacks and cross-origin starts are refused;
+  - Default model changes `POST /api/active_model`, persist in the user config and survive a reload.
+- `[!]` **UI group names (W1 owns the UI):** `providerContract.js` hard-codes `PROVIDER_GROUPS = ["Popular","Aggregators","Cloud","Local"]`, so the wizard hides Subscriptions, Gateways and China (34 providers). Fix: read `groups` from `/api/providers` and add icons for the three new groups. The UI doesn't read `?connected=` / `?oauth_error=` yet either.
+- `[!]` **Not verified:** a completed OpenRouter sign-in (needs the owner's account); a real `verify_provider` call per provider (owner's keys); Ramp Router and Meta Model API use the Responses API in Hermes and may need a Responses adapter.
 
 #### W3 — Electron desktop app — `[ ]`
 Its own session. `desktop/`: NSIS installer and uninstaller, tray, toasts, autostart, deep links, auto-update, and backend hooks under `NAMMA_DESKTOP=1`.
@@ -1283,6 +1311,11 @@ From `STAND_OUT.md`:
 
 ## 10. Change log
 
+- **2026-11-26 (Phase 9 W2):**
+  - One provider catalogue (52 providers, Hermes Agent's list) drives the registry, the setup presets and `/api/providers` (contract shape). New adapters: Bedrock, Vertex and Azure.
+  - OpenRouter PKCE sign-in, with the key stored in the vault. An explicit `active_model` default.
+  - `opencode` and custom endpoints no longer share `OPENAI_API_KEY`; borrowed adapters read only their own key var.
+  - Python 1,515 passed / 3 skipped.
 - **2026-11-26 (Phase 9 W1, slice 4):**
   - The chat background is painted, crumpled paper built from the owner's Desktop art. It follows the theme, light/dark and the mode. The slice-3 painting is removed.
   - Settings split into 22 modules; Providers + Models → **Model**, Config + Servers → **MCP**; the old links still work.

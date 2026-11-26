@@ -18,25 +18,40 @@ from typing import Callable, Optional
 
 from namma_agent.config import set_env_values, update_config
 
-#: provider id → (label, default api-key env var, default model, default base_url, needs a key?)
-PROVIDER_PRESETS: dict[str, dict] = {
-    "anthropic": {"label": "Anthropic (Claude)", "api_key_env": "ANTHROPIC_API_KEY",
-                  "default_model": "claude-opus-4-8", "base_url": None, "needs_key": True},
-    "openai": {"label": "OpenAI (GPT)", "api_key_env": "OPENAI_API_KEY",
-               "default_model": "gpt-4o", "base_url": None, "needs_key": True},
-    "google": {"label": "Google (Gemini)", "api_key_env": "GOOGLE_API_KEY",
-               "default_model": "gemini-2.0-flash", "base_url": None, "needs_key": True},
-    "ollama": {"label": "Ollama (local, no key)", "api_key_env": "",
-               "default_model": "llama3.1", "base_url": "http://localhost:11434/v1",
-               "needs_key": False},
-    "lmstudio": {"label": "LM Studio (local, no key)", "api_key_env": "",
-                 "default_model": "local-model", "base_url": "http://localhost:1234/v1",
-                 "needs_key": False},
-    "openai_compat": {"label": "OpenAI-compatible (custom base URL)", "api_key_env": "NAMMA_API_KEY",
-                      "default_model": "", "base_url": "", "needs_key": True},
-}
+#: Curated default model per provider for the terminal wizard (else the
+#: catalogue's first fallback model).
+_DEFAULT_MODELS = {"anthropic": "claude-opus-4-8", "openai": "gpt-4o",
+                   "google": "gemini-2.0-flash", "ollama": "llama3.1",
+                   "lmstudio": "local-model", "openai_compat": ""}
 
-_ORDER = ["anthropic", "openai", "google", "ollama", "lmstudio", "openai_compat"]
+
+def _derive_presets() -> dict[str, dict]:
+    """``PROVIDER_PRESETS`` DERIVED from the provider catalogue
+    (core/providers/catalog.py) — one entry per catalogue provider."""
+    from namma_agent.core.providers.catalog import CATALOG
+
+    out: dict[str, dict] = {}
+    for p in CATALOG:
+        fallback = p.get("fallback_models") or []
+        out[p["id"]] = {
+            "label": p["label"] + (" (local, no key)" if p["auth"] == "none" else ""),
+            "api_key_env": p["key_env"],
+            "default_model": _DEFAULT_MODELS.get(p["id"], fallback[0] if fallback else ""),
+            "base_url": p["base_url"] or None,
+            "needs_key": bool(p["needs_key"]),
+            "group": p["group"],
+            "needs_base_url": bool(p["needs_base_url"]),
+        }
+    return out
+
+
+#: provider id → {label, api_key_env, default_model, base_url, needs_key, group,
+#: needs_base_url}. Derived from the catalogue; covers every catalogue provider.
+PROVIDER_PRESETS: dict[str, dict] = _derive_presets()
+
+#: The short list the terminal wizard shows by number (everything else is
+#: reachable in the app's Settings → Model → Add a model).
+_ORDER = ["anthropic", "openai", "google", "openrouter", "ollama", "lmstudio", "openai_compat"]
 
 
 def configure_provider(provider_type: str, model: Optional[str] = None,
@@ -180,9 +195,11 @@ def run_wizard(input_fn: Callable[[str], str] = input,
     base_url = None
     if pid == "openai_compat":
         base_url = (input_fn("  Base URL (e.g. https://api.groq.com/openai/v1): ") or "").strip()
+    elif preset["needs_base_url"] and preset["base_url"]:
+        base_url = (input_fn(f"  Base URL [{preset['base_url']}]: ") or preset["base_url"]).strip()
 
     api_key = None
-    if preset["needs_key"]:
+    if preset["needs_key"] or pid == "openai_compat":   # custom: key optional
         api_key = (input_fn(f"  API key for {preset['label']} "
                             f"(stored in .env as {preset['api_key_env']}): ") or "").strip()
         if not api_key:

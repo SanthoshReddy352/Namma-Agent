@@ -145,6 +145,10 @@ class SetupVerifyBody(BaseModel):
     model: str = ""
 
 
+class ActiveModelBody(BaseModel):
+    model_id: str = ""
+
+
 class SetupOnboardBody(BaseModel):
     type: str
     model: str
@@ -471,7 +475,11 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": "forbidden"}, status_code=403)
         guarded = path.startswith("/api") or path.startswith("/v1")
-        if _auth_token() and guarded and path != "/api/health":
+        # Provider OAuth callbacks are a top-level redirect from the provider's
+        # site, which can't carry the token. They're guarded by their own
+        # single-use, 10-minute nonce in the path instead (core/oauth.py).
+        oauth_callback = bool(re.match(r"^/api/oauth/[a-z0-9_-]+/callback(/|$)", path))
+        if _auth_token() and guarded and path != "/api/health" and not oauth_callback:
             supplied = request.headers.get("x-namma-token") or \
                 request.query_params.get("token")
             authz = request.headers.get("authorization", "")
@@ -1718,18 +1726,101 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.get("/api/providers")
     def providers():
-        """Provider catalog (with .env key-set flags) + the active provider config."""
-        from namma_agent.core.providers.catalog import provider_catalog
+        """The provider catalogue in the Phase 9 contract shape —
+        ``{providers: [{id, label, group, auth, key_env, key_url, base_url,
+        needs_base_url, key_set, connected, docs_url, …}], groups, active}``."""
+        from namma_agent.core.providers.catalog import GROUPS, provider_catalog
 
         pcfg = service.config.get("provider") or {}
         return {
-            "providers": provider_catalog(),
+            "providers": provider_catalog(service.configured_providers()),
+            "groups": list(GROUPS),
             "active": {
                 "type": pcfg.get("type", ""),
                 "model": pcfg.get("model", ""),
                 "base_url": pcfg.get("base_url", ""),
             },
         }
+
+    # -- provider OAuth (Phase 9 W2: OpenRouter PKCE) -----------------------
+    from namma_agent.core.oauth import OAuthError, OAuthManager
+
+    oauth = OAuthManager()
+    app.state.oauth = oauth
+
+    @app.post("/api/providers/{provider_id}/oauth/start")
+    def provider_oauth_start(provider_id: str, request: Request):
+        """Begin an official PKCE sign-in. Returns ``{authorize_url}`` for the UI
+        to open; the provider redirects back to ``/api/oauth/{id}/callback/…``."""
+        from fastapi.responses import JSONResponse
+
+        server_base = str(request.base_url).rstrip("/")
+        # Only this app's own pages may start a flow: CORS is open (*), so without
+        # this a third-party site could start one and later feed the callback a
+        # code from ITS OWN account (login CSRF → the user's chats on its key).
+        # (Loopback origins on any port are this machine — e.g. the Vite dev server.)
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        loopback = bool(re.match(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", origin))
+        if origin and origin != server_base and not loopback:
+            return JSONResponse({"ok": False, "error": "cross-origin sign-in refused"},
+                                status_code=403)
+        if not oauth.supports(provider_id):
+            return JSONResponse({"ok": False, "error": f"{provider_id!r} has no sign-in flow"},
+                                status_code=404)
+        try:
+            flow = oauth.start(provider_id, server_base)
+        except OAuthError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        logger.info("[oauth] %s sign-in started", provider_id)
+        return {"ok": True, "authorize_url": flow["authorize_url"]}
+
+    def _oauth_finish(provider_id: str, state: str, code: str, error: str = ""):
+        from urllib.parse import quote
+
+        from fastapi.responses import RedirectResponse
+
+        if error:
+            msg = f"Sign-in was cancelled or refused ({error})."
+        else:
+            try:
+                key_env, key = oauth.finish(provider_id, state, code)
+                saved = service.setup_save_secret(key_env, key)
+                if saved.get("ok"):
+                    logger.info("[oauth] %s connected (vault=%s)", provider_id, saved.get("vault"))
+                    return RedirectResponse(f"/settings/model?connected={quote(provider_id)}",
+                                            status_code=303)
+                msg = saved.get("error") or "Couldn't store the key."
+            except OAuthError as exc:
+                msg = str(exc)
+        logger.warning("[oauth] %s sign-in failed: %s", provider_id, msg)
+        return RedirectResponse(f"/settings/model?oauth_error={quote(msg)}"
+                                f"&provider={quote(provider_id)}", status_code=303)
+
+    @app.get("/api/oauth/{provider_id}/callback/{state}")
+    def provider_oauth_callback_nonce(provider_id: str, state: str, code: str = "",
+                                      error: str = ""):
+        """OpenRouter echoes no ``state``, so the nonce rides in the path."""
+        return _oauth_finish(provider_id, state, code, error)
+
+    @app.get("/api/oauth/{provider_id}/callback")
+    def provider_oauth_callback(provider_id: str, code: str = "", state: str = "",
+                                error: str = ""):
+        """Contract path; the nonce comes as ``?state=``."""
+        return _oauth_finish(provider_id, state, code, error)
+
+    # -- the default model (Phase 9 W2: explicit active_model) ---------------
+
+    @app.get("/api/active_model")
+    def get_active_model():
+        return {"model_id": service.active_model_id()}
+
+    @app.post("/api/active_model")
+    def post_active_model(body: ActiveModelBody):
+        """Make a configured model the default brain (``{model_id}``; "" clears)."""
+        result = service.set_active_model(body.model_id)
+        if result.get("ok"):
+            logger.info("[settings] default model -> %s", result.get("model_id"))
+        return result
 
     @app.get("/api/env_status")
     def env_status(keys: str = ""):
