@@ -60,7 +60,9 @@ def focus_window() -> bool:
     server, browser fallback) so the caller can open one instead."""
     window = _WINDOW
     if window is None:
-        return False
+        # Phase 9 W3: under the Electron shell the window is the shell's.
+        from namma_agent.core import desktop
+        return desktop.command("focus") if desktop.enabled() else False
     try:
         with suppress(Exception):
             window.restore()
@@ -110,6 +112,24 @@ def _build_service() -> NammaAgentService:
     )
     logger.info("[app] starting Namma Agent v%s (log level=%s)", __version__, logger.level and __import__("logging").getLevelName(logger.level))
     return NammaAgentService(config=config)
+
+
+def _attach_desktop(service) -> bool:
+    """Phase 9 W3: under the Electron shell (``NAMMA_DESKTOP=1``) route desktop
+    events (``desktop_notify``, ``desktop_command``) onto the service's
+    process-wide broadcast, which every ``/ws`` client, the shell's main process
+    included, receives. No-op otherwise. Returns whether it attached."""
+    from namma_agent.core import desktop
+
+    broadcast = getattr(service, "broadcast", None)
+    if not desktop.enabled() or broadcast is None:
+        return False
+    desktop.set_sink(broadcast.publish)
+    shutdown = getattr(service, "shutdown", None)
+    if callable(shutdown):
+        desktop.start_parent_watchdog(lambda: shutdown(delay=0.1))
+    logger.info("[app] desktop shell mode: notifications and commands go to the event bus")
+    return True
 
 
 def _serve(service: NammaAgentService) -> None:
@@ -556,6 +576,7 @@ def main(server_only: bool = False) -> None:
 
     service = _build_service()
     _apply_server_config(service.config)
+    _attach_desktop(service)
 
     server_thread = threading.Thread(target=_serve, args=(service,), daemon=True)
     server_thread.start()

@@ -75,7 +75,20 @@ def latest_release(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict | Non
 
 
 def check_for_update(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict:
-    """Compare the installed version to the latest published one."""
+    """Compare the installed version to the latest published one.
+
+    Under the desktop app (``NAMMA_DESKTOP=1``) the Electron shell owns updates
+    (electron-updater): the check is forwarded to it as a ``desktop_command`` and
+    the answer says ``managed_by: "desktop"`` — the shell reports progress with
+    its own native UI. The version comparison is still returned for display."""
+    from namma_agent.core import desktop
+
+    if desktop.enabled():
+        forwarded = desktop.command("update_check")
+        cur = current_version()
+        return {"current": cur, "latest": None, "update_available": False,
+                "managed_by": "desktop", "forwarded": forwarded,
+                "desktop_version": os.environ.get("NAMMA_DESKTOP_VERSION", "")}
     cur = current_version()
     latest = latest_release(repo, timeout)
     if not latest or not latest.get("version"):
@@ -93,7 +106,18 @@ def _update_script() -> Path:
 
 def apply_update() -> dict:
     """Launch the platform update script **detached** so it can update files and
-    relaunch the app after this process exits. Returns immediately."""
+    relaunch the app after this process exits. Returns immediately.
+
+    Desktop installs never run the git-pull script (it assumes a source checkout,
+    a ``.venv`` and port 8000): the request is handed to the Electron shell,
+    which downloads and installs the new NSIS build with electron-updater."""
+    from namma_agent.core import desktop
+
+    if desktop.enabled():
+        if desktop.command("update_apply"):
+            return {"started": True, "managed_by": "desktop"}
+        return {"started": False, "managed_by": "desktop",
+                "error": "the desktop app is not connected"}
     script = _update_script()
     if not script.exists():
         return {"started": False, "error": f"updater script not found: {script}"}
