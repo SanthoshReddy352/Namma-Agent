@@ -6,6 +6,11 @@ appId: com.namma.agent            # also the AUMID on the Start-menu shortcut (t
 productName: Namma Agent
 copyright: Namma Agent contributors
 
+# NSIS 3.12 (unified toolset). The legacy 3.0.4.1 toolset's System.dll plugin
+# crashed the installer at start-up (access violation) on 3 of 5 launches here.
+toolsets:
+  nsis: "1.2.1"
+
 directories:
   output: out
   buildResources: resources

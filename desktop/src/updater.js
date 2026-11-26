@@ -19,7 +19,9 @@ function createUpdater({ log, getWindow, beforeInstall, appName }) {
     ({ autoUpdater } = require("electron-updater"));
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = true;
-    autoUpdater.logger = { info: log, warn: log, error: log, debug: () => {} };
+    // First lines only: a failed check otherwise dumps whole HTTP header sets.
+    const first = (m) => log(`updater: ${String((m && m.message) || m).split("\n")[0].slice(0, 300)}`);
+    autoUpdater.logger = { info: first, warn: first, error: first, debug: () => {} };
     autoUpdater.on("checking-for-update", () => { state = { ...state, status: "checking", error: null }; });
     autoUpdater.on("update-not-available", () => {
       state = { ...state, status: "current" };
@@ -62,16 +64,20 @@ function createUpdater({ log, getWindow, beforeInstall, appName }) {
   function fail(e) {
     const msg = (e && e.message) || String(e);
     state = { ...state, status: "error", error: msg };
-    log(`updater: ${msg}`);
+    log(`updater: ${msg.split("\n")[0].slice(0, 300)}`);
     const win = getWindow();
     if (win && !win.isDestroyed()) win.setProgressBar(-1);
     if (manual) {
-      dialog.showMessageBox(win || undefined, {
+      // No desktop release on GitHub yet is not an error the user can act on.
+      const unpublished = /404|latest\.yml|Cannot find/i.test(msg);
+      dialog.showMessageBox(win || undefined, unpublished ? {
+        type: "info", title: "Check for updates",
+        message: `${appName()} ${app.getVersion()} is the newest version.`,
+        detail: "No newer desktop release has been published.",
+      } : {
         type: "warning", title: "Update check failed",
         message: "Couldn't check for updates.",
-        detail: /404|latest\.yml|Cannot find/i.test(msg)
-          ? "No desktop release has been published yet."
-          : msg.split("\n")[0].slice(0, 300),
+        detail: msg.split("\n")[0].slice(0, 300),
       });
     }
   }

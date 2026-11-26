@@ -18,6 +18,9 @@
 !macroend
 
 !macro customUnInstall
+  ; Leave the install dir as the working directory, or RMDir /r can't remove
+  ; the (empty) folder itself afterwards.
+  SetOutPath "$TEMP"
   !insertmacro nammaStopBackend
 
   DeleteRegKey HKCU "Software\Classes\namma"
@@ -25,6 +28,8 @@
   DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "NammaAgent"
 
   ${ifNot} ${isUpdated}
+    ; electron-updater's copy of the installer (kept for differential updates).
+    RMDir /r "$LOCALAPPDATA\namma-agent-desktop-updater"
     ${ifNot} ${Silent}
       MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
         "Also delete your chats, settings and API keys?$\r$\n$\r$\nChoose No to keep them in $APPDATA\Namma Agent, so they are there if you reinstall." \

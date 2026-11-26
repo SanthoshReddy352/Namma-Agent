@@ -35,6 +35,14 @@ Isolate a test run from your real profile with environment variables:
 - the backend's own `NAMMA_DATA_DIR`, `NAMMA_USER_CONFIG`, `NAMMA_ENV_FILE`,
   `NAMMA_VAULT_BACKEND=file` and `NAMMA_WHATSAPP_SESSION` are passed through.
 
+Development runs use the AUMID `com.namma.agent.dev`, not the installed app's
+`com.namma.agent`. The first time an unregistered app posts a toast, Electron
+creates a Start-menu shortcut named "Electron" for its AUMID, and Windows then
+shows that AUMID as "Electron". A dev run sharing the real AUMID once made the
+installed app appear as "Electron" in Start and in toasts. Delete
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Electron.lnk` after dev work if
+it bothers you.
+
 `NAMMA_DESKTOP_DEBUG=1` exposes `globalThis.__nammaDesktop` in the main process for
 driving it from a Node inspector (`electron --inspect=9339 .`). Leave it off normally.
 

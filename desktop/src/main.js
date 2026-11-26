@@ -30,7 +30,10 @@ const REPO_ROOT = path.resolve(__dirname, "..", "..");
 // Scratch/dev isolation: a different userData keeps test runs away from the
 // real profile (window state, Chromium storage, backend data).
 if (process.env.NAMMA_DESKTOP_USER_DATA) app.setPath("userData", process.env.NAMMA_DESKTOP_USER_DATA);
-if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+// Development runs use their own AUMID: Windows caches an AUMID's display name
+// from the first process that posts a toast under it, and electron.exe would
+// otherwise make the installed app appear as "Electron" in Start and in toasts.
+if (process.platform === "win32") app.setAppUserModelId(app.isPackaged ? APP_ID : `${APP_ID}.dev`);
 
 // ── single instance ─────────────────────────────────────────────────────────
 if (!app.requestSingleInstanceLock()) {
@@ -223,7 +226,13 @@ function loginSettings() {
 
 function loginItem() {
   if (process.platform === "linux") return false;
-  try { return !!app.getLoginItemSettings(loginSettings()).openAtLogin; } catch { return false; }
+  try {
+    const s = app.getLoginItemSettings(loginSettings());
+    // On Windows `openAtLogin` compares the arguments too and reads our quoted
+    // "--hidden" back as none, so find our own Run entry by name instead.
+    if (Array.isArray(s.launchItems)) return s.launchItems.some((i) => i.name === LOGIN_ITEM_NAME && i.enabled !== false);
+    return !!s.openAtLogin;
+  } catch { return false; }
 }
 
 function setLoginItem(on) {
