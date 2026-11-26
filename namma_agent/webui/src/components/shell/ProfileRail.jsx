@@ -5,8 +5,8 @@ import { fetchPersonas, setPersona } from "../../api.js";
 // Phase 9 W1: the sidebar's profile rail (Hermes layout). One round avatar per
 // persona; the active one is ringed. Click to switch who answers; "+" opens
 // Settings → Persona. Collapsed sidebars show just the active avatar.
-// Portraits arrive with W4 (a persona's `portrait` URL); until then each
-// persona gets a monogram in one of the chart tokens, picked by its id.
+// W4: personas with a `portrait` (the Roman coins) show it; others get a
+// monogram in one of the chart tokens, picked by its id.
 const TONES = ["--chart-1", "--chart-2", "--chart-3", "--chart-5", "--chart-6", "--chart-7"];
 
 export function personaTone(id = "") {
@@ -65,7 +65,8 @@ export default function ProfileRail({ expanded = true, onManage }) {
          className={`flex items-center gap-2 ${expanded ? "px-1 flex-wrap" : "flex-col"}`}>
       {shown.map((p) => (
         <button key={p.id} type="button" role="radio" aria-checked={p.id === active}
-                aria-label={`Persona: ${p.name}`} title={`${p.name}${p.tone ? ` — ${p.tone}` : ""}`}
+                aria-label={`Persona: ${p.name}${p.title ? `, ${p.title}` : ""}`}
+                title={`${p.name}${p.title ? `, ${p.title}` : ""}${p.tone ? ` — ${p.tone}` : ""}`}
                 onClick={() => pick(p.id)} disabled={!!busy}
                 className="rounded-full transition-transform duration-fast hover:scale-105 disabled:opacity-60">
           <Avatar persona={p} active={p.id === active} />

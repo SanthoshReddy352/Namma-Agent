@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { IconChevronDown, IconCircleCheck, IconCircleX, IconLoader2, IconMessages, IconPlayerStop, IconSitemap } from "@tabler/icons-react";
 import { cancelRun } from "../api.js";
+import { LEGATUS } from "../roles.js";
+import RoleEmblem from "./RoleEmblem.jsx";
 
 // Sub-agent runs for the current chat (delegate_task children, nested
 // orchestrator children, background tasks). Fed live by `subagent` events.
@@ -97,8 +99,14 @@ function RunCard({ run: r, open, onToggle }) {
                 className="min-w-0 flex-1 flex items-start gap-2 text-left">
           <span className={`mt-[7px] h-2 w-2 rounded-full shrink-0 ${STATUS_TONE[r.status] || "bg-border"}`} aria-hidden="true" />
           <span className="min-w-0 flex-1">
-            <span className="block text-sm font-medium text-fg truncate" title={r.goal}>
-              {r.kind === "background" ? "Background: " : ""}{r.name || r.goal}
+            <span className="flex items-center gap-1.5 text-sm font-medium text-fg min-w-0" title={r.goal}>
+              {r.kind !== "background" && (
+                <span className="inline-flex items-center gap-1 shrink-0 text-2xs font-semibold uppercase tracking-wider text-accent"
+                      title={LEGATUS.description} data-role="legatus">
+                  <RoleEmblem role={LEGATUS.emblem} size={13} />{LEGATUS.role}
+                </span>
+              )}
+              <span className="truncate">{r.kind === "background" ? "Background: " : ""}{r.name || r.goal}</span>
             </span>
             <span className="block text-xs text-fg-subtle truncate">
               {r.status}

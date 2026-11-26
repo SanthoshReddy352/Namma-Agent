@@ -3,6 +3,7 @@ import { uploadFile } from "../api.js";
 import SelectMenu from "./ui/SelectMenu.jsx";
 import { dictationEngine, startBrowserDictation, startRecording, transcribe } from "../voice.js";
 import { MODES, modeById } from "../roles.js";
+import RoleEmblem from "./RoleEmblem.jsx";
 import { IconChevronDown, IconMicrophone, IconPaperclip, IconPlayerStopFilled, IconSend } from "@tabler/icons-react";
 
 // Textarea never grows past this (the "net safety height") — it scrolls instead.
@@ -229,11 +230,11 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
 
 // Phase 9: modes are picked from a list (Hermes-style), each shown as its
 // Roman role with a one-line description. Replaces the old 3-way pill.
-function RoleTile({ role, size = 22 }) {
+function RoleTile({ role, emblem, size = 22 }) {
   return (
-    <span aria-hidden="true" style={{ width: size, height: size }}
-          className="grid place-items-center shrink-0 rounded-md bg-accent-wash text-accent font-serif text-xs font-semibold">
-      {role.slice(0, 1)}
+    <span aria-hidden="true" style={{ width: size, height: size }} title={role}
+          className="grid place-items-center shrink-0 rounded-md bg-accent-wash text-accent">
+      <RoleEmblem role={emblem || role} size={Math.round(size * 0.72)} />
     </span>
   );
 }
@@ -241,13 +242,13 @@ function RoleTile({ role, size = 22 }) {
 function ModeMenu({ mode, setMode }) {
   const options = MODES.map((m) => ({
     id: m.id, label: `${m.label} · ${m.role}`, description: m.description,
-    leading: <RoleTile role={m.role} size={28} />,
+    leading: <RoleTile role={m.role} emblem={m.emblem} size={28} />,
   }));
   return (
     <SelectMenu label="Mode" value={mode} onChange={setMode} options={options}
                 renderTrigger={() => {
                   const cur = modeById(mode);
-                  return (<><RoleTile role={cur.role} /><span className="text-fg">{cur.label}</span></>);
+                  return (<><RoleTile role={cur.role} emblem={cur.emblem} /><span className="text-fg">{cur.label}</span></>);
                 }} />
   );
 }

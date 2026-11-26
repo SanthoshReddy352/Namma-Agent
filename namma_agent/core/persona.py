@@ -314,6 +314,17 @@ def _identity_line(identity: str, display_name: str) -> str:
     return first[:160]
 
 
+_PORTRAIT_RE = re.compile(r"^/brand/personas/[a-z0-9_-]+[.]svg$")
+
+
+def _portrait(value) -> Optional[str]:
+    """A persona's portrait URL, only if it is one of the bundled coin portraits
+    (``/brand/personas/<id>.svg``, Phase 9 W4). Anything else is dropped, so a
+    persona file can't point the UI at an arbitrary URL."""
+    value = str(value or "").strip()
+    return value if _PORTRAIT_RE.match(value) else None
+
+
 def list_personas(display_name: str = "Namma Agent") -> list[dict]:
     """Every available persona (user + built-in) with a one-line identity, for the
     Settings dropdown. A user persona overrides a built-in sharing its id; the
@@ -339,6 +350,8 @@ def list_personas(display_name: str = "Namma Agent") -> list[dict]:
                 "name": raw_name.replace("{name}", display_name),
                 "identity_line": _identity_line(data.get("identity", ""), display_name),
                 "tone": (data.get("tone") or "").strip(),
+                "title": str(data.get("title") or "").strip(),
+                "portrait": _portrait(data.get("portrait")),
                 "source": source,
             })
     return out
@@ -362,6 +375,8 @@ def get_persona_spec(persona_id: str) -> Optional[dict]:
         "tone": (data.get("tone") or "").strip(),
         "dos": [str(x).strip() for x in (data.get("dos") or []) if str(x).strip()],
         "donts": [str(x).strip() for x in (data.get("donts") or []) if str(x).strip()],
+        "title": str(data.get("title") or "").strip(),
+        "portrait": _portrait(data.get("portrait")),
         "source": source,
     }
 

@@ -1,4 +1,5 @@
 import { modeById } from "../../roles.js";
+import RoleEmblem from "../RoleEmblem.jsx";
 
 // Phase 9 (Hermes layout): a thin status bar along the bottom — connection,
 // the active role/mode, the current model (click to switch), and the running
@@ -13,7 +14,9 @@ export default function StatusBar({ connected, mode, modelLabel, busy, onOpenMod
         {connected ? "Connected" : "Reconnecting…"}
       </span>
       <span aria-hidden="true">·</span>
-      <span title={role.description}>{role.role} · {role.label}</span>
+      <span title={role.description} className="inline-flex items-center gap-1">
+        <RoleEmblem role={role.emblem} size={13} className="text-accent" />{role.role} · {role.label}
+      </span>
       <span aria-hidden="true">·</span>
       <button type="button" onClick={onOpenModelPicker} className="truncate max-w-[220px] hover:text-fg"
               aria-label={`Model: ${modelLabel || "choose a model"}`}>
