@@ -20,6 +20,10 @@ Platform mechanisms (all stdlib / OS built-ins, no new Python deps):
     (older hosts, group policy) — same visible outcome, no buttons.
   • macOS   — ``osascript -e 'display notification …'``.
   • Linux   — ``notify-send`` when present.
+  • Desktop app (``NAMMA_DESKTOP=1``, Phase 9 W3) — none of the above: the
+    backend emits ``desktop_notify {title, body, action}`` on the event bus and
+    the Electron shell shows a native notification under the app's own identity
+    (AUMID ``com.namma.agent``). See :mod:`namma_agent.core.desktop`.
 """
 from __future__ import annotations
 
@@ -27,6 +31,8 @@ import os
 import platform
 import shutil
 import subprocess
+
+from namma_agent.core import desktop as _desktop
 
 # PowerShell that pops a toast with Reply/Open buttons, falling back to a balloon.
 # Title/body/URLs come in via env vars so we never have to escape user text into
@@ -88,7 +94,9 @@ def _app_url() -> str:
 _WIN_AUMID = r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe"
 
 
-def _windows_toasts_enabled() -> tuple[bool, str]:
+def _windows_toasts_enabled(aumid: str = _WIN_AUMID,
+                            app_label: str = "Windows PowerShell, which this app "
+                                             "posts toasts through") -> tuple[bool, str]:
     """Will Windows actually *render* a toast right now?
 
     ``ToastNotification.Show()`` succeeds silently when the user has turned
@@ -118,10 +126,9 @@ def _windows_toasts_enabled() -> tuple[bool, str]:
         return False, ("Windows notifications are turned off. Turn them on in "
                        "Settings → System → Notifications.")
     if _dword(r"SOFTWARE\Microsoft\Windows\CurrentVersion\Notifications\Settings"
-              "\\" + _WIN_AUMID, "Enabled") == 0:
-        return False, ("Windows has notifications muted for Windows PowerShell, "
-                       "which this app posts toasts through. Re-enable it in "
-                       "Settings → System → Notifications.")
+              "\\" + aumid, "Enabled") == 0:
+        return False, (f"Windows has notifications muted for {app_label}. "
+                       "Re-enable it in Settings → System → Notifications.")
     return True, ""
 
 
@@ -133,6 +140,15 @@ def notification_status() -> dict:
     """
     system = platform.system()
     try:
+        if _desktop.enabled():
+            # The Electron shell shows the toast; Windows still honours the
+            # master switch and a per-app mute under the shell's own AUMID.
+            ok, reason = True, ""
+            if system == "Windows":
+                ok, reason = _windows_toasts_enabled(_desktop.APP_ID, "Namma Agent")
+            if ok and not _desktop.has_sink():
+                ok, reason = False, "The desktop app is not connected yet."
+            return {"available": ok, "reason": reason, "platform": "desktop"}
         if system == "Windows":
             ok, reason = _windows_toasts_enabled()
             return {"available": ok, "reason": reason, "platform": "windows"}
@@ -150,7 +166,8 @@ def notification_status() -> dict:
 
 
 def send_native_notification(title: str, body: str = "",
-                             url: str | None = None) -> bool:
+                             url: str | None = None,
+                             action: str | None = None) -> bool:
     """Show a native desktop notification. Returns True if one was dispatched.
 
     ``url`` is what the toast's Open button (and the toast body) launches;
@@ -166,6 +183,10 @@ def send_native_notification(title: str, body: str = "",
     system = platform.system()
     if not notification_status().get("available"):
         return False
+    if _desktop.enabled():
+        # Phase 9 W3: the shell owns toasts, so never spawn PowerShell here.
+        # ``action`` is the in-app route a click opens (None = just focus).
+        return _desktop.notify(title, body, action)
     try:
         if system == "Windows":
             open_url = (url or _app_url()).strip()

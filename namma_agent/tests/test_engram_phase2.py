@@ -7,7 +7,6 @@ is installed but not on PATH" fix).
 """
 from __future__ import annotations
 
-
 import pytest
 
 from namma_agent.core.engram import environment as envmod
@@ -116,8 +115,8 @@ def test_memory_settings_roundtrip(svc, monkeypatch, tmp_path):
     assert svc.engram.prefetch_enabled is False and svc.engram.prefetch_k == 3
     assert svc.engram.writer.min_chars == 40
     assert svc.engram.writer.budget_per_hour == 10
-    # persisted to config.local.yaml under memory.*
-    local = (tmp_path / "config.local.yaml").read_text(encoding="utf-8")
+    # persisted to the user config (data dir) under memory.*
+    local = cfg.user_config_file().read_text(encoding="utf-8")
     assert "prefetch: false" in local and "salience_min_chars: 40" in local
 
 
@@ -172,7 +171,8 @@ def test_hard_delete_gc_orphan_entities():
 
     store.hard_delete(a)
     g = store.graph()
-    assert {n["name"] for n in g["nodes"]} == {"user", "Namma"}  # shared node stays
+    # Phase 10: "user" resolves to the one self entity (shown as "You").
+    assert {n["name"] for n in g["nodes"]} == {"You", "Namma"}  # shared node stays
     assert len(g["edges"]) == 1
 
     store.hard_delete(b)

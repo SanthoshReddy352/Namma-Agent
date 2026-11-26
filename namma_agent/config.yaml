@@ -1,6 +1,13 @@
 # Namma Agent — Cloud-Only configuration
 # The brain is an API call: native Anthropic/Google/OpenAI, or any
 # OpenAI-compatible endpoint (opencode / LM Studio / Ollama / custom).
+#
+# This file holds the documented DEFAULTS and is never rewritten by the app.
+# Your own settings (everything Settings, the setup wizard and `namma config set`
+# change) live in ONE user config, data/user_config.yaml (or
+# $NAMMA_DATA_DIR/user_config.yaml; $NAMMA_USER_CONFIG overrides the path),
+# deep-merged on top of this file. An old config.local.yaml is migrated into it
+# once and renamed config.local.yaml.migrated.
 
 # ── Server (Phase 6 — self-hosting) ────────────────────────────────
 # Where the web UI/API listens. The default binds LOOPBACK ONLY — the app is
@@ -67,7 +74,7 @@ provider:
 # Configure each PROVIDER once — with its OWN API key variable — then list the
 # MODELS you want to switch between (each names a provider + a model id). Manage
 # both from the UI: Settings → Providers, then Settings → Models (writes
-# config.local.yaml, applies live). Models show in the picker at the top of every
+# user_config.yaml, applies live). Models show in the picker at the top of every
 # chat; switching mid-conversation starts a new session in the same chat.
 # providers:
 #   - id: opencode
@@ -112,7 +119,7 @@ provider:
 # names or whole toolset (category) names from Settings → Toolsets. Essential
 # for small-context local models; prefer the per-model `tools_allow` override
 # in `models:` above so only local brains are scoped. (`disabled` is written by
-# the Toolsets tab into config.local.yaml — don't hand-edit it here.)
+# the Toolsets tab into user_config.yaml — don't hand-edit it here.)
 # tools:
 #   allow: [file_ops, web, system, memory, update_todos]
 
@@ -202,7 +209,7 @@ checkpoints:
 # — never auto-applied. The WEEKLY run is off by default; the "Run review now"
 # button in Settings → System → Learning always works.
 # Everything below is editable from Settings → System → Learning (writes
-# config.local.yaml, starts/stops the runner live) — no need to hand-edit here.
+# user_config.yaml, starts/stops the runner live) — no need to hand-edit here.
 # data/self_review/ holds YOUR report, snapshots and proposals: local-only state,
 # never committed and never bundled into an install.
 self_review:
@@ -245,14 +252,25 @@ conversation:
   # after which a context-aware "still working" line is spoken on long tasks.
   progress_delays_s: [4.0, 12.0, 25.0]
   max_history_turns: 12
-  tool_loop_limit: 0              # 0 = UNLIMITED tool steps (use the Stop button to halt); >0 = hard cap
+  tool_loop_limit: 40             # hard cap on tool steps per turn (0 = unlimited; the Stop button always works)
   # Cap on EACH tool result fed back into the model's context, in characters
-  # (0 = unlimited). Protects small-context models from one big document read
-  # overflowing the whole window; the model is told the result was truncated so
-  # it can re-query narrower. Prefer the per-model override in `models:` so only
-  # local brains are capped (~8000 chars ≈ 2K tokens is a good local value).
-  tool_result_max_chars: 0
-  memory_nudge_every: 6            # remind the model to curate memory every N exchanges (0=off)
+  # (0 = unlimited). Every result stays in the context for the rest of the turn,
+  # so one uncapped 200K-char file read is re-sent on every later step. The
+  # overflow is saved to <data>/tool_outputs/ and the model is told the path so
+  # it can page through it with read_file offset/max_chars. Small local brains:
+  # use the per-model override in `models:` (~8000 chars ≈ 2K tokens).
+  tool_result_max_chars: 24000
+  # Per-turn token budget (0 = off). Once a turn's billable tokens (fresh input +
+  # cache writes + output; cache reads excluded) reach it, the loop stops before
+  # the next tool round and says so. Every model call — incl. background work —
+  # is logged per request (Settings → Status → "Every model call").
+  turn_token_budget: 0
+  # In-turn context budget: before each model call, once the prompt passes this
+  # fraction of the model's context window, old tool outputs are cleared first
+  # and, if still over, earlier history is folded into a summary (0 = off).
+  # A model profile can state its window with `context_window:` (tokens);
+  # otherwise it is guessed from the model id.
+  context_fraction: 0.6
   # Rolling context compaction: when a chat outgrows max_history_turns, a running
   # summary of the evicted part is maintained (background, provider chain) and
   # injected into every prompt — the model never silently loses the middle of a
@@ -265,6 +283,18 @@ conversation:
   default_mode: agent             # 'agent' (all tools/skills) or 'chat' (pure conversation)
   auto_approve: false             # Auto mode: run destructive tools (shell etc.) without asking permission
 
+# ── Delegation (sub-agents) ───────────────────────────────────────
+# delegate_task hands work to focused sub-agents: one goal, or tasks[] fanned
+# out in parallel; role 'orchestrator' lets a child split its work once more
+# (its children are always leaves). Children never get destructive tools and
+# untrusted senders can't delegate. background_task runs one sub-agent on a
+# bounded pool and posts its report into the chat when it finishes. Runs show
+# above the message bar (cancel there) and at /api/runs.
+delegation:
+  concurrency: 3            # children of one delegate_task call running at once
+  background_workers: 2     # background tasks running at once (more wait queued)
+  summary_chars: 6000       # a child's report is clipped (and flagged) past this
+
 # ── Voice ──────────────────────────────────────────────────────────
 # Voice is 100% browser-native (Web Speech API): the UI reads answers aloud and
 # the mic dictates input. The backend produces no audio and has no STT — there is
@@ -272,7 +302,8 @@ conversation:
 
 # ── Database ───────────────────────────────────────────────────────
 database:
-  path: data/namma_agent.db
+  # path: data/namma_agent.db   # default: <data dir>/namma_agent.db, so the DB
+  #                             # (and the vault + memory beside it) follow $NAMMA_DATA_DIR
 
 # ── Security tools (active scanning — OFF by default) ──────────────
 # Enable only on networks you are authorized to test. Targets must fall
@@ -382,7 +413,7 @@ security:
 
 # ── MCP servers (optional — external Model Context Protocol tools) ──
 # Each server's tools appear as mcp_<server>_<tool> in the registry.
-# Servers you actually run belong in config.local.yaml (Settings → MCP writes it),
+# Servers you actually run belong in user_config.yaml (Settings → MCP writes it),
 # not here — this file is the checked-in default and must not carry machine paths.
 # mcp:
 #   servers:
@@ -400,7 +431,7 @@ security:
 # learning, and a persistent host model (OS/drives/folders/installed tools).
 # All memory model calls use the model YOU picked in Settings (the provider
 # chain) — never a hardcoded one. Manage everything from Settings → Memory
-# (writes config.local.yaml, applies live); values below are optional tuning.
+# (writes user_config.yaml, applies live); values below are optional tuning.
 # An external memory MCP server (e.g. Cognee) can still be attached as a plain
 # plugin under mcp.servers — it is additive, never load-bearing.
 # Vector recall IS on by default (below) — the installers provision the model.

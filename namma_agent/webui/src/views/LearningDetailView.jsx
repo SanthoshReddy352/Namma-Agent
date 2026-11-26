@@ -1,9 +1,11 @@
 import { Suspense, lazy, useEffect, useRef, useState } from "react";
 import { useNavigate, useOutletContext, useParams } from "react-router-dom";
+import Dialog from "../components/ui/Dialog.jsx";
 import {
   deleteLearning, deleteTeachingPreference, getLearning, learningModuleSession,
   learningPathSession, updateLearningPlan,
 } from "../api.js";
+import { IconChevronLeft, IconX } from "@tabler/icons-react";
 
 // React Flow is the heaviest dependency in the bundle — load its chunk only
 // when someone actually switches to the Flow view.
@@ -127,16 +129,16 @@ export default function LearningDetailView() {
 
   return (
     <>
-      <header className="flex items-center justify-between px-6 h-12 border-b border-line dark:border-night-line">
-        <div className="flex items-center gap-2 text-[13px] text-ink-faint dark:text-night-faint min-w-0">
+      <header className="flex items-center justify-between px-6 h-12 border-b border-border">
+        <div className="flex items-center gap-2 text-sm text-fg-subtle min-w-0">
           <button onClick={() => navigate("/learning")} className="grid place-items-center h-6 w-6 rounded-full hover:bg-paper-sink dark:hover:bg-night-panel shrink-0">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6" /></svg>
+            <IconChevronLeft size={16} stroke={1.8} aria-hidden="true" />
           </button>
-          <button onClick={() => navigate("/learning")} className="hover:text-ink dark:hover:text-night-ink shrink-0">Learning Room</button>
+          <button onClick={() => navigate("/learning")} className="hover:text-fg shrink-0">Learning Room</button>
           <span>/</span>
-          <span className="text-ink dark:text-night-ink truncate">{topic.title}</span>
+          <span className="text-fg truncate">{topic.title}</span>
         </div>
-        <button onClick={removeTopic} className="text-[13px] text-ink-faint hover:text-brand-deep">Delete topic</button>
+        <button onClick={removeTopic} className="text-sm text-ink-faint hover:text-brand-deep">Delete topic</button>
       </header>
 
       <main className="flex-1 overflow-y-auto px-6 py-8">
@@ -146,17 +148,17 @@ export default function LearningDetailView() {
             <div className="flex flex-col sm:flex-row sm:items-end sm:justify-between gap-4">
               <div className="min-w-0">
                 <h1 className="font-serif text-3xl truncate">{topic.title}</h1>
-                <div className="text-[13px] text-ink-soft dark:text-night-faint capitalize mt-1">{topic.depth} depth</div>
+                <div className="text-sm text-fg-muted capitalize mt-1">{topic.depth} depth</div>
               </div>
               <div className="shrink-0 flex items-center gap-2">
                 <button onClick={openPathChat}
                         title="Ask about the path, reshape it, or set standing teaching preferences"
-                        className="px-4 py-2 rounded-full border border-line dark:border-night-line text-[14px] font-medium text-ink-soft dark:text-night-ink hover:border-brand hover:text-brand-deep transition inline-flex items-center gap-1.5">
+                        className="px-4 py-2 rounded-full border border-border text-base font-medium text-fg-soft hover:border-brand hover:text-brand-deep transition inline-flex items-center gap-1.5">
                   <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-9 8.4 8.5 8.5 0 0 1-3.4-.7L3 21l1.8-5.6a8.38 8.38 0 0 1-.8-3.9 8.5 8.5 0 0 1 8.5-8.5 8.38 8.38 0 0 1 8.5 8.5Z" /></svg>
                   Path chat
                 </button>
                 <button onClick={continueLearning} disabled={building}
-                        className="px-4 py-2 rounded-full bg-brand text-white hover:bg-brand-deep text-[14px] font-medium disabled:opacity-60 inline-flex items-center gap-2">
+                        className="px-4 py-2 rounded-full bg-brand text-white hover:bg-brand-deep text-base font-medium disabled:opacity-60 inline-flex items-center gap-2">
                   {building && <Spinner />}
                   {building ? "Building…" : plan.length ? (prog.done ? "Continue learning" : "Start learning") : "Build my path"}
                 </button>
@@ -167,7 +169,7 @@ export default function LearningDetailView() {
                 <div className="flex-1 h-2 rounded-full bg-paper-sink dark:bg-night overflow-hidden">
                   <div className="h-full bg-brand rounded-full transition-all duration-500" style={{ width: `${pct}%` }} />
                 </div>
-                <div className="text-[12.5px] text-ink-faint dark:text-night-faint shrink-0 tabular-nums">
+                <div className="text-sm text-fg-subtle shrink-0 tabular-nums">
                   {prog.done || 0} / {prog.total} modules · {pct}%
                 </div>
               </div>
@@ -175,7 +177,7 @@ export default function LearningDetailView() {
           </div>
 
           {/* Learning path */}
-          <section className="rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel p-5">
+          <section className="rounded-2xl border border-border bg-surface-raised p-5">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <h2 className="font-medium">Learning path</h2>
@@ -183,9 +185,9 @@ export default function LearningDetailView() {
               </div>
               {plan.length > 0 && !building && (
                 <div className="flex items-center gap-3">
-                  <button onClick={() => setModifying(true)} className="text-[13px] text-brand-deep hover:underline">Modify my path</button>
+                  <button onClick={() => setModifying(true)} className="text-sm text-brand-deep hover:underline">Modify my path</button>
                   {view === "list" && (
-                    <button onClick={() => setEditing((e) => !e)} className="text-[13px] text-ink-soft dark:text-night-faint hover:text-ink dark:hover:text-night-ink">
+                    <button onClick={() => setEditing((e) => !e)} className="text-sm text-fg-muted hover:text-fg">
                       {editing ? "Done" : "Reorder"}
                     </button>
                   )}
@@ -194,11 +196,11 @@ export default function LearningDetailView() {
             </div>
 
             {building ? (
-              <div className="flex items-center gap-3 text-[13.5px] text-ink-soft dark:text-night-faint py-2">
+              <div className="flex items-center gap-3 text-base text-fg-muted py-2">
                 <Spinner /> Designing your learning path… this takes a few seconds.
               </div>
             ) : plan.length === 0 ? (
-              <div className="text-[13.5px] text-ink-soft dark:text-night-faint">
+              <div className="text-base text-fg-muted">
                 No path yet. Click <span className="font-medium">Build my path</span> and I'll design a
                 module-by-module plan for you.
               </div>
@@ -206,7 +208,7 @@ export default function LearningDetailView() {
               <PlanEditor plan={plan} onSave={savePlan} onCancel={() => setEditing(false)} />
             ) : view === "flow" ? (
               <Suspense fallback={
-                <div className="h-[440px] rounded-2xl border border-line dark:border-night-line grid place-items-center text-[13px] text-ink-faint dark:text-night-faint">
+                <div className="h-[440px] rounded-2xl border border-border grid place-items-center text-sm text-fg-subtle">
                   Loading canvas…
                 </div>
               }>
@@ -237,24 +239,21 @@ export default function LearningDetailView() {
 function ModifyModal({ onClose, onSubmit }) {
   const [notes, setNotes] = useState("");
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-      <div className="w-[480px] max-w-full rounded-2xl bg-paper-panel dark:bg-night-panel border border-line dark:border-night-line shadow-pop p-5 animate-rise"
-           onClick={(e) => e.stopPropagation()}>
-        <h3 className="font-serif text-lg mb-1">Modify the path</h3>
-        <p className="text-[13px] text-ink-soft dark:text-night-faint mb-3">
+    <Dialog onClose={onClose} size="md" labelledBy="modify-path-title" className="p-5">
+        <h3 className="font-serif text-lg mb-1" id="modify-path-title">Modify the path</h3>
+        <p className="text-sm text-fg-muted mb-3">
           Tell me what to change — add or drop a module, go deeper somewhere, reorder, adjust the pace.
         </p>
         <textarea autoFocus value={notes} onChange={(e) => setNotes(e.target.value)} rows={4}
                   onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) onSubmit(notes.trim()); }}
                   placeholder="e.g. Add a module on real-world examples, and split module 3 into two."
-                  className="w-full rounded-lg px-3 py-2 bg-paper-soft dark:bg-night border border-line dark:border-night-line outline-none focus:border-brand resize-none" />
+                  className="w-full rounded-lg px-3 py-2 bg-surface-sunken border border-border outline-none focus:border-brand resize-none" />
         <div className="flex justify-end gap-2 mt-4">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg text-ink-soft dark:text-night-ink hover:bg-paper-soft dark:hover:bg-night-soft">Cancel</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg text-fg-soft hover:bg-surface-hover">Cancel</button>
           <button onClick={() => onSubmit(notes.trim())} disabled={!notes.trim()}
                   className="px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep disabled:opacity-50">Rebuild path</button>
         </div>
-      </div>
-    </div>
+    </Dialog>
   );
 }
 
@@ -265,16 +264,16 @@ function ViewToggle({ view, onChange }) {
     const active = view === id;
     return (
       <button key={id} onClick={() => onChange(id)} title={`${label} view`}
-              className={`relative z-10 flex items-center gap-1.5 px-3 py-1 rounded-full text-[12.5px] font-medium transition-colors ${
-                active ? "text-ink dark:text-night-ink" : "text-ink-faint dark:text-night-faint hover:text-ink-soft dark:hover:text-night-ink"}`}>
+              className={`relative z-10 flex items-center gap-1.5 px-3 py-1 rounded-full text-sm font-medium transition-colors ${
+                active ? "text-fg" : "text-fg-subtle hover:text-fg-soft"}`}>
         {icon}
         {label}
       </button>
     );
   };
   return (
-    <div className="relative inline-flex items-center rounded-full bg-paper-sink dark:bg-night p-0.5 border border-line dark:border-night-line">
-      <span className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full bg-paper-panel dark:bg-night-soft shadow-soft transition-transform duration-200 ${
+    <div className="relative inline-flex items-center rounded-full bg-paper-sink dark:bg-night p-0.5 border border-border">
+      <span className={`absolute top-0.5 bottom-0.5 w-[calc(50%-2px)] rounded-full bg-surface shadow-soft transition-transform duration-200 ${
         view === "flow" ? "translate-x-full" : "translate-x-0"}`} style={{ left: 2 }} />
       {seg("list", "List", (
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /></svg>
@@ -298,23 +297,23 @@ function PathFlow({ plan, currentId, onOpen }) {
   const color = (m) => m.status === "done"
     ? "bg-emerald-500 border-emerald-500 text-white"
     : m.id === currentId || m.status === "current"
-      ? "bg-brand border-brand text-white ring-4 ring-brand-wash dark:ring-night-soft"
-      : "bg-paper dark:bg-night border-line dark:border-night-line text-ink-faint dark:text-night-faint";
+      ? "bg-brand border-brand text-white ring-4 ring-accent-wash"
+      : "bg-bg border-border text-fg-subtle";
   return (
     <ol className="relative">
       {plan.map((m, i) => (
         <li key={m.id} className="relative pl-10 pb-1">
-          {i < plan.length - 1 && <span className="absolute left-[15px] top-7 bottom-0 w-px bg-line dark:bg-night-line" />}
+          {i < plan.length - 1 && <span className="absolute left-[15px] top-7 bottom-0 w-px bg-border" />}
           <button onClick={() => onOpen(m)}
-                  className="group w-full text-left flex items-start gap-3 rounded-xl px-2 py-2 -ml-2 hover:bg-paper-soft dark:hover:bg-night-soft transition">
-            <span className={`absolute left-0 mt-0.5 h-8 w-8 grid place-items-center rounded-full border text-[12px] font-semibold ${color(m)}`}>
+                  className="group w-full text-left flex items-start gap-3 rounded-xl px-2 py-2 -ml-2 hover:bg-surface-hover transition">
+            <span className={`absolute left-0 mt-0.5 h-8 w-8 grid place-items-center rounded-full border text-xs font-semibold ${color(m)}`}>
               {m.status === "done" ? "✓" : i + 1}
             </span>
             <span className="flex-1 min-w-0">
-              <span className="block text-[14px] font-medium truncate group-hover:text-brand-deep">{m.title}</span>
-              {m.summary && <span className="block text-[12.5px] text-ink-faint dark:text-night-faint line-clamp-2">{m.summary}</span>}
+              <span className="block text-base font-medium truncate group-hover:text-brand-deep">{m.title}</span>
+              {m.summary && <span className="block text-sm text-fg-subtle line-clamp-2">{m.summary}</span>}
             </span>
-            <span className="text-[11px] capitalize text-ink-faint dark:text-night-faint mt-1 shrink-0">{m.status || "todo"}</span>
+            <span className="text-2xs capitalize text-fg-subtle mt-1 shrink-0">{m.status || "todo"}</span>
           </button>
         </li>
       ))}
@@ -335,11 +334,11 @@ function PlanEditor({ plan, onSave, onCancel }) {
   return (
     <div className="space-y-2">
       {mods.map((m, i) => (
-        <div key={m.id} className="rounded-xl border border-line dark:border-night-line p-2.5 bg-paper-soft dark:bg-night">
+        <div key={m.id} className="rounded-xl border border-border p-2.5 bg-surface-sunken">
           <div className="flex items-center gap-2">
-            <span className="text-[12px] text-ink-faint w-5 text-center shrink-0">{i + 1}</span>
+            <span className="text-xs text-ink-faint w-5 text-center shrink-0">{i + 1}</span>
             <input value={m.title} onChange={(e) => set(i, "title", e.target.value)} placeholder="Module title"
-                   className="flex-1 bg-transparent text-[14px] font-medium outline-none border-b border-transparent focus:border-brand-soft" />
+                   className="flex-1 bg-transparent text-base font-medium outline-none border-b border-transparent focus:border-brand-soft" />
             <div className="flex items-center gap-0.5 shrink-0 text-ink-faint">
               <IconBtn onClick={() => move(i, -1)} title="Up"><path d="m18 15-6-6-6 6" /></IconBtn>
               <IconBtn onClick={() => move(i, 1)} title="Down"><path d="m6 9 6 6 6-6" /></IconBtn>
@@ -347,15 +346,15 @@ function PlanEditor({ plan, onSave, onCancel }) {
             </div>
           </div>
           <input value={m.summary} onChange={(e) => set(i, "summary", e.target.value)} placeholder="One-line summary"
-                 className="w-full mt-1 bg-transparent text-[12.5px] text-ink-soft dark:text-night-faint outline-none pl-7" />
+                 className="w-full mt-1 bg-transparent text-sm text-fg-muted outline-none pl-7" />
         </div>
       ))}
       <div className="flex items-center justify-between pt-1">
-        <button onClick={add} className="text-[13px] text-brand-deep hover:underline">+ Add module</button>
+        <button onClick={add} className="text-sm text-brand-deep hover:underline">+ Add module</button>
         <div className="flex gap-2">
-          <button onClick={onCancel} className="px-3 py-1.5 rounded-lg text-[13px] text-ink-soft hover:bg-paper-soft dark:hover:bg-night-soft">Cancel</button>
+          <button onClick={onCancel} className="px-3 py-1.5 rounded-lg text-sm text-ink-soft hover:bg-surface-hover">Cancel</button>
           <button onClick={() => onSave(mods.filter((m) => m.title.trim()))}
-                  className="px-3 py-1.5 rounded-lg text-[13px] bg-brand text-white hover:bg-brand-deep">Save path</button>
+                  className="px-3 py-1.5 rounded-lg text-sm bg-brand text-white hover:bg-brand-deep">Save path</button>
         </div>
       </div>
     </div>
@@ -369,8 +368,8 @@ function PlanEditor({ plan, onSave, onCancel }) {
 // even on a brand-new topic.
 function Tile({ label, icon, className = "", children }) {
   return (
-    <section className={`rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel p-5 ${className}`}>
-      <div className="flex items-center gap-2 mb-3.5 text-[11px] font-semibold uppercase tracking-wider text-ink-faint dark:text-night-faint">
+    <section className={`rounded-2xl border border-border bg-surface-raised p-5 ${className}`}>
+      <div className="flex items-center gap-2 mb-3.5 text-2xs font-semibold uppercase tracking-wider text-fg-subtle">
         {icon}<span>{label}</span>
       </div>
       {children}
@@ -383,20 +382,20 @@ function Analytics({ insights, memory = [], preferences = [], onRemovePreference
   const artifacts = insights.artifacts || [];
   const strengths = insights.strengths || [];
   const gaps = insights.gaps || [];
-  const empty = "text-[13px] text-ink-faint dark:text-night-faint leading-relaxed";
+  const empty = "text-sm text-fg-subtle leading-relaxed";
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       {/* Understanding — the flagship tile */}
       <Tile label="Understanding" icon={<GaugeIcon />} className="sm:col-span-2 lg:col-span-2">
         <div className="flex items-center gap-5">
           <ScoreRing value={score} size={88} />
-          <div className="text-[13.5px] text-ink-soft dark:text-night-faint leading-relaxed">
+          <div className="text-base text-fg-muted leading-relaxed">
             {score == null ? "I'll gauge this as we go — from your answers and the questions you ask."
               : score >= 75 ? "Strong grasp so far." : score >= 45 ? "Getting there — a few gaps to close." : "Early days — we'll build it up together."}
           </div>
         </div>
         {insights.analysis && (
-          <p className="mt-4 pt-4 border-t border-line dark:border-night-line text-[13.5px] text-ink-soft dark:text-night-ink leading-relaxed">
+          <p className="mt-4 pt-4 border-t border-border text-base text-fg-soft leading-relaxed">
             {insights.analysis}
           </p>
         )}
@@ -408,13 +407,13 @@ function Analytics({ insights, memory = [], preferences = [], onRemovePreference
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5">
             {artifacts.map((a, i) => (
               <a key={i} href={a.url} target="_blank" rel="noreferrer noopener"
-                 className="group block rounded-xl border border-line dark:border-night-line overflow-hidden hover:shadow-soft hover:-translate-y-0.5 transition" title={a.title || a.kind}>
+                 className="group block rounded-xl border border-border overflow-hidden hover:shadow-soft hover:-translate-y-0.5 transition" title={a.title || a.kind}>
                 {a.kind === "diagram" || a.kind === "image" ? (
                   <img src={a.url} alt={a.title || a.kind} loading="lazy" className="w-full h-24 object-cover bg-white" />
                 ) : (
-                  <div className="h-24 grid place-items-center text-[12px] font-medium text-brand-deep bg-brand-wash dark:bg-night-soft capitalize">{a.kind}</div>
+                  <div className="h-24 grid place-items-center text-xs font-medium text-brand-deep bg-accent-wash capitalize">{a.kind}</div>
                 )}
-                <div className="px-2.5 py-1.5 text-[11px] truncate text-ink-soft dark:text-night-faint">{a.title || a.kind}</div>
+                <div className="px-2.5 py-1.5 text-2xs truncate text-fg-muted">{a.title || a.kind}</div>
               </a>
             ))}
           </div>
@@ -426,7 +425,7 @@ function Analytics({ insights, memory = [], preferences = [], onRemovePreference
         {strengths.length ? (
           <div className="flex flex-wrap gap-1.5">
             {strengths.map((s, i) => (
-              <span key={i} className="px-2.5 py-1 rounded-lg text-[12.5px] bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">{s}</span>
+              <span key={i} className="px-2.5 py-1 rounded-lg text-sm bg-emerald-50 dark:bg-emerald-500/10 text-emerald-700 dark:text-emerald-300">{s}</span>
             ))}
           </div>
         ) : <div className={empty}>None noted yet.</div>}
@@ -437,7 +436,7 @@ function Analytics({ insights, memory = [], preferences = [], onRemovePreference
         {gaps.length ? (
           <div className="flex flex-wrap gap-1.5">
             {gaps.map((s, i) => (
-              <span key={i} className="px-2.5 py-1 rounded-lg text-[12.5px] bg-brand-wash dark:bg-night-soft text-brand-deep">{s}</span>
+              <span key={i} className="px-2.5 py-1 rounded-lg text-sm bg-accent-wash text-brand-deep">{s}</span>
             ))}
           </div>
         ) : <div className={empty}>Nothing flagged.</div>}
@@ -446,7 +445,7 @@ function Analytics({ insights, memory = [], preferences = [], onRemovePreference
       {/* What I remember */}
       <Tile label="What I remember" icon={<BookmarkIcon />} className="sm:col-span-2 lg:col-span-2">
         {memory.length ? (
-          <ul className="space-y-2 text-[13px] text-ink-soft dark:text-night-faint max-h-52 overflow-y-auto pr-1">
+          <ul className="space-y-2 text-sm text-fg-muted max-h-52 overflow-y-auto pr-1">
             {memory.map((m) => (
               <li key={m.id} className="flex gap-2.5">
                 <span className="mt-[7px] h-1.5 w-1.5 shrink-0 rounded-full bg-brand-soft" />
@@ -460,16 +459,16 @@ function Analytics({ insights, memory = [], preferences = [], onRemovePreference
       {/* Teaching preferences — full-width strip */}
       {preferences.length > 0 && (
         <Tile label="Teaching preferences" icon={<SlidersIcon />} className="sm:col-span-2 lg:col-span-4">
-          <p className="-mt-1 mb-3 text-[12.5px] text-ink-faint dark:text-night-faint">
+          <p className="-mt-1 mb-3 text-sm text-fg-subtle">
             Standing instructions you've set — applied in every module. Add more in the Path chat.
           </p>
           <div className="flex flex-wrap gap-2">
             {preferences.map((p, i) => (
-              <span key={i} className="group inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 bg-paper-soft dark:bg-night border border-line dark:border-night-line text-[12.5px]">
+              <span key={i} className="group inline-flex items-center gap-2 rounded-full pl-3.5 pr-2 py-1.5 bg-surface-sunken border border-border text-sm">
                 {p}
                 <button onClick={() => onRemovePreference?.(i)} title="Remove preference"
                         className="opacity-50 group-hover:opacity-100 text-ink-faint hover:text-brand-deep">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                  <IconX size={12} stroke={2.4} aria-hidden="true" />
                 </button>
               </span>
             ))}
@@ -512,7 +511,7 @@ const SlidersIcon = () => (<svg {..._ic}><path d="M4 21v-7M4 10V3M12 21v-9M12 8V
 
 function IconBtn({ onClick, title, children }) {
   return (
-    <button onClick={onClick} title={title} className="h-6 w-6 grid place-items-center rounded hover:bg-paper-sink dark:hover:bg-night-soft hover:text-ink dark:hover:text-night-ink">
+    <button aria-label={title} onClick={onClick} title={title} className="h-6 w-6 grid place-items-center rounded hover:bg-surface-press hover:text-fg">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{children}</svg>
     </button>
   );

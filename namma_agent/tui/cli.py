@@ -142,7 +142,7 @@ def build_parser() -> argparse.ArgumentParser:
     c_sub.add_parser("edit", help="Open the config in $EDITOR")
     c_get = c_sub.add_parser("get", help="Read one dotted key, e.g. assistant.name")
     c_get.add_argument("key")
-    c_set = c_sub.add_parser("set", help="Write one dotted key to the local overlay")
+    c_set = c_sub.add_parser("set", help="Write one dotted key to the user config")
     c_set.add_argument("key")
     c_set.add_argument("value", nargs="+")
     config.set_defaults(func=cmd_config)
@@ -594,7 +594,7 @@ def _config_paths() -> list[tuple[str, str]]:
     base = _config_path()
     return [
         ("config", os.path.normpath(str(base))),
-        ("local overlay", os.path.normpath(str(_local_overrides_path(base)))),
+        ("user config", os.path.normpath(str(_local_overrides_path(base)))),
         ("data", os.path.normpath(os.path.expanduser("~/.namma_agent"))),
         ("skins", os.path.normpath(os.path.expanduser("~/.namma_agent/skins"))),
         ("logs", os.path.abspath("logs/namma_agent.log")),
@@ -612,7 +612,7 @@ def _dig(data: Any, dotted: str) -> Any:
 
 
 def _config_set(dotted: str, value: str) -> str:
-    """Write a dotted key into ``config.local.yaml``, coercing the string value."""
+    """Write a dotted key into ``user_config.yaml``, coercing the string value."""
     return _config_set_value(dotted, _coerce(value))
 
 
@@ -789,7 +789,6 @@ def cmd_memory(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     from namma_agent.tui import theme
-
     from namma_agent.version import __version__
 
     service = build_service(args)

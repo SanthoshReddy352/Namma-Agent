@@ -50,6 +50,50 @@ def _apply_server_config(config: dict) -> None:
 # Set by _serve() if uvicorn/create_app raises on the background thread, so main()
 # can surface the *real* reason instead of a silent "did not come up in time".
 _serve_error: BaseException | None = None
+# The native window, once created — lets a second launch bring THIS one forward
+# (POST /api/desktop/focus) instead of opening a duplicate window + tray icon.
+_WINDOW = None
+
+
+def focus_window() -> bool:
+    """Show/restore the running native window. False when there is none (headless
+    server, browser fallback) so the caller can open one instead."""
+    window = _WINDOW
+    if window is None:
+        # Phase 9 W3: under the Electron shell the window is the shell's.
+        from namma_agent.core import desktop
+        return desktop.command("focus") if desktop.enabled() else False
+    try:
+        with suppress(Exception):
+            window.restore()
+        window.show()
+        with suppress(Exception):
+            window.on_top = True
+            window.on_top = False
+        return True
+    except Exception as exc:  # noqa: BLE001
+        logger.info("[app] could not focus the existing window: %s", exc)
+        return False
+
+
+def _request_focus() -> bool:
+    """Ask an already-running instance to bring its window forward."""
+    import json
+    import urllib.request
+
+    from namma_agent.config import auth_token
+
+    headers = {"Content-Type": "application/json"}
+    token = auth_token(load_config())
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(f"{_URL}/api/desktop/focus", data=b"{}",
+                                 headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=3) as resp:
+            return bool(json.loads(resp.read().decode("utf-8") or "{}").get("focused"))
+    except Exception:  # noqa: BLE001 — older instance without the endpoint, etc.
+        return False
 
 # Brand window icon — the "sparkle" mark rendered from webui/public/logo.svg.
 # We ship a multi-res .ico for Windows and a 256px .png for GTK/Qt so the native
@@ -68,6 +112,24 @@ def _build_service() -> NammaAgentService:
     )
     logger.info("[app] starting Namma Agent v%s (log level=%s)", __version__, logger.level and __import__("logging").getLevelName(logger.level))
     return NammaAgentService(config=config)
+
+
+def _attach_desktop(service) -> bool:
+    """Phase 9 W3: under the Electron shell (``NAMMA_DESKTOP=1``) route desktop
+    events (``desktop_notify``, ``desktop_command``) onto the service's
+    process-wide broadcast, which every ``/ws`` client, the shell's main process
+    included, receives. No-op otherwise. Returns whether it attached."""
+    from namma_agent.core import desktop
+
+    broadcast = getattr(service, "broadcast", None)
+    if not desktop.enabled() or broadcast is None:
+        return False
+    desktop.set_sink(broadcast.publish)
+    shutdown = getattr(service, "shutdown", None)
+    if callable(shutdown):
+        desktop.start_parent_watchdog(lambda: shutdown(delay=0.1))
+    logger.info("[app] desktop shell mode: notifications and commands go to the event bus")
+    return True
 
 
 def _serve(service: NammaAgentService) -> None:
@@ -418,7 +480,7 @@ def _start_tray(service: NammaAgentService, window, title: str):
                       status_getter=getattr(service, "comms_status", None))
 
 
-def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
+def _launch_window(service: Optional[NammaAgentService], server_thread: Optional[threading.Thread],
                    healthy: bool = True) -> None:
     """Open the native desktop window; fall back to a browser tab only if no GUI
     toolkit is available at all. When ``healthy`` is False the window shows a
@@ -436,7 +498,7 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
 
     _patch_pywebview_for_windows()  # copy/paste + live title on WebView2 (no-op elsewhere)
 
-    title = assistant_name(service.config)
+    title = assistant_name(service.config if service is not None else load_config())
     _set_windows_app_id(title)
     icon = _icon_path()
 
@@ -456,9 +518,13 @@ def _launch_window(service: NammaAgentService, server_thread: threading.Thread,
         else:
             detail = f"{type(_serve_error).__name__}: {_serve_error}" if _serve_error else ""
             window = webview.create_window(title, html=_error_html(detail), **win_kwargs)
+        global _WINDOW
+        _WINDOW = window
         tray = None
         try:
-            tray = _start_tray(service, window, title)
+            # No tray for a window attached to another process's backend — that
+            # process owns the gateway the tray would report on.
+            tray = _start_tray(service, window, title) if service is not None else None
             # private_mode=False keeps a disk cache between launches → faster
             # warm starts and smoother navigation (esp. on Windows/WebView2).
             webview.start(
@@ -491,19 +557,26 @@ def _open_browser(server_thread: Optional[threading.Thread]) -> None:
 
 
 def main(server_only: bool = False) -> None:
-    service = _build_service()
-    _apply_server_config(service.config)
-
-    # If a previous instance is already serving on our port, REUSE it rather than
-    # starting a second uvicorn (the duplicate bind fails with SystemExit and the
-    # window then shows 'refused to connect'). Just open the window onto the running
-    # backend. With this + the provider hard-timeout, a relaunch is reliable.
+    # Single instance: resolve the port from config ALONE and check for a running
+    # backend BEFORE building the service. Building it first started a duplicate
+    # Telegram poller, MCP subprocesses and runner threads, and then a second
+    # window + tray icon on top of the first.
+    _apply_server_config(load_config())
     if _server_already_running():
         logger.info("[app] backend already running at %s — reusing it", _URL)
         if server_only:
             return
-        _launch_window(service, None, healthy=True)
+        if _request_focus():
+            logger.info("[app] brought the existing window to the front")
+            return
+        # The running backend has no window of ours (headless --server instance,
+        # or an older build without the focus endpoint): attach a window to it.
+        _launch_window(None, None, healthy=True)
         return
+
+    service = _build_service()
+    _apply_server_config(service.config)
+    _attach_desktop(service)
 
     server_thread = threading.Thread(target=_serve, args=(service,), daemon=True)
     server_thread.start()

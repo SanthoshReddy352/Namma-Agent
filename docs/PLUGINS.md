@@ -15,7 +15,7 @@ the whole integration: no special-cased memory backend, no proxying in the
 Memory tab, no startup dependency.
 
 ```yaml
-# config.local.yaml — example: the old self-hosted Cognee container as a plugin
+# data/user_config.yaml — example: the old self-hosted Cognee container as a plugin
 mcp:
   servers:
     - name: cognee
@@ -24,9 +24,8 @@ mcp:
                 -v, cognee-data:/cognee-data, cognee/cognee-mcp:main]
 ```
 
-Container setup, env files, and the hard-won troubleshooting for Cognee
-specifically live in [COGNEE.md](COGNEE.md) (historical, still accurate for
-running the container).
+Cognee-specific container setup notes were retired with the Cognee integration
+(2026-07-15); see git history if you need them.
 
 ## Importing an old Cognee graph
 

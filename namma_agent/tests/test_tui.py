@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import pytest
 
-from namma_agent.tui import art, banner, render, theme
 from namma_agent.tui import app as tui_app
+from namma_agent.tui import art, banner, render, theme
 from namma_agent.tui import cli as tui_cli
 
 

@@ -13,7 +13,7 @@ Skills authored for Namma Agent (e.g. `creating-simulations`, `deep-research`,
 `teaching-with-examples`) are original to this project.
 
 The Hermes **God Mode** skill is intentionally **not** ported — see the "Declined"
-section of `Namma_Agent_Port.md`.
+section of [`PROGRESS.md`](../../PROGRESS.md).
 
 ## Terminal UI
 

@@ -90,7 +90,7 @@ ollama pull all-minilm
 
 On a roomier box, `nomic-embed-text` (274 MB, 768-dim, ~500 MB resident)
 retrieves better — pull it and set `memory.embeddings.model` in
-`namma_agent/config.local.yaml`.
+`data/user_config.yaml` (or Settings → Memory).
 
 Add your AI key and restart:
 

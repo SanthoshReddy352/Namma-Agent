@@ -97,6 +97,11 @@ data/*.json
 # data. It was tracked, so `git archive` shipped one machine's report + pending
 # proposals into every fresh install. Never commit it.
 data/self_review/
+# Checkpoint snapshots (core/checkpoints.py) hold copies of the USER's files and
+# absolute paths — personal data. They were tracked by accident; never commit them.
+data/checkpoints/
+# Spilled over-long tool results (core/agent.py _spill_tool_output) — runtime data.
+data/tool_outputs/
 officecli-demo
 
 # Secrets backups (e.g. produced during an env-var migration)
@@ -108,6 +113,12 @@ officecli-demo
 # Must NEVER be committed/shipped: it was leaking a dev's `name: Aria` into installs.
 config.local.yaml
 namma_agent/config.local.yaml
+# Retired overlay after its one-shot migration, and the user config that replaced
+# it (Phase 2: ONE user config in the data dir). Personal settings — never commit.
+config.local.yaml.migrated
+namma_agent/config.local.yaml.migrated
+data/user_config.yaml
+data/user_config.yaml.tmp
 
 # Desktop installer / packaging build output
 installers/build/

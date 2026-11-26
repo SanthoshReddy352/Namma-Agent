@@ -17,8 +17,14 @@ from namma_agent.core.persona import load_persona
 from namma_agent.core.providers.base import LLMResponse, Provider, ToolCall
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.core.trust import (
-    UNTRUSTED_BEGIN, UNTRUSTED_END, channel_trust, get_message_trust,
-    guard_untrusted, normalize_trust, reset_message_trust, set_message_trust,
+    UNTRUSTED_BEGIN,
+    UNTRUSTED_END,
+    channel_trust,
+    get_message_trust,
+    guard_untrusted,
+    normalize_trust,
+    reset_message_trust,
+    set_message_trust,
     trust_map,
 )
 

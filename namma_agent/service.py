@@ -10,7 +10,10 @@ import threading
 from typing import Callable, Optional
 
 from namma_agent.config import (
-    assistant_name, configured_models, configured_providers, load_config,
+    assistant_name,
+    configured_models,
+    configured_providers,
+    load_config,
 )
 from namma_agent.core.agent import Agent, AgentResult
 from namma_agent.core.builtins import (
@@ -20,12 +23,14 @@ from namma_agent.core.builtins import (
     register_project_tools,
     register_skill_tools,
 )
-from namma_agent.core.events import fanout
+from namma_agent.core.events import Broadcaster, fanout
 from namma_agent.core.memory import Database
 from namma_agent.core.narration import NarrationEngine
 from namma_agent.core.persona import load_persona
 from namma_agent.core.providers import from_config
+from namma_agent.core.setup_service import SetupMixin
 from namma_agent.core.tools import ToolRegistry
+from namma_agent.core.usage import labeled as _labeled
 
 EmitFn = Callable[[str, dict], None]
 TokenFn = Callable[[str], None]
@@ -65,7 +70,7 @@ def _consolidation_summary(report: dict) -> str:
     return "Improved memory: " + ", ".join(parts) + "."
 
 
-class NammaAgentService:
+class NammaAgentService(SetupMixin):
     def __init__(
         self,
         config: Optional[dict] = None,
@@ -76,6 +81,12 @@ class NammaAgentService:
     ):
         import uuid as _uuid
         self._server_id = _uuid.uuid4().hex  # unique per process/boot (see info())
+        # Process-wide events for every connected UI (each WebSocket subscribes):
+        # e.g. sub-agent runs that outlive the turn that started them.
+        self.broadcast = Broadcaster()
+        # Visuals that failed to render in the browser, per chat (Phase 4).
+        self._render_errors: dict[str, list] = {}
+        self._render_lock = threading.Lock()
         # Serialises MCP mutations (reload / per-server enable) — they read-modify-
         # write self.config + rebuild self.mcp, so concurrent calls could lose updates.
         self._mcp_lock = threading.RLock()
@@ -119,7 +130,11 @@ class NammaAgentService:
         bridge_env()
 
         self.db = db or Database(db_path)
-        # Tools the user turned off in the Toolsets tab (config.local.yaml:
+        # Per-request usage log (core/usage.py): every model call — chat steps
+        # and background work alike — lands in this database's usage_log.
+        from namma_agent.core.usage import set_sink as _set_usage_sink
+        _set_usage_sink(self.db)
+        # Tools the user turned off in the Toolsets tab (user_config.yaml:
         # tools.disabled) are excluded from every turn and refused if called.
         disabled_tools = (self.config.get("tools") or {}).get("disabled") or []
         self.registry = registry or ToolRegistry(disabled=disabled_tools)
@@ -170,6 +185,9 @@ class NammaAgentService:
         # Exit tool: lets the agent close Namma Agent cleanly when the user says bye.
         if registry is None:
             self._register_exit_tool()
+            # Phase 5: setup mode's tools (providers, MCP, integrations, secrets).
+            from namma_agent.core.setup_tools import register_setup_tools
+            register_setup_tools(self.registry, self)
 
         # Voice: the backend produces NO audio. Short spoken lines (narration
         # acknowledgements) are emitted to the browser as `speak` events over the
@@ -190,13 +208,13 @@ class NammaAgentService:
         from namma_agent.core.engram import Engram
         self.engram = Engram(
             self.db, config=self.config,
-            provider_getter=lambda: self.provider_for(None),
+            provider_getter=lambda: _labeled(self.provider_for(None), "memory"),
             summarize_fn=lambda limit: self._summarize_pending(limit=limit),
             # L4 ties (design §5): reflection may draft a (disabled) skill from
             # repeated workflows; skills the user exercises reinforce related facts.
             skills_getter=lambda: self.skills,
             skill_usage_fn=self._skill_usage_since_last_run,
-            # Drafted skills start disabled, persisted to config.local.yaml
+            # Drafted skills start disabled, persisted to user_config.yaml
             # (skills.disabled) — a proposal survives restarts as a proposal.
             skill_disable_fn=lambda name: self.set_skill_enabled(name, False),
         )
@@ -213,7 +231,7 @@ class NammaAgentService:
 
             self.skill_capture = SkillCapture(
                 self.db, self.skills,
-                lambda messages: (self.provider_for(None)
+                lambda messages: (_labeled(self.provider_for(None), "skill_capture")
                                   .generate(messages, tools=None, stream=False)
                                   .content or ""),
                 config=self.config,
@@ -244,6 +262,9 @@ class NammaAgentService:
             # change the user approved can still be undone.
             checkpoints=self.checkpoints,
         )
+        self._apply_agent_tuning()
+        # The browser's render failures reach the model on the next turn.
+        self.agent.render_notes = self.take_render_errors
 
         # One-time: flow any legacy SQLite facts (e.g. what the installer wizard
         # collected before Engram existed) into the memory pipeline, then drop
@@ -253,6 +274,7 @@ class NammaAgentService:
         # Wave 4: delegate_task + persona tools need the live agent/provider/db.
         # Skipped when a registry is injected (tests provide their own minimal set).
         self._agent_tool_handles: dict = {}
+        self.delegation = None
         if registry is None:
             with self.registry.categorize("agent"):
                 self._agent_tool_handles = register_agent_tools(
@@ -263,7 +285,11 @@ class NammaAgentService:
                     # model profile), not the legacy `provider:` chain — which on
                     # a profile-only setup has no usable credentials and made
                     # summarization fail silently for every session.
-                    provider_getter=lambda: self.provider_for(None)) or {}
+                    provider_getter=lambda: self.provider_for(None),
+                    skills_getter=lambda: self.skills,
+                    publish=self.broadcast.publish, config=self.config) or {}
+        # Phase 3: the delegation runtime (runs, fan-out, cancellation tree).
+        self.delegation = self._agent_tool_handles.get("delegation")
 
         # Wave 5: messaging channels (Telegram/Discord). Outbound send is always
         # available; the Telegram *inbound* bridge spawns a background polling
@@ -406,18 +432,30 @@ class NammaAgentService:
 
     # -- mcp ---------------------------------------------------------------
 
-    @staticmethod
-    def _build_mcp(config: dict, registry):
+    def _build_mcp(self, config: dict, registry):
+        """Start the configured MCP servers. Phase 5: they connect in the
+        BACKGROUND (``mcp.async_connect``, default on) so a slow npx download or
+        Docker cold start never blocks startup; each status change is pushed to
+        the UI as an ``mcp_status`` event."""
         try:
             from namma_agent.mcp import MCPManager
 
             mcp = MCPManager.from_config(config)
-            mcp.register_into(registry)
+            mcp.on_change = self._mcp_status_changed
+            if ((config or {}).get("mcp") or {}).get("async_connect", True):
+                mcp.start_async(registry)
+            else:
+                mcp.register_into(registry)
             return mcp
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
             logger.warning("[service] MCP setup failed: %s", exc)
             return None
+
+    def _mcp_status_changed(self, name: str, status: dict) -> None:
+        broadcast = getattr(self, "broadcast", None)
+        if broadcast is not None:
+            broadcast.publish("mcp_status", {"server": name, **status})
 
     def mcp_detail(self) -> dict:
         """MCP state for the Settings → MCP tabs: the raw config (for the Config
@@ -455,11 +493,20 @@ class NammaAgentService:
             name = cfg.get("name") or "unnamed"
             seen.add(name)
             client = clients.get(name)
+            status = self.mcp.status_of(name) if self.mcp else {}
+            if not cfg.get("enabled", True):
+                status = {"state": "disabled"}
             servers.append({
                 "name": name,
                 "command": cfg.get("command") or [],
+                "transport": cfg.get("transport") or ("http" if cfg.get("url") else "stdio"),
+                "url": cfg.get("url") or "",
+                "preset": cfg.get("preset") or "",
                 "enabled": cfg.get("enabled", True),
                 "connected": client is not None,
+                "state": status.get("state") or ("connected" if client else "unknown"),
+                "error": status.get("error") or "",
+                "ms": status.get("ms"),
                 "tools": tools_for(name, client),
             })
         # Connected servers that aren't in the (possibly stale) config snapshot.
@@ -467,8 +514,8 @@ class NammaAgentService:
             if name in seen:
                 continue
             servers.append({
-                "name": name, "command": [], "enabled": True,
-                "connected": True, "tools": tools_for(name, client),
+                "name": name, "command": [], "enabled": True, "state": "connected",
+                "error": "", "connected": True, "tools": tools_for(name, client),
             })
 
         import json as _json
@@ -497,12 +544,11 @@ class NammaAgentService:
 
     def set_mcp_server_enabled(self, name: str, enabled: bool) -> dict:
         """Enable/disable a whole MCP server: flip its ``enabled`` flag in
-        ``config.local.yaml`` and apply it by starting/stopping ONLY that server.
+        ``user_config.yaml`` and apply it by starting/stopping ONLY that server.
         A disabled server isn't launched at all (its container/process never
         starts), unlike per-tool toggles which only hide individual tools of a
         still-running server. Targeted on purpose: toggling one server must not
-        restart the others (a github flip used to restart the cognee Docker
-        container — ~30s of the whole tab looking frozen)."""
+        restart the others (a slow Docker-based server takes ~30s to start)."""
         from namma_agent.config import update_config
 
         with self._mcp_lock:
@@ -515,7 +561,7 @@ class NammaAgentService:
                     target = s
             if target is None:
                 return {"ok": False, "error": f"no MCP server named {name!r} in config"}
-            self.config = update_config({"mcp": {"servers": servers}})
+            self._replace_config(update_config({"mcp": {"servers": servers}}))
             self._apply_one_mcp_server(target, bool(enabled))
             return {"ok": True, "name": name, "enabled": bool(enabled), **self.mcp_detail()}
 
@@ -527,11 +573,119 @@ class NammaAgentService:
             from namma_agent.mcp import MCPManager
             self.mcp = MCPManager([])
         name = cfg.get("name") or "unnamed"
-        with self.registry.categorize("mcp"):
-            self.mcp.disconnect_server(name, self.registry)
-            if not enabled:
-                return True
-            return self.mcp.connect_server(cfg, self.registry) > 0 or name in self.mcp.clients
+        self.mcp.on_change = self._mcp_status_changed
+        self.mcp.disconnect_server(name, self.registry)
+        if not enabled:
+            return True
+        # Connect in the background — the request returns at once with the
+        # server "connecting"; the UI follows the mcp_status events.
+        import threading
+        threading.Thread(target=self.mcp.connect_server, args=(cfg, self.registry),
+                         name=f"mcp-{name}", daemon=True).start()
+        return True
+
+    # -- Phase 5: MCP setup (validate / add / remove / import / detect) ------
+
+    def _mcp_servers_cfg(self) -> list[dict]:
+        return [dict(s) for s in ((self.config.get("mcp") or {}).get("servers") or [])
+                if isinstance(s, dict)]
+
+    def mcp_validate(self, servers) -> dict:
+        from namma_agent.mcp.config import validate_servers
+        return validate_servers(servers)
+
+    def mcp_save_servers(self, servers) -> dict:
+        """Replace the whole server list (the Config editor). Refused when
+        invalid — nothing is persisted and nothing reconnects."""
+        from namma_agent.config import update_config
+        from namma_agent.mcp.config import validate_servers
+
+        result = validate_servers(servers)
+        if not result["ok"]:
+            return {**result, **self.mcp_detail(), "ok": False}
+        with self._mcp_lock:
+            mcp = dict(self.config.get("mcp") or {})
+            mcp["servers"] = result["servers"]
+            self._replace_config(update_config({"mcp": mcp}))
+        detail = self.reload_mcp()
+        return {**detail, "ok": True, "warnings": result["warnings"], "errors": []}
+
+    def mcp_add_server(self, entry: dict, replace: bool = False) -> dict:
+        """Validate ONE server, persist it, and start only it (others untouched)."""
+        from namma_agent.config import update_config
+        from namma_agent.mcp.config import merge_servers, validate_servers
+
+        result = validate_servers([entry])
+        if not result["ok"]:
+            return {"ok": False, "errors": result["errors"], "warnings": result["warnings"]}
+        server = result["servers"][0]
+        with self._mcp_lock:
+            existing = self._mcp_servers_cfg()
+            exists = any(str(s.get("name", "")).lower() == server["name"].lower() for s in existing)
+            if exists and not replace:
+                return {"ok": False, "warnings": result["warnings"],
+                        "errors": [{"server": server["name"], "field": "name",
+                                    "message": "a server with this name exists — pick another "
+                                               "name or replace it"}]}
+            merged = merge_servers(existing, [server], replace=True)
+            mcp = dict(self.config.get("mcp") or {})
+            mcp["servers"] = merged
+            self._replace_config(update_config({"mcp": mcp}))
+            if server.get("enabled", True):
+                self._apply_one_mcp_server(server, True)
+        return {"ok": True, "server": server["name"], "warnings": result["warnings"],
+                "errors": [], **self.mcp_detail()}
+
+    def mcp_remove_server(self, name: str) -> dict:
+        from namma_agent.config import update_config
+
+        with self._mcp_lock:
+            existing = self._mcp_servers_cfg()
+            kept = [s for s in existing if s.get("name") != name]
+            if len(kept) == len(existing):
+                return {"ok": False, "error": f"no MCP server named {name!r}"}
+            mcp = dict(self.config.get("mcp") or {})
+            mcp["servers"] = kept
+            self._replace_config(update_config({"mcp": mcp}))
+            if self.mcp is not None:
+                self.mcp.disconnect_server(name, self.registry, state="removed")
+        return {"ok": True, "removed": name, **self.mcp_detail()}
+
+    def mcp_import(self, payload=None, url: str = "") -> dict:
+        """Preview servers from a pasted config (any common format) or a URL.
+        Nothing is saved — the caller adds the ones the user picks."""
+        from namma_agent.mcp.catalog import fetch_config
+        from namma_agent.mcp.config import import_servers
+
+        if url:
+            return fetch_config(url)
+        if isinstance(payload, str):
+            import json as _json
+            try:
+                payload = _json.loads(payload)
+            except ValueError as exc:
+                return {"ok": False, "servers": [], "warnings": [], "format": "",
+                        "errors": [{"server": "", "field": "", "message": f"not JSON: {exc}"}]}
+        return import_servers(payload)
+
+    def mcp_detect(self) -> dict:
+        from namma_agent.mcp.detect import detect
+        return detect(self._mcp_servers_cfg())
+
+    def mcp_catalog(self) -> dict:
+        import os as _os
+
+        from namma_agent.mcp.catalog import catalog
+        presets = catalog()
+        for p in presets:
+            p["secrets"] = [{**sec, "set": bool(_os.environ.get(sec["env"]))}
+                            for sec in p.get("secrets") or []]
+        return {"presets": presets}
+
+    def mcp_build_preset(self, preset_id: str, params: Optional[dict] = None,
+                         name: str = "") -> dict:
+        from namma_agent.mcp.catalog import build_from_preset
+        return build_from_preset(preset_id, params or {}, name)
 
     # -- Engram memory (the Memory tab + /api/memory/* run on the native engine) --
 
@@ -547,22 +701,99 @@ class NammaAgentService:
         Native memory is always on — there is no offline state."""
         return self.engram.status()
 
+    def _graph_half_life(self) -> float:
+        return float(getattr(self.engram.consolidator, "half_life_days", 30.0) or 30.0)
+
     def memory_graph(self, include_expired: bool = False,
                      as_of: str = "") -> dict:
-        """The knowledge graph as {nodes, edges} for the Memory tab's force layout,
-        straight from SQLite. ``as_of`` (ISO timestamp) time-travels the graph to
-        what memory knew at that moment (the history slider)."""
-        g = self.engram.store.graph(include_expired=include_expired,
-                                    as_of=(as_of or "").strip() or None)
-        ids = {n["id"] for n in g["nodes"]}
-        nodes = [{"id": n["id"], "label": n["name"], "type": n.get("type") or "thing",
-                  "color": ""} for n in g["nodes"]]
-        edges = [{"source": e["src"], "target": e["dst"],
-                  "relation": (e.get("rel") or "").replace("_", " "),
-                  "expired": bool(e.get("expired_at"))}
-                 for e in g["edges"] if e.get("src") in ids and e.get("dst") in ids]
+        """The knowledge graph (Phase 10 primitives) for the Memory tab: typed,
+        deduplicated entities and typed, directed relations, each node carrying
+        its rank score. ``as_of`` (ISO timestamp) time-travels the graph to what
+        memory knew at that moment (the history slider)."""
+        kg = self.engram.store.kg
+        g = kg.snapshot(include_expired=include_expired,
+                        as_of=(as_of or "").strip() or None)
+        ranks = {r["id"]: r for r in kg.ranked(limit=10_000,
+                                               half_life_days=self._graph_half_life())}
+        degree: dict = {}
+        for e in g["edges"]:
+            if not e.get("expired_at"):
+                degree[e["src"]] = degree.get(e["src"], 0) + 1
+                degree[e["dst"]] = degree.get(e["dst"], 0) + 1
+        nodes = [{"id": n["id"], "label": n["name"], "type": n["type"],
+                  "aliases": n["aliases"], "attributes": n["attributes"],
+                  "is_self": n["is_self"], "degree": degree.get(n["id"], 0),
+                  "score": (ranks.get(n["id"]) or {}).get("score", 0.0)}
+                 for n in g["nodes"]]
+        edges = [{"id": e["id"], "source": e["src"], "target": e["dst"],
+                  "rel": e["rel"], "relation": e["rel"].replace("_", " "),
+                  "directed": not e["symmetric"], "confidence": e.get("confidence"),
+                  "support": e.get("support", 0), "item_id": e.get("item_id"),
+                  "valid_from": e.get("valid_from"), "created_at": e.get("created_at"),
+                  "expired": bool(e.get("expired_at")),
+                  "superseded_by": e.get("superseded_by")}
+                 for e in g["edges"]]
         return {"ok": True, "nodes": nodes, "edges": edges,
                 "counts": {"nodes": len(nodes), "edges": len(edges)}}
+
+    def memory_graph_entity(self, entity_id: str) -> dict:
+        """One entity in focus: attributes, aliases, relations (superseded ones
+        flagged) and the source facts behind them."""
+        hood = self.engram.store.kg.neighbourhood(entity_id)
+        if hood is None:
+            return {"ok": False, "error": "no such entity"}
+        rank = next((r for r in self.engram.store.kg.ranked(
+            limit=10_000, half_life_days=self._graph_half_life())
+            if r["id"] == entity_id), None)
+        return {"ok": True, **hood, "rank": rank}
+
+    def memory_graph_schema(self) -> dict:
+        """The schema derived from the live graph (types, relation types and
+        the type pairs each relation actually connects)."""
+        return {"ok": True, **self.engram.store.kg.schema()}
+
+    def memory_graph_ranked(self, limit: int = 50, include_self: bool = True) -> dict:
+        """Entities by centrality/salience/recency, every component returned."""
+        return {"ok": True,
+                "weights": {"centrality": 0.45, "salience": 0.30, "recency": 0.25},
+                "half_life_days": self._graph_half_life(),
+                "items": self.engram.store.kg.ranked(
+                    limit=limit, half_life_days=self._graph_half_life(),
+                    include_self=include_self)}
+
+    def memory_graph_search(self, query: str, limit: int = 20) -> dict:
+        """Entities by name/alias, plus the facts that match the words."""
+        query = (query or "").strip()
+        if not query:
+            return {"ok": True, "entities": [], "facts": []}
+        facts = self.engram.store.search_items(
+            " OR ".join(w for w in query.replace('"', " ").split() if w) or query,
+            limit=limit)
+        return {"ok": True, "entities": self.engram.store.kg.search(query, limit=limit),
+                "facts": [{"id": f["id"], "text": f["text"], "kind": f.get("kind")}
+                          for f in facts]}
+
+    def memory_graph_rebuild(self) -> dict:
+        """Re-derive the graph from the facts (the migration, on demand)."""
+        return {"ok": True, **self.engram.store.kg.rebuild()}
+
+    def memory_graph_merge(self, source_id: str, target_id: str) -> dict:
+        """Fold one entity into another (a manual alias — survives rebuilds)."""
+        if not source_id or not target_id or source_id == target_id:
+            return {"ok": False, "error": "pick two different entities"}
+        done = self.engram.store.kg.merge(source_id, target_id, source="manual")
+        return {"ok": done, **({} if done else {"error": "no such entity"})}
+
+    def memory_graph_update_entity(self, entity_id: str, name: str = "",
+                                   type: str = "") -> dict:
+        """Rename an entity and/or change its type from the Memory page."""
+        kg = self.engram.store.kg
+        changed = False
+        if name.strip():
+            changed |= kg.rename(entity_id, name)
+        if type.strip():
+            changed |= kg.set_type(entity_id, type)
+        return {"ok": changed, **({} if changed else {"error": "nothing changed"})}
 
     def memory_recall(self, query: str, k: int = 8, include_expired: bool = False) -> dict:
         """Fused recall (BM25 + graph + episodic, RRF-merged) with provenance."""
@@ -714,7 +945,7 @@ class NammaAgentService:
         }
 
     def save_memory_settings(self, settings: Optional[dict] = None) -> dict:
-        """Persist memory tuning to config.local.yaml and apply it live."""
+        """Persist memory tuning to user_config.yaml and apply it live."""
         from namma_agent.config import update_config
 
         settings = settings or {}
@@ -764,7 +995,7 @@ class NammaAgentService:
         mem = {k: v for k, v in mem.items() if v}
         mem.update(root_keys)
         if mem:
-            self.config = update_config({"memory": mem})
+            self._replace_config(update_config({"memory": mem}))
         return self.memory_settings()
 
     # -- cross-chat search (the Sidebar search box) ---------------------------
@@ -810,8 +1041,9 @@ class NammaAgentService:
         """One scheduled routine run = one normal agent turn in the routine's own
         persistent session (runs build on earlier ones). Destructive tools are
         always DECLINED — a scheduled run has nobody to ask for approval."""
+        from namma_agent.core.trust import decline_all
         res = self.run_turn(prompt, session_id=session_id, mode="agent",
-                            approval=lambda _name, _args: False)
+                            approval=decline_all)
         return res.content, res.session_id
 
     def _deliver_routine(self, name: str, content: str) -> None:
@@ -915,7 +1147,7 @@ class NammaAgentService:
                 "- act — matters AND the watcher's follow-up task should run first\n"
                 "Answer with one word:"},
         ]
-        resp = self.provider_for(None).generate(messages, tools=None, stream=False)
+        resp = _labeled(self.provider_for(None), "watcher").generate(messages, tools=None, stream=False)
         word = (resp.content or "").strip().lower()
         for decision in ("ignore", "notify", "act"):
             if word.startswith(decision):
@@ -997,7 +1229,7 @@ class NammaAgentService:
         }
 
         def _generate(messages):
-            resp = self.provider_for(None).generate(messages, tools=None,
+            resp = _labeled(self.provider_for(None), "self_review").generate(messages, tools=None,
                                                     stream=False)
             return resp.content or ""
 
@@ -1049,8 +1281,8 @@ class NammaAgentService:
         ran, what's queued. Powers GET /api/status and the Settings panel."""
         from namma_agent.core.routines import load_routines
         from namma_agent.core.sandbox import status as _sandbox_status
-        from namma_agent.core.shell_backends import status as _shell_backend_status
         from namma_agent.core.self_review import load_proposals, load_snapshots
+        from namma_agent.core.shell_backends import status as _shell_backend_status
         from namma_agent.core.watchers import load_watchers
 
         routines = load_routines(self.config)
@@ -1067,6 +1299,9 @@ class NammaAgentService:
         usage = {}
         try:
             usage = self.db.usage_stats(days=7)
+            # Per-request log (Phase 2): every model call incl. background work,
+            # grouped by kind, with the cache-read ratio.
+            usage["requests"] = self.db.usage_breakdown(days=7)
         except Exception:  # noqa: BLE001
             pass
         return {
@@ -1102,6 +1337,7 @@ class NammaAgentService:
             },
             "background_tasks": {
                 "running": sum(1 for t in bg_tasks if t.get("status") == "running"),
+                "queued": sum(1 for t in bg_tasks if t.get("status") == "queued"),
                 "items": bg_tasks[:20],
             },
             "self_review": {
@@ -1184,8 +1420,13 @@ class NammaAgentService:
                         _sent.append(line)
                         _p(line)
 
+        # Remote channels have no approval round-trip: the policy follows the
+        # sender's trust level (set as a contextvar by the bridge) instead of
+        # approval=None, which would skip the destructive-tool gate entirely.
+        from namma_agent.core.trust import channel_approval, get_message_trust
+        approval = channel_approval(get_message_trust(), self.config)
         res = self.run_turn(text, session_id=session_id, sink=sink, mode=mode,
-                            askpass=askpass, model_id=model)
+                            askpass=askpass, model_id=model, approval=approval)
         content = self._strip_sent_preambles(res.content, sent) if sent else res.content
         return content, res.session_id
 
@@ -1327,7 +1568,7 @@ class NammaAgentService:
         return {"configured": True, **self.comms.status(), **trust}
 
     def set_channel_trust(self, channel: str, level: str) -> dict:
-        """Persist a per-channel trust level (config.local.yaml: comms.trust) and
+        """Persist a per-channel trust level (user_config.yaml: comms.trust) and
         apply it to the running bridges immediately."""
         from namma_agent.config import update_config
         from namma_agent.core.trust import channel_trust, normalize_trust, trust_map
@@ -1338,7 +1579,7 @@ class NammaAgentService:
             return {"ok": False, "error": f"unknown channel {channel!r}"}
         if not level:
             return {"ok": False, "error": "level must be owner, trusted, or untrusted"}
-        self.config = update_config({"comms": {"trust": {channel: level}}})
+        self._replace_config(update_config({"comms": {"trust": {channel: level}}}))
         if self.comms is not None:
             self.comms.apply_trust(lambda ch: channel_trust(ch, self.config))
         return {"ok": True, **self.comms_status()}
@@ -1393,12 +1634,19 @@ class NammaAgentService:
             "model": getattr(prov, "model", ""),
             "persona": self.persona.id,
             "assistant_name": self.persona.name,
+            # The mode a new chat opens in (Settings → Behavior → Default mode);
+            # the web UI's mode list starts here (Phase 9 W1).
+            "default_mode": self._default_mode(),
             "tools": self.registry.names(),
             # Unique per server boot — the web UI uses it to tell a page *reload*
             # (same boot → restore the open chat) from a *restart* (new boot →
             # fresh start), so relaunching the server doesn't reopen the last chat.
             "server_id": self._server_id,
         }
+
+    def _default_mode(self) -> str:
+        mode = str((self.config.get("conversation") or {}).get("default_mode") or "agent").lower()
+        return mode if mode in ("agent", "chat", "setup") else "agent"
 
     def set_persona(self, persona_id: str) -> None:
         self.persona = load_persona(persona_id, display_name=assistant_name(self.config))
@@ -1486,10 +1734,10 @@ class NammaAgentService:
     def clear_memory(self, scope: str = "all") -> dict:
         """Wipe stored data. scope: memory (Engram: facts, graph, core memory) |
         conversations (chat transcripts + summaries) | all. Legacy scopes
-        ('facts'/'notes'/'cognee') map onto the memory wipe."""
+        ('facts'/'notes') map onto the memory wipe."""
         scope = (scope or "all").lower()
         done: dict = {}
-        if scope in ("memory", "cognee", "facts", "notes", "all"):
+        if scope in ("memory", "facts", "notes", "all"):
             done["engram"] = self.engram.store.wipe()
             # Also drop legacy local leftovers so a wipe really is a wipe.
             done["legacy_facts"] = self.db.clear_facts()
@@ -1527,7 +1775,7 @@ class NammaAgentService:
                 f"User: {user[:600]}\n\nAssistant: {assistant[:600]}\n\nTitle:"},
         ]
         try:
-            resp = self.provider_for(None).generate(messages, tools=None, stream=False)
+            resp = _labeled(self.provider_for(None), "title").generate(messages, tools=None, stream=False)
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
             logger.warning("[service] auto-title failed: %s", exc)
@@ -1565,7 +1813,7 @@ class NammaAgentService:
                 "Output only the bullet points.\n\n" + transcript},
         ]
         try:
-            resp = self.provider_for(None).generate(messages, tools=None, stream=False)
+            resp = _labeled(self.provider_for(None), "summary").generate(messages, tools=None, stream=False)
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
             logger.warning("[service] learning recap failed: %s", exc)
@@ -1598,7 +1846,7 @@ class NammaAgentService:
                 "Output only the bullet points.\n\n" + transcript},
         ]
         try:
-            resp = self.provider_for(None).generate(messages, tools=None, stream=False)
+            resp = _labeled(self.provider_for(None), "summary").generate(messages, tools=None, stream=False)
         except Exception as exc:  # noqa: BLE001
             from namma_agent.core.logger import logger
             logger.warning("[service] project recap failed: %s", exc)
@@ -1729,7 +1977,7 @@ class NammaAgentService:
         info, last_err = None, ""
         for _ in range(2):
             try:
-                resp = self.provider_for(None).generate(prompt, tools=None, stream=False)
+                resp = _labeled(self.provider_for(None), "summary").generate(prompt, tools=None, stream=False)
             except Exception as exc:  # noqa: BLE001
                 last_err = f"analysis failed: {exc}"
                 continue
@@ -1771,7 +2019,9 @@ class NammaAgentService:
         """Web-native re-imagining of the v1 voice greeter: the GUI shows a
         welcome card when Namma Agent doesn't yet know the user's name."""
         name = self.db.get_fact("name")
-        return {"needed": not bool(name), "name": name}
+        # Phase 5: first run also needs at least one model the app can call.
+        return {"needed": not bool(name), "name": name,
+                "provider_ready": self.provider_ready()}
 
     def complete_onboarding(self, name: str = "", facts: Optional[dict] = None) -> dict:
         # The name row is only the "onboarding done" flag for the welcome card —
@@ -1894,13 +2144,13 @@ class NammaAgentService:
         from namma_agent.config import update_config
 
         # `delete` already dropped it from the in-memory disabled-set; persist
-        # that so a discarded draft leaves no trace in config.local.yaml.
+        # that so a discarded draft leaves no trace in user_config.yaml.
         disabled = self.skills.disabled_names()
-        self.config = update_config({"skills": {"disabled": disabled}})
+        self._replace_config(update_config({"skills": {"disabled": disabled}}))
         return {"ok": True, "detail": detail, "disabled": disabled}
 
     def set_skill_enabled(self, name: str, enabled: bool) -> dict:
-        """Toggle a skill and persist the disabled-set to config.local.yaml so the
+        """Toggle a skill and persist the disabled-set to user_config.yaml so the
         choice survives restarts. Takes effect on the next turn (catalog rebuilt)."""
         if self.skills is None:
             return {"ok": False, "error": "skills unavailable"}
@@ -1910,19 +2160,125 @@ class NammaAgentService:
         from namma_agent.config import update_config
 
         disabled = self.skills.disabled_names()
-        self.config = update_config({"skills": {"disabled": disabled}})
+        self._replace_config(update_config({"skills": {"disabled": disabled}}))
         return {"ok": True, "name": skill.name, "enabled": skill.enabled,
                 "disabled": disabled}
 
+    # -- skills marketplace (Phase 5) ----------------------------------------
+
+    def _installed_skill_names(self) -> set:
+        return {s.name.lower() for s in (self.skills.all() if self.skills else [])}
+
+    def skills_market_index(self) -> dict:
+        from namma_agent.core.skill_market import load_index
+        idx = load_index()
+        installed = self._installed_skill_names()
+        for entry in idx.get("skills", []):
+            entry["installed"] = entry.get("name", "").lower() in installed
+        return idx
+
+    def skills_market_preview(self, url: str) -> dict:
+        from namma_agent.core.skill_market import preview
+        return preview(url, self.registry, self._installed_skill_names())
+
+    def skills_market_install(self, url: str, overwrite: bool = False) -> dict:
+        """Install from a URL into the user skills folder, DISABLED for review."""
+        from namma_agent.core.skill_market import FetchError, install
+        if self.skills is None:
+            return {"ok": False, "errors": ["skills are unavailable"]}
+        try:
+            result = install(url, self.skills.user_dir, self.registry,
+                             self._installed_skill_names(), overwrite=overwrite)
+        except FetchError as exc:
+            return {"ok": False, "errors": [str(exc)], "warnings": []}
+        if not result.get("ok"):
+            return result
+        self.skills.reload()
+        name = result["name"]
+        self.skills.set_enabled(name, False)
+        from namma_agent.config import update_config
+        self._replace_config(update_config({"skills": {"disabled": self.skills.disabled_names()}}))
+        return {**result, "enabled": False}
+
     # -- toolsets (Settings → Toolsets tab) --------------------------------
+
+    # -- render feedback (Phase 4) ---------------------------------------------
+
+    def note_render_error(self, session_id: str, kind: str, error: str,
+                          snippet: str = "") -> dict:
+        """Remember that a visual in ``session_id`` failed to render in the UI.
+        The next turn's context tells the model (once), so it can fix it."""
+        if not session_id or not error:
+            return {"ok": False}
+        with self._render_lock:
+            notes = self._render_errors.setdefault(session_id, [])
+            if len(notes) < 5:
+                notes.append({"kind": kind[:20], "error": error[:300], "snippet": snippet[:200]})
+        return {"ok": True}
+
+    def take_render_errors(self, session_id: str) -> list[dict]:
+        with self._render_lock:
+            return self._render_errors.pop(session_id, [])
+
+    # -- delegation runs (Phase 3) -------------------------------------------------
+
+    def list_runs(self, session_id: str = "", kind: str = "", limit: int = 100) -> list[dict]:
+        if self.delegation is None:
+            return self.db.list_runs(session_id=session_id, kind=kind, limit=limit)
+        return self.delegation.list(session_id=session_id, kind=kind, limit=limit)
+
+    def get_run(self, run_id: str):
+        if self.delegation is None:
+            return self.db.get_run(run_id)
+        return self.delegation.get(run_id)
+
+    def cancel_run(self, run_id: str) -> dict:
+        if self.delegation is None:
+            return {"ok": False, "error": "delegation is not available"}
+        return self.delegation.cancel(run_id)
 
     def tools_detail(self) -> list[dict]:
         """Every tool, grouped by toolset, with enabled/destructive flags for the
         Toolsets tab."""
         return self.registry.detail()
 
+    def tools_overview(self) -> dict:
+        """Toolsets tab payload: tools + the active profile + tool-search state."""
+        from namma_agent.core.tool_search import profile_categories, profiles_list
+        profile = getattr(self.agent, "tool_profile", "general")
+        cats = profile_categories(profile)
+        tools = self.tools_detail()
+        for t in tools:
+            # Whether the active profile lets the model see this tool at all —
+            # separate from the per-tool switch, which turns a tool off everywhere.
+            t["in_profile"] = cats is None or (t.get("category") or "general") in cats
+        return {"tools": tools,
+                "profile": profile,
+                "profiles": profiles_list(),
+                "search": dict(getattr(self.agent, "tool_search_settings", {}) or {})}
+
+    def set_tool_profile(self, profile: str) -> dict:
+        """Switch the toolset profile preset; persisted to the config, live."""
+        from namma_agent.config import update_config
+        from namma_agent.core.tool_search import PROFILES
+        profile = str(profile or "").strip().lower()
+        if profile not in PROFILES:
+            return {"ok": False, "error": f"unknown profile {profile!r}; "
+                                          f"choose one of {', '.join(PROFILES)}"}
+        self.apply_config(update_config({"tools": {"profile": profile}}))
+        return {"ok": True, "profile": self.agent.tool_profile}
+
+    def set_tool_search(self, mode: str) -> dict:
+        """Switch tool search on/off/auto; persisted to the config, live."""
+        from namma_agent.config import update_config
+        mode = str(mode or "").strip().lower()
+        if mode not in ("auto", "always", "off"):
+            return {"ok": False, "error": "mode must be auto, always or off"}
+        self.apply_config(update_config({"tools": {"search": {"mode": mode}}}))
+        return {"ok": True, "search": dict(self.agent.tool_search_settings)}
+
     def set_tool_enabled(self, name: str, enabled: bool) -> dict:
-        """Toggle a single tool and persist the disabled-set to config.local.yaml so
+        """Toggle a single tool and persist the disabled-set to user_config.yaml so
         the choice survives restarts. Takes effect on the next turn."""
         tool = self.registry.set_enabled(name, enabled)
         if tool is None:
@@ -1942,8 +2298,61 @@ class NammaAgentService:
         from namma_agent.config import update_config
 
         disabled = self.registry.disabled_names()
-        self.config = update_config({"tools": {"disabled": disabled}})
+        self._replace_config(update_config({"tools": {"disabled": disabled}}))
         return {"disabled": disabled}
+
+    def _replace_config(self, new_config: dict) -> dict:
+        """Swap in a freshly merged config WITHOUT rebinding ``self.config``.
+
+        Runners and tools (RoutineRunner, WatcherRunner, SelfReviewRunner, the
+        learning tools, …) hold a reference to this exact dict from boot;
+        rebinding left them reading stale values until a restart."""
+        if new_config is not self.config:
+            self.config.clear()
+            self.config.update(new_config)
+        return self.config
+
+    def _apply_agent_tuning(self) -> None:
+        """Push the conversation/tool knobs from ``self.config`` onto the live
+        agent. Called at boot and from :meth:`apply_config`, so a Settings edit to
+        any of them takes effect on the next turn without a restart."""
+        agent = getattr(self, "agent", None)
+        if agent is None:
+            return
+        from namma_agent.core.agent import DEFAULT_MAX_TOOLS_PER_REQUEST
+        conv = self.config.get("conversation") or {}
+        tools_cfg = self.config.get("tools") or {}
+        agent.tool_loop_limit = int(conv.get("tool_loop_limit", 0) or 0)
+        agent.max_history_turns = int(conv.get("max_history_turns", 12) or 12)
+        agent.tool_result_max_chars = int(conv.get("tool_result_max_chars", 0) or 0)
+        agent.tool_allow = [str(a).strip() for a in (tools_cfg.get("allow") or []) if str(a).strip()]
+        agent.compact_history = bool(conv.get("compact_history", True))
+        agent.verify_after_writes = bool(conv.get("verify_after_writes", True))
+        try:
+            agent.turn_token_budget = max(0, int(conv.get("turn_token_budget", 0) or 0))
+        except (TypeError, ValueError):
+            agent.turn_token_budget = 0
+        try:
+            agent.context_fraction = min(0.95, max(0.0, float(
+                conv.get("context_fraction", 0.6) if conv.get("context_fraction") is not None
+                else 0.6)))
+        except (TypeError, ValueError):
+            agent.context_fraction = 0.6
+        agent.max_tools_per_request = int(
+            tools_cfg.get("max_per_request", DEFAULT_MAX_TOOLS_PER_REQUEST) or 0)
+        # Phase 2: tool search (core tools + deferred) and the toolset profile.
+        from namma_agent.core.tool_search import PROFILES, search_settings
+        agent.tool_search_settings = search_settings(self.config)
+        profile = str(tools_cfg.get("profile") or "general").strip().lower()
+        agent.tool_profile = profile if profile in PROFILES else "general"
+        # Static "about you" block (install/source/config paths) for the prompt.
+        try:
+            from namma_agent.core.self_knowledge import about_block
+            agent.about_block = about_block(self.config, assistant_name(self.config))
+        except Exception as exc:  # noqa: BLE001 — never block boot on it
+            from namma_agent.core.logger import logger
+            logger.warning("[self] about block failed: %s", exc)
+            agent.about_block = ""
 
     def apply_config(self, config: Optional[dict] = None) -> dict:
         """Make provider / model / API-key edits take effect WITHOUT a restart.
@@ -1985,6 +2394,9 @@ class NammaAgentService:
         # Auto mode is read once at boot (see __init__); re-read it here so toggling
         # it in Settings → Behavior takes effect on the very next turn, no restart.
         self.auto_approve = bool((self.config.get("conversation") or {}).get("auto_approve", False))
+        # The agent's loop/context knobs were read only at boot, so "applied live"
+        # was untrue for them — re-apply every one from the merged config.
+        self._apply_agent_tuning()
         self._providers = {p["id"]: p for p in configured_providers(self.config)}
         self._model_profiles = {m["id"]: m for m in configured_models(self.config)}
         self._model_providers = {}
@@ -2067,7 +2479,7 @@ class NammaAgentService:
         }
 
     def save_learning_settings(self, settings: dict) -> dict:
-        """Validate + persist the Learning knobs to config.local.yaml and apply
+        """Validate + persist the Learning knobs to user_config.yaml and apply
         them live (runners start/stop immediately). Rejects a bad value instead
         of writing it — a half-typed time must never silently disable the run."""
         from namma_agent.config import update_config
@@ -2117,13 +2529,13 @@ class NammaAgentService:
 
     def provider_for(self, model_id: Optional[str]):
         """The Provider for a model profile id. With no/unknown id, prefer the
-        user's FIRST configured model (their real setup) over the legacy config
+        user's default model (``active_model:``, else the FIRST configured one) (their real setup) over the legacy config
         `provider:` chain — so a chat default turn AND internal features
         (auto-title, summaries) all run on a working brain, not a stale fallback.
         Providers are built once and cached per profile."""
         if not model_id or model_id not in self._model_profiles:
             if self._model_profiles:
-                model_id = next(iter(self._model_profiles))
+                model_id = self.active_model_id()   # explicit active_model, else first
             else:
                 return self.provider  # nothing configured → legacy default chain
         cached = self._model_providers.get(model_id)
@@ -2154,6 +2566,23 @@ class NammaAgentService:
             "timeout_s": prof.get("timeout_s") or base.get("timeout_s", 60),
         }
         prov = build_provider(spec)
+        # Honour the configured fallback chain (provider.fallback) for model
+        # profiles too — before Phase 2 only the legacy default provider had one,
+        # so a profile-only setup lost failover entirely.
+        fallbacks = []
+        for fb in (base.get("fallback") or []):
+            if not isinstance(fb, dict):
+                continue
+            if fb.get("type") == spec["type"] and fb.get("model") == spec["model"]:
+                continue  # the profile itself — no point failing over to it
+            try:
+                fallbacks.append(build_provider(fb))
+            except Exception as exc:  # noqa: BLE001 — a bad fallback never blocks the profile
+                from namma_agent.core.logger import logger
+                logger.warning("[providers] skipping bad fallback %r: %s", fb, exc)
+        if fallbacks:
+            from namma_agent.core.providers.registry import ProviderChain
+            prov = ProviderChain([prov, *fallbacks])
         # Per-profile turn shaping the agent reads off the turn's provider: a
         # scoped toolset, a shorter history window, and a tool-result cap — so ONE
         # small local model can run lite while cloud profiles stay full-fat.
@@ -2161,6 +2590,9 @@ class NammaAgentService:
         prov.tool_allow = list(prof.get("tools_allow") or [])
         prov.max_history_turns = int(prof.get("max_history_turns") or 0)
         prov.tool_result_max_chars = int(prof.get("tool_result_max_chars") or 0)
+        # The model's context window (0 = guess from the model id) — drives the
+        # in-turn context budget (core/context_budget.py).
+        prov.context_window = int(prof.get("context_window") or 0)
         return prov
 
     def run_turn(
@@ -2179,7 +2611,10 @@ class NammaAgentService:
         sink. ``model_id`` picks one of the configured model profiles (the chat's
         chosen brain); falls back to the default provider when unset/unknown."""
         from namma_agent.core.interactive import (
-            get_current_session, set_artifact_recorder, set_askpass, set_event_sink,
+            get_current_session,
+            set_artifact_recorder,
+            set_askpass,
+            set_event_sink,
         )
 
         # Any turn resets the memory consolidator's idle clock.
@@ -2189,9 +2624,13 @@ class NammaAgentService:
         # concurrent turns never clobber each other's event routing. Spoken
         # narration lines find their way back to this turn's sink via the
         # turn-local event-sink contextvar (set_event_sink, below).
-        # Auto mode: skip the approval round-trip entirely (run destructive tools).
-        if self.auto_approve:
-            approval = lambda _name, _args: True  # noqa: E731
+        # Auto mode: skip the interactive approval round-trip (run destructive
+        # tools). It never overrides an explicit always-decline policy — routines,
+        # watchers, /v1 and untrusted channels have nobody to ask, and watchers act
+        # on untrusted web/email content.
+        from namma_agent.core.trust import allow_all, is_decline_all
+        if self.auto_approve and not is_decline_all(approval):
+            approval = allow_all
         # Expose the sudo-password prompt to run_shell for this turn (thread-scoped).
         set_askpass(askpass)
         # Let tools push typed events (quiz cards, learn suggestions) to the browser.
@@ -2210,7 +2649,8 @@ class NammaAgentService:
         # (delegate_task / background_task) so a sub-agent inherits the model the
         # user actually picked — see core/interactive.set_current_provider.
         from namma_agent.core.interactive import (
-            reset_current_provider, set_current_provider,
+            reset_current_provider,
+            set_current_provider,
         )
         turn_provider = self.provider_for(model_id)
         prov_token = set_current_provider(turn_provider)

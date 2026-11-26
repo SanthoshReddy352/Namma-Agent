@@ -45,6 +45,41 @@ class EventBus:
         self.publish(event_type, payload)
 
 
+class Broadcaster:
+    """Process-wide event fan-out to every connected client (each WebSocket
+    subscribes its sink on connect). For events that outlive one turn — e.g. a
+    background sub-agent finishing after its chat's turn ended."""
+
+    def __init__(self):
+        import threading
+
+        self._subs: list[EmitFn] = []
+        self._lock = threading.Lock()
+
+    def subscribe(self, sink: EmitFn) -> Callable[[], None]:
+        with self._lock:
+            self._subs.append(sink)
+
+        def _unsubscribe() -> None:
+            with self._lock:
+                if sink in self._subs:
+                    self._subs.remove(sink)
+
+        return _unsubscribe
+
+    def publish(self, event_type: str, payload: dict) -> None:
+        with self._lock:
+            subs = list(self._subs)
+        for sink in subs:
+            try:
+                sink(event_type, payload)
+            except Exception as exc:  # noqa: BLE001 — one dead client can't block the rest
+                logger.debug("broadcast sink failed: %s", exc)
+
+    def __len__(self) -> int:
+        return len(self._subs)
+
+
 def fanout(*sinks: EmitFn) -> EmitFn:
     """Combine several emit callables into one."""
 

@@ -105,9 +105,11 @@ def register(registry) -> None:
         "call, so always resend every todo with its current status. Statuses: pending | "
         "in_progress (keep exactly one) | done. A todo may carry 'subtasks' "
         "[{text, status}] — add them the moment a step splits into sub-steps, and keep "
-        "their statuses updated too. Call this BEFORE starting a multi-step task (the "
-        "plan), and again AFTER EACH completed step (the progress). Pass an empty list "
-        "to clear the plan.",
+        "their statuses updated too. Use it for tasks of 3+ steps: call it BEFORE starting "
+        "(the plan), then send each progress update IN THE SAME response as the next "
+        "step's tool call — never as a call of its own (every extra round trip costs the "
+        "whole context again). Don't spend a separate call just to mark the last step "
+        "done; your final answer shows it's finished. Pass an empty list to clear.",
         {
             "type": "object",
             "properties": {

@@ -24,28 +24,35 @@ from namma_agent.core.logger import logger
 
 from .anthropic_provider import AnthropicProvider
 from .base import LLMResponse, Provider, ProviderError, ThinkingCallback, TokenCallback
+from .bedrock_provider import BedrockProvider
+from .catalog import CATALOG, is_strict
+from .cloud_compat import AzureProvider, VertexProvider
 from .google_provider import GoogleProvider
 from .openai_compat import OpenAICompatProvider
 from .openai_provider import OpenAIProvider
 
-#: type string -> provider class. ``opencode``/``lmstudio``/``ollama`` are all
-#: OpenAI-compatible; they map to the same adapter (differ only by base_url).
-PROVIDER_TYPES: dict[str, type[Provider]] = {
-    "anthropic": AnthropicProvider,
+#: catalogue ``adapter`` -> the class that speaks that wire format.
+ADAPTERS: dict[str, type[Provider]] = {
     "openai": OpenAIProvider,
+    "anthropic": AnthropicProvider,
     "google": GoogleProvider,
-    "gemini": GoogleProvider,
     "openai_compat": OpenAICompatProvider,
-    "opencode": OpenAICompatProvider,
-    "lmstudio": OpenAICompatProvider,
-    "ollama": OpenAICompatProvider,
+    "bedrock": BedrockProvider,
+    "vertex": VertexProvider,
+    "azure": AzureProvider,
 }
 
-#: Convenience defaults so a bare ``type: ollama`` just works.
+#: type string (catalogue id or alias) -> provider class. DERIVED from the
+#: catalogue (core/providers/catalog.py) — add a provider there, not here.
+PROVIDER_TYPES: dict[str, type[Provider]] = {
+    t: ADAPTERS[p["adapter"]] for p in CATALOG for t in (p["id"], *p["aliases"])
+}
+
+#: Per-type defaults so a bare ``type: groq`` just works: the catalogue's
+#: base_url and key env var (DERIVED from the catalogue, aliases included).
 _TYPE_DEFAULTS: dict[str, dict] = {
-    "lmstudio": {"base_url": "http://localhost:1234/v1"},
-    "ollama": {"base_url": "http://localhost:11434/v1"},
-    "opencode": {"base_url": "https://opencode.ai/zen/v1"},
+    t: {k: v for k, v in (("base_url", p["base_url"]), ("api_key_env", p["key_env"])) if v}
+    for p in CATALOG for t in (p["id"], *p["aliases"])
 }
 
 
@@ -59,7 +66,12 @@ def build_provider(cfg: dict) -> Provider:
         )
     cfg.pop("fallback", None)
     for key, val in _TYPE_DEFAULTS.get(ptype, {}).items():
-        cfg.setdefault(key, val)
+        if not cfg.get(key):        # "" / None from a profile still gets the default
+            cfg[key] = val
+    if is_strict(ptype):
+        # Borrowed adapter: read only this provider's own key var, never the
+        # adapter's conventional one (OPENAI_API_KEY / ANTHROPIC_API_KEY).
+        cfg.setdefault("key_fallback", False)
     cls = PROVIDER_TYPES[ptype]
     return cls(**cfg)
 
@@ -73,6 +85,8 @@ class ProviderChain(Provider):
     """
 
     name = "chain"
+    # Member providers record their own usage; the chain must not count twice.
+    _metered = False
 
     def __init__(self, providers: list[Provider]):
         if not providers:
@@ -84,6 +98,16 @@ class ProviderChain(Provider):
     @property
     def active(self) -> Provider:
         return self._providers[0]
+
+    # The agent's hard wall-clock ceiling (agent._generate_timeout) reads these;
+    # a chain may try every link, so its budget covers all of them.
+    @property
+    def timeout_s(self) -> float:
+        return float(sum(float(getattr(p, "timeout_s", 60.0) or 60.0) for p in self._providers))
+
+    @property
+    def max_retries(self) -> int:
+        return max(int(getattr(p, "max_retries", 1) or 1) for p in self._providers)
 
     def is_available(self) -> bool:
         """A chain is usable when ANY link is. The base implementation reads

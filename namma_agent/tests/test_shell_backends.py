@@ -7,7 +7,6 @@ instead of quietly running on the user's own machine.
 """
 from __future__ import annotations
 
-import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -69,8 +68,7 @@ def test_configure_and_current():
 # ── local: nothing about it may change ───────────────────────────────────────
 
 def test_local_backend_matches_the_pre_phase7_behaviour():
-    from namma_agent.core.shell_session import (_find_shell, _POSIX_DRIVER,
-                                                _PS_DRIVER, IS_WINDOWS)
+    from namma_agent.core.shell_session import _POSIX_DRIVER, _PS_DRIVER, IS_WINDOWS, _find_shell
     backend = sb.ShellBackend()
     assert backend.driver_text() == (_PS_DRIVER if IS_WINDOWS else _POSIX_DRIVER)
     assert backend.script_ext() == (".ps1" if IS_WINDOWS else ".sh")

@@ -276,7 +276,7 @@ class SkillStore:
         self._embedder = embedder
         # Names the user turned off in the Skills tab — excluded from the agent's
         # catalog and refused by use_skill, but still listed in the UI so they can
-        # be re-enabled. Persisted by the caller (config.local.yaml: skills.disabled).
+        # be re-enabled. Persisted by the caller (user_config.yaml: skills.disabled).
         self._disabled: set[str] = {str(n).strip().lower() for n in (disabled or [])}
         # Later roots win on name collisions, so user/learned skills override bundled.
         self._roots: list[Path] = [_BUNDLED_DIR, *(extra_dirs or []), self.user_dir]
@@ -424,7 +424,9 @@ class SkillStore:
         if not skill or not skill.enabled:
             return None
         text = _substitute_vars(skill.body, skill.directory, session_id)
-        if self.allow_inline_shell:
+        # Inline shell never runs for a skill installed from the marketplace (it
+        # carries a .source.json sidecar), whatever allow_inline_shell says.
+        if self.allow_inline_shell and not (Path(skill.directory) / ".source.json").exists():
             text = _expand_inline_shell(text, skill.directory)
         header = f"# Skill: {skill.name}\n"
         return header + text

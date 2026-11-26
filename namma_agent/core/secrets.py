@@ -265,12 +265,20 @@ _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 class SecretStore:
-    def __init__(self, data_dir: str = "data", backend=None):
+    def __init__(self, data_dir: Optional[str] = None, backend=None):
+        if data_dir is None:              # the data dir, never a cwd-relative "data/"
+            from namma_agent.config import data_dir as _data_dir  # noqa: PLC0415
+            data_dir = str(_data_dir())
         self._dir = Path(data_dir)
         self._index_path = self._dir / "secrets.index.json"
         self._index_lock = threading.Lock()
+        # NAMMA_VAULT_BACKEND=file forces the file vault (the test suite sets it so
+        # no run can read or write the OS credential store the real app uses).
+        forced_file = os.environ.get("NAMMA_VAULT_BACKEND", "").strip().lower() == "file"
         if backend is not None:
             self._backend = backend
+        elif forced_file:
+            self._backend = FileBackend(self._dir / "secrets.vault.json")
         elif CredManBackend.available():
             self._backend = CredManBackend()
         elif KeyringBackend.available():
@@ -412,6 +420,48 @@ def migrate_env_file(env_path: Optional[str] = None, scrub: bool = False) -> dic
     refresh_redaction()
     return {"migrated": migrated, "skipped": skipped, "backend": store.backend,
             "scrubbed": bool(scrub and migrated)}
+
+
+def is_secret_name(key: str) -> bool:
+    """True for env-var names that hold credentials (keys, tokens, webhooks)."""
+    return bool(_SECRET_NAME_RE.search(key or ""))
+
+
+def save_settings_env(updates: dict) -> dict:
+    """Persist env values edited in Settings (PROGRESS.md Phase 2, config truth).
+
+    Secret-looking names go to the vault and the live environment; their stale
+    copy in ``.env`` (if any) is removed so it can't shadow the vault at the next
+    boot. Everything else — and any secret the vault fails to store — goes to
+    ``.env`` as before. An empty value clears the key from both places.
+    Returns ``{"vault": [...], "env": [...]}`` (names only). Raises ValueError
+    on a bad name or a value with a line break (same rules as ``.env``)."""
+    from namma_agent.config import remove_env_values, set_env_values  # noqa: PLC0415
+
+    store = get_store()
+    to_env: dict = {}
+    vaulted: list[str] = []
+    for key, value in (updates or {}).items():
+        key = str(key).strip()
+        value = "" if value is None else str(value)
+        if not _NAME_RE.match(key):
+            raise ValueError(f"invalid environment variable name: {key!r}")
+        if "\n" in value or "\r" in value or "\x00" in value:
+            raise ValueError(f"value for {key} contains a line break or NUL")
+        if is_secret_name(key) and value.strip():
+            if store.set(key, value):
+                os.environ[key] = value.strip()
+                vaulted.append(key)
+                continue
+            logger.warning("[secrets] vault refused %s — falling back to .env", key)
+        elif is_secret_name(key) and key in store.names():
+            store.delete(key)                    # cleared in Settings → gone everywhere
+        to_env[key] = value
+    if vaulted:
+        remove_env_values(vaulted)
+    written = set_env_values(to_env) if to_env else []
+    refresh_redaction()
+    return {"vault": vaulted, "env": written}
 
 
 # ── redaction ────────────────────────────────────────────────────────────────

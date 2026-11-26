@@ -643,7 +643,7 @@ def _run_app_cli(install_dir: Path, args: list[str]) -> None:
 
 
 def write_provider(install_dir: Path, provider: dict) -> None:
-    """provider = {type, model?, api_key?, base_url?} -> config.local.yaml + .env."""
+    """provider = {type, model?, api_key?, base_url?} -> data/user_config.yaml + .env."""
     with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8") as f:
         json.dump(provider, f)
         path = f.name

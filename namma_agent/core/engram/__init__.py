@@ -137,8 +137,8 @@ class Engram:
                               embedder=self.embedder)
 
     def prefetch_block(self, user_input: str) -> str:
-        """Automatic recall injected into the turn (replaces the old regex-gated
-        Cognee context thread): score-floored, in-process, milliseconds."""
+        """Automatic recall injected into the turn's <context> block:
+        score-floored, in-process, milliseconds."""
         if not self.prefetch_enabled:
             return ""
         results = [r for r in self.recall(user_input, k=self.prefetch_k)

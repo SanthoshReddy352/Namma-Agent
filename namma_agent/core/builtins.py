@@ -18,7 +18,12 @@ from typing import Optional
 
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import (
-    delete_user_persona, list_personas as _list_personas, load_persona, save_persona,
+    delete_user_persona,
+    load_persona,
+    save_persona,
+)
+from namma_agent.core.persona import (
+    list_personas as _list_personas,
 )
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
@@ -73,24 +78,6 @@ _RESEARCH_TOOLS = (
 )
 
 
-class _UnscopedProvider:
-    """The turn's provider with its per-model tool allow-list dropped.
-
-    A model profile can carry ``tools_allow`` to scope what the MAIN agent sees
-    (small local brains). A sub-agent's registry is already its scope, and that
-    allow-list names main-agent tools — inheriting it can leave the sub-agent
-    with no tools at all. Everything else proxies straight through.
-    """
-
-    tool_allow: list = []
-
-    def __init__(self, inner):
-        self._inner = inner
-
-    def __getattr__(self, name):  # everything but tool_allow comes from the real one
-        return getattr(self._inner, name)
-
-
 #: Safety-critical personal facts (allergies, medical constraints, hard dietary
 #: limits) that MUST ride every turn. A block='auto' save whose text matches this
 #: is promoted into always-visible core memory instead of the background graph,
@@ -121,9 +108,9 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
     the native in-process engine — bounded core memory in every prompt, bi-temporal
     facts + entity graph, fused millisecond recall. ``memory_save`` /
     ``memory_search`` / ``memory_forget`` are the primary surface;
-    ``remember_fact`` / ``recall_facts`` stay as thin aliases. An external memory
-    MCP server (e.g. a Cognee plugin) can still be attached — ``get_plugin_ingestor``
-    resolves a duck-typed ``ingest_text`` sink used only when Engram is absent.
+    ``remember_fact`` / ``recall_facts`` stay as thin aliases.
+    ``get_plugin_ingestor`` resolves an optional duck-typed ``ingest_text`` sink
+    used only when Engram is absent (bare services in tests).
 
     What still lives on ``db`` is the *transcript* store — verbatim chat history
     and session summaries (``search_conversations`` / ``recall_sessions``). That
@@ -237,9 +224,6 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
         if not query:
             return ToolResult(ok=False, content="", error="'query' is required")
         if eng is None:
-            # Engram missing (bare test service) — fall back to a memory plugin.
-            if "mcp_cognee_recall" in registry:
-                return registry.execute("mcp_cognee_recall", {"query": query})
             return ToolResult(ok=False, content="", error="memory engine not available")
         hits = eng.recall(query, k=int(args.get("k", 8)),
                           include_expired=bool(args.get("include_expired", False)))
@@ -396,13 +380,10 @@ def register_memory_tools(registry: ToolRegistry, db: Database,
     def clear_memory(args: dict) -> ToolResult:
         scope = (args.get("scope") or "all").lower()
         done: dict = {}
-        if scope in ("memory", "cognee", "facts", "all"):
+        if scope in ("memory", "facts", "all"):
             eng = _engram()
             if eng is not None:
                 done["memory"] = eng.store.wipe()
-            if "mcp_cognee_forget" in registry:
-                r = registry.execute("mcp_cognee_forget", {"everything": True})
-                done["cognee"] = "cleared" if r.ok else f"failed: {r.error or r.content}"
         if scope in ("conversations", "sessions", "all"):
             done["conversations"] = db.clear_conversations()
         return ToolResult(ok=True, content=f"Cleared memory (scope={scope}): {done}", data=done)
@@ -516,8 +497,7 @@ def register_project_tools(registry: ToolRegistry, db: Database) -> None:
     def index_document(args: dict) -> ToolResult:
         from pathlib import Path
 
-        from namma_agent.core.docindex import (
-            MAX_FILE_BYTES, MAX_FILES_PER_PROJECT, ingest_document)
+        from namma_agent.core.docindex import MAX_FILE_BYTES, MAX_FILES_PER_PROJECT, ingest_document
         from namma_agent.core.safety import check_path
 
         pid = _project_id()
@@ -1080,88 +1060,21 @@ def register_skill_tools(registry: ToolRegistry, store) -> None:
 
 def register_agent_tools(registry: ToolRegistry, agent, provider, db,
                          get_comms=None, bg_store_path=None,
-                         provider_getter=None) -> dict:
+                         provider_getter=None, skills_getter=None,
+                         publish=None, config=None) -> dict:
     """Register delegate_task + background-task + persona tools. Needs the live
-    agent/provider/db. Returns handles for the service's status surface
-    (``{"background_tasks": callable}``).
+    agent/provider/db. Returns handles for the service:
+    ``{"background_tasks": callable, "delegation": DelegationManager}``.
 
-    ``delegate_task`` runs a bounded sub-agent; ``background_task`` runs the same
-    kind of sub-agent on a detached thread (the conversation continues; a comms
-    ping fires when it finishes). Both use a fresh registry that excludes the
-    delegation tools themselves (no recursion) and **never contains destructive
-    tools** — a sub-agent has no approval channel, so it must not be able to
-    change state unsupervised. An optional ``toolsets`` arg widens the default
-    read-only research set to other (non-destructive) toolsets.
+    Delegation runs on :class:`~namma_agent.core.delegation.DelegationManager`
+    (Phase 3): goal/context/tasks[] fan-out, leaf/orchestrator roles, a depth
+    and concurrency cap, a cancellation tree, persisted runs and ``subagent``
+    events. A child's tools never include destructive ones (it has no approval
+    channel). ``publish(event, payload)`` broadcasts run updates (the server
+    forwards them to every connected UI); ``bg_store_path`` is the legacy JSON
+    background-task store, imported once into the runs table.
     """
-    import threading as _threading
-    import time as _time
-    import uuid as _uuid
-
-    from namma_agent.core.agent import Agent  # local import avoids an import cycle
-
-    _EXCLUDE_FROM_SUBAGENT = {"delegate_task", "background_task",
-                              "check_background_task"}
-    #: Background task registry: id → {name, task, status, result, ...}.
-    #: Mirrored to a JSON store so finished results survive a restart; a task
-    #: that was still running when the process died shows as "interrupted".
-    _bg_tasks: dict[str, dict] = {}
-    _bg_lock = _threading.Lock()
-    _BG_KEEP = 50  # newest entries kept in the store
-
-    from namma_agent.tools import _jsonstore
-    _bg_path = (bg_store_path if bg_store_path is not None
-                else _jsonstore.store_path("background_tasks",
-                                           "background_tasks.json"))
-
-    def _bg_public(entry: dict) -> dict:
-        return {k: v for k, v in entry.items() if not k.startswith("_")}
-
-    def _bg_save() -> None:
-        with _bg_lock:
-            entries = sorted((_bg_public(e) for e in _bg_tasks.values()),
-                             key=lambda e: e.get("started_at") or 0)[-_BG_KEEP:]
-        try:
-            _jsonstore.save(_bg_path, entries)
-        except Exception as exc:  # noqa: BLE001 — persistence is best-effort
-            from namma_agent.core.logger import logger
-            logger.debug("[bg-task] store save failed: %s", exc)
-
-    # Boot: restore past tasks; anything the previous process left "running"
-    # can't be resumed (its thread died with the process) — mark it clearly.
-    _interrupted = False
-    for _entry in _jsonstore.load(_bg_path):
-        if _entry.get("id"):
-            if _entry.get("status") == "running":
-                _entry["status"] = "interrupted"
-                _entry["error"] = "the app restarted while this task was running"
-                _interrupted = True
-            _bg_tasks[_entry["id"]] = _entry
-    if _interrupted:
-        _bg_save()
-
-    def _sub_registry(toolsets: Optional[list] = None) -> ToolRegistry:
-        """The tool surface a sub-agent sees: requested (non-destructive) toolsets
-        or, by default / as a fallback, the read-only research set."""
-        sub_registry = ToolRegistry()
-        wanted = {str(t).strip() for t in (toolsets or []) if str(t).strip()}
-        if wanted:
-            for tool in registry.all():
-                if (tool.name in _EXCLUDE_FROM_SUBAGENT or tool.destructive
-                        or not tool.enabled):
-                    continue
-                if tool.name in wanted or (tool.category or "general") in wanted:
-                    sub_registry.add(tool)
-        if len(sub_registry) == 0:
-            if wanted:  # asked for toolsets, got none — say so instead of guessing
-                from namma_agent.core.logger import logger
-                logger.warning("[delegate] no non-destructive tool matched %s — "
-                               "falling back to the research set",
-                               ", ".join(sorted(wanted)))
-            for name in _RESEARCH_TOOLS:
-                tool = registry.get(name)
-                if tool is not None and tool.enabled:
-                    sub_registry.add(tool)
-        return sub_registry
+    from namma_agent.core.delegation import DelegationManager, render_results
 
     def _subagent_provider():
         """The brain a sub-agent runs on, resolved LIVE at call time.
@@ -1193,116 +1106,92 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
             return cand
         return provider
 
-    def _run_subagent(task: str, toolsets: Optional[list] = None, prov=None):
-        prov = prov if prov is not None else _subagent_provider()
-        if getattr(prov, "tool_allow", None):
-            prov = _UnscopedProvider(prov)
-        # Inherit the main agent's tool-step budget so an unlimited config
-        # (tool_loop_limit <= 0) lets deep research run to completion instead of
-        # being capped at a hidden sub-agent limit.
-        sub = Agent(prov, _sub_registry(toolsets), db, persona=agent.persona,
-                    tool_loop_limit=agent.tool_loop_limit, max_history_turns=4)
-        instruction = (
-            "You are a focused sub-task/research agent. Use your tools to actually "
-            "complete the task below, then report concise findings (with source URLs "
-            "where relevant). Do not ask follow-up questions.\n\nTASK: " + task
-        )
-        # A sub-agent's transcript is bookkeeping, not a conversation: give it its
-        # own session KIND so it never surfaces in the user's chat sidebar (a plain
-        # session showed up there as a phantom chat titled "You are a focused
-        # sub-task/research agent…" for every delegation).
-        session_id = db.create_session_in(kind="subagent", persona=agent.persona.id)
-        return sub.process_turn(instruction, session_id=session_id)
+    manager = DelegationManager(
+        db=db, registry=registry, parent_agent=agent,
+        resolve_provider=_subagent_provider, skills_getter=skills_getter,
+        get_comms=get_comms, publish=publish, config=config,
+        research_tools=_RESEARCH_TOOLS)
+    if bg_store_path is None:
+        from namma_agent.tools import _jsonstore
+        bg_store_path = _jsonstore.store_path("background_tasks", "background_tasks.json")
+    try:
+        from namma_agent.tools import _jsonstore
+        manager.import_legacy_background(_jsonstore.load(bg_store_path))
+    except Exception as exc:  # noqa: BLE001 — a bad legacy file must not block boot
+        from namma_agent.core.logger import logger
+        logger.debug("[delegation] legacy background import failed: %s", exc)
+
+    def _untrusted() -> bool:
+        from namma_agent.core.trust import get_message_trust
+        return get_message_trust() == "untrusted"
+
+    _REFUSED = "Delegation isn't available for messages from untrusted senders."
 
     def delegate_task(args: dict) -> ToolResult:
-        task = (args.get("task") or "").strip()
-        if not task:
-            return ToolResult(ok=False, content="", error="'task' is required")
+        if _untrusted():
+            return ToolResult(ok=False, content="", error=_REFUSED)
         try:
-            result = _run_subagent(task, args.get("toolsets"))
+            results = manager.delegate(args)
+        except ValueError as exc:
+            return ToolResult(ok=False, content="", error=str(exc))
         except Exception as exc:  # noqa: BLE001
             return ToolResult(ok=False, content="", error=f"delegation failed: {exc}")
-        return ToolResult(ok=True, content=result.content or "(no findings)",
-                          data={"tools_used": result.tools_used})
+        if len(results) == 1 and results[0]["status"] == "failed":
+            return ToolResult(ok=False, content="", data={"results": results},
+                              error=f"delegation failed: {results[0].get('error', '')}")
+        return ToolResult(ok=True, content=render_results(results), data={"results": results})
 
     def background_task(args: dict) -> ToolResult:
-        task = (args.get("task") or "").strip()
-        if not task:
-            return ToolResult(ok=False, content="", error="'task' is required")
-        name = (args.get("name") or task).strip()[:60]
-        task_id = _uuid.uuid4().hex[:8]
-        entry = {"id": task_id, "name": name, "task": task, "status": "running",
-                 "result": "", "error": "", "started_at": _time.time(),
-                 "finished_at": None}
-        with _bg_lock:
-            _bg_tasks[task_id] = entry
-        _bg_save()
-        # Resolve the brain HERE, on the turn's thread: the current provider is a
-        # contextvar, and a new thread does not inherit it.
-        prov = _subagent_provider()
-
-        def _work() -> None:
-            try:
-                res = _run_subagent(task, args.get("toolsets"), prov=prov)
-                result, status, error = res.content or "(no findings)", "done", ""
-            except Exception as exc:  # noqa: BLE001
-                result, status, error = "", "failed", str(exc)
-            with _bg_lock:  # the reader (check_background_task) holds this too
-                entry.update(result=result, status=status, error=error,
-                             finished_at=_time.time())
-            _bg_save()
-            # Ping the user over comms when a channel is configured — the whole
-            # point of a background task is not having to sit and wait for it.
-            try:
-                comms = get_comms() if get_comms else None
-                if comms is not None and getattr(comms, "any_available", False):
-                    if entry["status"] == "done":
-                        comms.send(f"✅ Background task “{name}” finished:\n\n"
-                                   f"{entry['result'][:800]}")
-                    else:
-                        comms.send(f"❌ Background task “{name}” failed: "
-                                   f"{entry['error'][:200]}")
-            except Exception:  # noqa: BLE001 — notification is best-effort
-                pass
-
-        thread = _threading.Thread(target=_work, name=f"bg-task-{task_id}",
-                                   daemon=True)
-        entry["_thread"] = thread
-        thread.start()
+        if _untrusted():
+            return ToolResult(ok=False, content="", error=_REFUSED)
+        try:
+            run = manager.start_background(args)
+        except ValueError as exc:
+            return ToolResult(ok=False, content="", error=str(exc))
         return ToolResult(
             ok=True,
-            content=(f"Started background task {task_id} (“{name}”). The "
-                     f"conversation continues meanwhile — check on it with "
-                     f"check_background_task."),
-            data={"id": task_id})
+            content=(f"Started background task {run['id']} (“{run['name']}”). The "
+                     "conversation continues meanwhile; its report will be posted in "
+                     "this chat when it finishes (check_background_task shows progress)."),
+            data={"id": run["id"]})
+
+    def _bg_line(r: dict) -> str:
+        extra = f", now running {r['current_tool']}" if r.get("current_tool") else ""
+        return f"- {r['id']} “{r['name']}” — {r['status']}{extra}"
 
     def check_background_task(args: dict) -> ToolResult:
         task_id = (args.get("id") or "").strip()
-        with _bg_lock:
-            entries = dict(_bg_tasks)
         if task_id:
-            entry = entries.get(task_id)
+            entry = manager.get(task_id)
             if entry is None:
                 return ToolResult(ok=False, content="",
                                   error=f"no background task {task_id!r}")
-            if entry["status"] == "running":
+            status = entry["status"]
+            if status in ("queued", "running"):
                 return ToolResult(ok=True, content=f"Task {task_id} (“{entry['name']}”) "
-                                                   "is still running.",
-                                  data={"status": "running"})
-            if entry["status"] in ("failed", "interrupted"):
-                return ToolResult(ok=True, content=f"Task {task_id} {entry['status']}: "
-                                                   f"{entry['error']}",
-                                  data={"status": entry["status"]})
-            return ToolResult(ok=True, content=entry["result"],
-                              data={"status": "done"})
+                                                   f"is {status} (step {entry.get('steps', 0)}).",
+                                  data={"status": status})
+            if status in ("failed", "interrupted", "cancelled"):
+                return ToolResult(ok=True, content=f"Task {task_id} {status}: "
+                                                   f"{entry.get('error') or entry.get('exit_reason')}",
+                                  data={"status": status})
+            return ToolResult(ok=True, content=entry.get("summary") or "(no findings)",
+                              data={"status": status, "truncated": entry.get("truncated")})
+        entries = manager.list(kind="background", limit=50)
         if not entries:
             return ToolResult(ok=True, content="No background tasks have been started.")
-        lines = [f"- {e['id']} “{e['name']}” — {e['status']}"
-                 for e in entries.values()]
-        return ToolResult(ok=True, content="Background tasks:\n" + "\n".join(lines),
-                          data={"tasks": [{k: v for k, v in e.items()
-                                           if not k.startswith("_")}
-                                          for e in entries.values()]})
+        return ToolResult(ok=True, content="Background tasks:\n" + "\n".join(
+            _bg_line(e) for e in entries), data={"tasks": entries})
+
+    def cancel_background_task(args: dict) -> ToolResult:
+        task_id = (args.get("id") or "").strip()
+        if not task_id:
+            return ToolResult(ok=False, content="", error="'id' is required")
+        out = manager.cancel(task_id)
+        if not out["ok"]:
+            return ToolResult(ok=False, content="", error=out["error"])
+        return ToolResult(ok=True, content=f"Cancelled {len(out['cancelled'])} run(s).",
+                          data=out)
 
     def _summarize_provider():
         """The brain that writes session summaries. Resolved LIVE through the
@@ -1326,7 +1215,9 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
                 "facts or preferences. Be specific and terse. No preamble.")},
             {"role": "user", "content": convo},
         ]
-        resp = _summarize_provider().generate(prompt, tools=None, stream=False)
+        from namma_agent.core.usage import usage_scope
+        with usage_scope("summary"):
+            resp = _summarize_provider().generate(prompt, tools=None, stream=False)
         return (resp.content or "").strip()
 
     def summarize_session(args: dict) -> ToolResult:
@@ -1396,57 +1287,97 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
             agent.set_persona("core")
         return ToolResult(ok=True, content=f"Deleted persona {pid!r}.")
 
+    _budget_schema = {
+        "type": "object",
+        "description": "limits for each child: max_steps (tool rounds), max_tokens",
+        "properties": {"max_steps": {"type": "integer"}, "max_tokens": {"type": "integer"}},
+    }
+    _toolsets_schema = {
+        "type": "array", "items": {"type": "string"},
+        "description": ("toolsets (tool categories, e.g. 'file_ops', 'web', 'documents') "
+                        "or tool names the child may use; default is a read-only research "
+                        "set. Destructive tools are always excluded; an unknown name "
+                        "returns an error listing the valid toolsets."),
+    }
+    _skills_schema = {"type": "array", "items": {"type": "string"},
+                      "description": "names of skills whose procedure the child should follow"}
+
     registry.register(
         name="delegate_task",
-        description=("Hand a self-contained research or multi-step sub-task to a focused "
-                     "sub-agent and get its findings back (blocks until done). Use for web "
-                     "research, multi-source lookups, or anything worth isolating from the "
-                     "main conversation. For long tasks prefer background_task."),
+        description=("Hand self-contained work to focused sub-agents and get their "
+                     "results back (blocks until done). One goal runs one child; "
+                     "tasks[] fans out (up to 3 run in parallel). Give each child the "
+                     "context it needs — it can't see this conversation. Each result "
+                     "reports status, exit_reason and truncated. role='orchestrator' "
+                     "lets a child split its work once more. For long work the user "
+                     "shouldn't wait for, use background_task."),
         parameters={
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "the sub-task to complete, stated fully"},
-                "toolsets": {"type": "array", "items": {"type": "string"},
-                             "description": ("optional toolset/tool names to expose to the "
-                                             "sub-agent instead of the default research set "
-                                             "(destructive tools are always excluded)")},
+                "goal": {"type": "string", "description": "what the child must achieve, stated fully"},
+                "context": {"type": "string",
+                            "description": "facts, paths, constraints the child needs from this conversation"},
+                "tasks": {"type": "array",
+                          "description": ("fan-out: one child per item — a goal string or an "
+                                          "object {goal, context, toolsets, skills, name}"),
+                          "items": {"anyOf": [
+                              {"type": "string"},
+                              {"type": "object", "properties": {
+                                  "goal": {"type": "string"}, "context": {"type": "string"},
+                                  "name": {"type": "string"}, "toolsets": _toolsets_schema,
+                                  "skills": _skills_schema}}]}},
+                "role": {"type": "string", "enum": ["leaf", "orchestrator"]},
+                "toolsets": _toolsets_schema,
+                "skills": _skills_schema,
+                "budget": _budget_schema,
+                "task": {"type": "string", "description": "alias of goal"},
             },
-            "required": ["task"],
         },
         handler=delegate_task,
     )
 
     registry.register(
         name="background_task",
-        description=("Run a self-contained sub-task on a background sub-agent and return "
-                     "IMMEDIATELY with a task id — the conversation continues while it works. "
-                     "The user is pinged over their messaging channel when it finishes; "
-                     "results are fetched with check_background_task. Use for long research "
-                     "or anything the user shouldn't have to wait for."),
+        description=("Run one self-contained task on a background sub-agent and return "
+                     "IMMEDIATELY with a task id — the conversation continues while it "
+                     "works. Its report is posted into this chat when it finishes (and "
+                     "sent over the user's messaging channel). Use for long research or "
+                     "anything the user shouldn't have to wait for."),
         parameters={
             "type": "object",
             "properties": {
-                "task": {"type": "string", "description": "the sub-task to complete, stated fully"},
+                "goal": {"type": "string", "description": "the task, stated fully"},
+                "context": {"type": "string", "description": "what the sub-agent needs to know"},
                 "name": {"type": "string", "description": "short human label for the task"},
-                "toolsets": {"type": "array", "items": {"type": "string"},
-                             "description": ("optional toolset/tool names to expose to the "
-                                             "sub-agent instead of the default research set "
-                                             "(destructive tools are always excluded)")},
+                "toolsets": _toolsets_schema,
+                "skills": _skills_schema,
+                "budget": _budget_schema,
+                "task": {"type": "string", "description": "alias of goal"},
             },
-            "required": ["task"],
         },
         handler=background_task,
     )
 
     registry.register(
         name="check_background_task",
-        description=("Check background tasks started with background_task: with an id, "
-                     "return that task's status/result; without, list all tasks."),
+        description=("Check background tasks: with an id, return that task's status or "
+                     "result; without, list them all."),
         parameters={
             "type": "object",
             "properties": {"id": {"type": "string", "description": "task id (omit to list all)"}},
         },
         handler=check_background_task,
+    )
+
+    registry.register(
+        name="cancel_background_task",
+        description="Cancel a queued or running background task (and any sub-agents it started).",
+        parameters={
+            "type": "object",
+            "properties": {"id": {"type": "string", "description": "the task id"}},
+            "required": ["id"],
+        },
+        handler=cancel_background_task,
     )
 
     registry.register(
@@ -1517,9 +1448,8 @@ def register_agent_tools(registry: ToolRegistry, agent, provider, db,
     registry._summarize_turns = _summarize_turns  # type: ignore[attr-defined]
 
     def _bg_listing() -> list[dict]:
-        with _bg_lock:
-            return sorted((_bg_public(e) for e in _bg_tasks.values()),
-                          key=lambda e: e.get("started_at") or 0, reverse=True)
+        return manager.list(kind="background", limit=50)
 
-    # Handles for the service's background-status surface (/api/status).
-    return {"background_tasks": _bg_listing}
+    # Handles for the service: background-status surface (/api/status) and the
+    # delegation runtime (/api/runs, cancel).
+    return {"background_tasks": _bg_listing, "delegation": manager}

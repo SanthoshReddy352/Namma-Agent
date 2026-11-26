@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import pytest
 
-from namma_agent.core.safety import is_destructive
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.tools import load_tools
 from namma_agent.tools import network as net
@@ -164,4 +163,3 @@ def test_security_rejects_bad_ports(monkeypatch):
 def test_security_tools_destructive(reg):
     for name in ("port_scan", "ping_sweep", "dir_enum", "dns_enum"):
         assert reg.get(name).destructive is True
-        assert is_destructive(name)

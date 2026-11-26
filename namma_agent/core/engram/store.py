@@ -168,9 +168,13 @@ class EngramStore:
         self.db = db
         self.conn = db.conn
         self._lock = db._lock
+        from namma_agent.core.engram.graph import MIGRATIONS as _GRAPH_MIGRATIONS
+        migrations = {t: dict(c) for t, c in _MIGRATIONS.items()}
+        for table, cols in _GRAPH_MIGRATIONS.items():
+            migrations.setdefault(table, {}).update(cols)
         with self._lock:
             self.conn.executescript(_SCHEMA)
-            for table, cols in _MIGRATIONS.items():
+            for table, cols in migrations.items():
                 have = {r["name"] for r in
                         self.conn.execute(f"PRAGMA table_info({table})").fetchall()}
                 for col, decl in cols.items():
@@ -178,6 +182,12 @@ class EngramStore:
                         self.conn.execute(
                             f"ALTER TABLE {table} ADD COLUMN {col} {decl}")
             self.conn.commit()
+        # Phase 10: entity/relation primitives (resolution, typing, supersession,
+        # schema, ranking). Built after the column migrations; rebuilds the graph
+        # from the facts once when the stored graph predates it. ``_now`` is
+        # looked up at call time so tests that freeze the store clock freeze it.
+        from namma_agent.core.engram.graph import MemoryGraph
+        self.kg = MemoryGraph(self, now=lambda: _now())
 
     # -- items ---------------------------------------------------------------
 
@@ -185,17 +195,21 @@ class EngramStore:
                  predicate: str = "", object: str = "", importance: float = 0.5,
                  valid_from: Optional[str] = None, source: str = "",
                  screen_status: str = "ok",
-                 pending_supersedes: Optional[str] = None) -> str:
+                 pending_supersedes: Optional[str] = None,
+                 subject_type: Optional[str] = None,
+                 object_type: Optional[str] = None) -> str:
         item_id = str(uuid.uuid4())
         now = _now()
         with self._lock:
             self.conn.execute(
                 "INSERT INTO memory_items (id, text, kind, subject, predicate, object, "
                 "importance, frequency, last_seen, valid_from, created_at, source, "
-                "screen_status, pending_supersedes) VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?)",
+                "screen_status, pending_supersedes, subject_type, object_type) "
+                "VALUES (?,?,?,?,?,?,?,1,?,?,?,?,?,?,?,?)",
                 (item_id, text.strip(), kind, subject.strip(), predicate.strip(),
                  object.strip(), float(importance), now, valid_from, now, source,
-                 screen_status, pending_supersedes),
+                 screen_status, pending_supersedes, subject_type or None,
+                 object_type or None),
             )
             # Flagged items are stored (quarantined) but never indexed for recall.
             if screen_status == "ok":
@@ -231,10 +245,9 @@ class EngramStore:
                 "UPDATE memory_items SET expired_at=?, valid_to=COALESCE(valid_to,?), "
                 "superseded_by=? WHERE id=? AND expired_at IS NULL",
                 (now, now, superseded_by, item_id))
-            self.conn.execute(
-                "UPDATE memory_relations SET expired_at=?, valid_to=COALESCE(valid_to,?) "
-                "WHERE item_id=? AND expired_at IS NULL", (now, now, item_id))
             self.conn.commit()
+        # Relations expire only when no OTHER live fact still asserts them.
+        self.kg.item_gone(item_id, superseded_by=superseded_by, at=now)
         return cur.rowcount > 0
 
     def search_items(self, query: str, limit: int = 8,
@@ -287,7 +300,7 @@ class EngramStore:
         params.append(limit)
         with self._lock:
             rows = self.conn.execute(
-                f"SELECT * FROM memory_items {clause} ORDER BY last_seen DESC LIMIT ?",
+                f"SELECT * FROM memory_items {clause} ORDER BY last_seen DESC, rowid DESC LIMIT ?",
                 tuple(params)).fetchall()
         return [dict(r) for r in rows]
 
@@ -301,7 +314,7 @@ class EngramStore:
             rows = self.conn.execute(
                 "SELECT id, text, kind, source, screen_status, created_at "
                 "FROM memory_items WHERE screen_status NOT IN ('ok', 'pending') "
-                "ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
         return [dict(r) for r in rows]
 
     # -- write approval (Phase 7c) --------------------------------------------
@@ -314,7 +327,7 @@ class EngramStore:
             rows = self.conn.execute(
                 "SELECT id, text, kind, source, created_at, pending_supersedes "
                 "FROM memory_items WHERE screen_status = 'pending' "
-                "ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
         out = []
         for row in rows:
             item = dict(row)
@@ -350,6 +363,9 @@ class EngramStore:
                 (item_id, item.get("text") or "", item.get("subject") or "",
                  item.get("object") or ""))
             self.conn.commit()
+        # An approved fact becomes graph structure like any other write (it
+        # used to stay out of the graph forever).
+        self.link_item(item_id)
         old = item.get("pending_supersedes")
         if old:
             self.invalidate(old, superseded_by=item_id)
@@ -380,11 +396,8 @@ class EngramStore:
             items = self.conn.execute(
                 "SELECT count(*) AS c FROM memory_items "
                 "WHERE expired_at IS NULL AND archived_at IS NULL").fetchone()["c"]
-            entities = self.conn.execute(
-                "SELECT count(*) AS c FROM memory_entities").fetchone()["c"]
-            relations = self.conn.execute(
-                "SELECT count(*) AS c FROM memory_relations WHERE expired_at IS NULL").fetchone()["c"]
-        return {"items": int(items), "entities": int(entities), "relations": int(relations)}
+        # Entities = what the live graph shows (not orphans of superseded facts).
+        return {"items": int(items), **self.kg.counts()}
 
     # -- vectors (optional embedding channel) -------------------------------------
 
@@ -440,100 +453,68 @@ class EngramStore:
         scored.sort(key=lambda d: d["vscore"], reverse=True)
         return scored[:limit]
 
-    # -- graph -----------------------------------------------------------------
+    # -- graph (thin wrappers over core.engram.graph.MemoryGraph — self.kg) -------
+
+    def link_item(self, item_id: str, confidence: Optional[float] = None) -> dict:
+        """Turn a stored fact's subject/predicate/object into graph structure
+        (typed relation, entity attribute, or a name alias)."""
+        item = self.get_item(item_id)
+        if not item or item.get("screen_status") != "ok":
+            return {"op": "skip", "reason": "not a live fact"}
+        if not (item.get("subject") and item.get("predicate") and item.get("object")):
+            return {"op": "skip", "reason": "no triple"}
+        return self.kg.ingest(
+            item["subject"], item["predicate"], item["object"], item_id=item_id,
+            subject_type=item.get("subject_type"), object_type=item.get("object_type"),
+            confidence=confidence, source=(item.get("source") or "").split(":")[0],
+            valid_from=item.get("valid_from"))
 
     def upsert_entity(self, name: str, type: str = "thing") -> str:
-        norm = _norm(name)
-        if not norm:
-            return ""
-        with self._lock:
-            row = self.conn.execute(
-                "SELECT id FROM memory_entities WHERE norm=?", (norm,)).fetchone()
-            if row:
-                return row["id"]
-            eid = str(uuid.uuid4())
-            self.conn.execute(
-                "INSERT INTO memory_entities (id, name, norm, type, created_at) "
-                "VALUES (?,?,?,?,?)", (eid, name.strip(), norm, type, _now()))
-            self.conn.commit()
-        return eid
+        """Resolve (or create) an entity by any of its names."""
+        return self.kg.resolve(name, None if type in ("", "thing") else type) or ""
 
     def add_relation(self, src_name: str, rel: str, dst_name: str,
                      item_id: Optional[str] = None,
                      valid_from: Optional[str] = None) -> Optional[str]:
-        src, dst = self.upsert_entity(src_name), self.upsert_entity(dst_name)
-        rel = _norm(rel).replace(" ", "_")
-        if not (src and dst and rel):
-            return None
-        with self._lock:
-            rid = str(uuid.uuid4())
-            self.conn.execute(
-                "INSERT INTO memory_relations (id, src, rel, dst, item_id, valid_from, "
-                "created_at) VALUES (?,?,?,?,?,?,?)",
-                (rid, src, rel, dst, item_id, valid_from, _now()))
-            self.conn.commit()
-        return rid
+        """Assert one relation directly (no fact text). Same resolution and
+        canonicalisation as the write pipeline; a literal object becomes an
+        attribute, so this returns the relation id or None."""
+        res = self.kg.ingest(src_name, rel, dst_name, item_id=item_id,
+                             valid_from=valid_from)
+        return res.get("id") if res.get("op") == "relation" else None
 
     def entity_items(self, names: list[str], limit: int = 6) -> list[dict]:
         """Live facts attached (via graph edges) to any of the named entities —
         the 1-hop neighbourhood expansion used by recall."""
-        norms = [_norm(n) for n in names if _norm(n)]
-        if not norms:
-            return []
-        ph = ",".join("?" * len(norms))
-        with self._lock:
-            rows = self.conn.execute(
-                f"SELECT DISTINCT m.* FROM memory_items m "
-                f"JOIN memory_relations r ON r.item_id = m.id "
-                f"JOIN memory_entities e ON e.id IN (r.src, r.dst) "
-                f"WHERE e.norm IN ({ph}) AND m.expired_at IS NULL "
-                f"AND m.archived_at IS NULL "
-                f"AND r.expired_at IS NULL ORDER BY m.importance DESC LIMIT ?",
-                (*norms, limit)).fetchall()
-        return [dict(r) for r in rows]
+        return self.kg.items_for(names, limit=limit)
 
     def entity_names(self) -> list[str]:
-        with self._lock:
-            rows = self.conn.execute("SELECT norm FROM memory_entities").fetchall()
-        return [r["norm"] for r in rows]
+        """Every name/alias recall may spot in a query (the user excluded)."""
+        return self.kg.mention_keys()
 
     def graph(self, include_expired: bool = False,
               as_of: Optional[str] = None) -> dict:
-        """{nodes, edges} for the Memory tab's force layout.
-
-        ``as_of`` (ISO timestamp) time-travels: only edges/entities the system
-        knew at that moment and that had not yet been invalidated — the Memory
-        tab's history slider is just this query."""
-        params: list = []
-        if as_of:
-            where = ("WHERE r.created_at <= ? "
-                     "AND (r.expired_at IS NULL OR r.expired_at > ?)")
-            params = [as_of, as_of]
-        else:
-            where = "" if include_expired else "WHERE r.expired_at IS NULL"
-        with self._lock:
-            if as_of:
-                nodes = [dict(r) for r in self.conn.execute(
-                    "SELECT id, name, type, summary FROM memory_entities "
-                    "WHERE created_at <= ?", (as_of,)).fetchall()]
-            else:
-                nodes = [dict(r) for r in self.conn.execute(
-                    "SELECT id, name, type, summary FROM memory_entities").fetchall()]
-            edges = [dict(r) for r in self.conn.execute(
-                f"SELECT r.src, r.rel, r.dst, r.expired_at FROM memory_relations r "
-                f"{where}", tuple(params)).fetchall()]
-        return {"nodes": nodes, "edges": edges}
+        """{nodes, edges} — see MemoryGraph.snapshot. ``as_of`` (ISO timestamp)
+        time-travels: only edges/entities the system knew at that moment and
+        that had not yet been invalidated (the Memory tab's history slider)."""
+        return self.kg.snapshot(include_expired=include_expired, as_of=as_of,
+                                all_entities=not as_of)
 
     # -- consolidation helpers ---------------------------------------------------
 
     def archive(self, item_id: str) -> None:
         """Decay: drop an item out of recall but keep it browsable (reversible —
         unlike invalidate, nothing supersedes it and validity is untouched)."""
+        now = _now()
         with self._lock:
-            self.conn.execute(
+            cur = self.conn.execute(
                 "UPDATE memory_items SET archived_at=? WHERE id=? AND archived_at IS NULL",
-                (_now(), item_id))
+                (now, item_id))
             self.conn.commit()
+        if cur.rowcount:
+            # An archived fact is out of recall, so it is out of the live graph
+            # too (its relations used to stay drawn forever).
+            self.kg.item_gone(item_id, at=now)
 
     def merge_triple_duplicates(self) -> int:
         """Fold live facts asserting the same (subject, predicate, object) triple
@@ -544,14 +525,20 @@ class EngramStore:
                 "SELECT id, subject, predicate, object, frequency FROM memory_items "
                 "WHERE expired_at IS NULL AND archived_at IS NULL "
                 "AND subject != '' AND predicate != '' AND object != '' "
-                "ORDER BY created_at DESC").fetchall()
+                "ORDER BY created_at DESC, rowid DESC").fetchall()
         groups: dict[tuple, list[dict]] = {}
         for r in rows:
             # snake_case and spaced predicates ("studies_at" / "Studies At")
             # assert the same relation — normalize both to one form.
-            key = (_norm(r["subject"]),
-                   _norm(r["predicate"].replace("_", " ")),
-                   _norm(r["object"]))
+            # Phase 10: through entity resolution too, so "the user"/"I"/the
+            # user's name and "loves"/"likes" fold into one triple.
+            from namma_agent.core.engram.graph import canonical_key, canonical_predicate
+            pred, flip = canonical_predicate(r["predicate"])
+            subj = self.kg.lookup(r["subject"]) or canonical_key(r["subject"])
+            obj = self.kg.lookup(r["object"]) or canonical_key(r["object"])
+            if flip:
+                subj, obj = obj, subj
+            key = (subj, pred, obj)
             groups.setdefault(key, []).append(dict(r))
         merged = 0
         for dupes in groups.values():
@@ -582,7 +569,7 @@ class EngramStore:
                 "SELECT * FROM memory_items WHERE expired_at IS NULL "
                 "AND archived_at IS NULL AND screen_status = 'ok' "
                 "AND (quality IS NULL OR quality_at IS NULL OR quality_at < ?) "
-                "ORDER BY created_at DESC LIMIT ?", (cutoff, max(1, int(limit)))).fetchall()
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (cutoff, max(1, int(limit)))).fetchall()
         return [dict(r) for r in rows]
 
     def set_quality(self, item_id: str, score: float) -> None:
@@ -701,7 +688,7 @@ class EngramStore:
             rows = self.conn.execute(
                 "SELECT id, text, frequency, created_at FROM memory_items "
                 "WHERE expired_at IS NULL AND archived_at IS NULL "
-                "ORDER BY created_at DESC").fetchall()
+                "ORDER BY created_at DESC, rowid DESC").fetchall()
         groups: dict[str, list[dict]] = {}
         for r in rows:
             key = " ".join(r["text"].lower().split())
@@ -739,15 +726,12 @@ class EngramStore:
             self.conn.execute(
                 "DELETE FROM memory_items_fts WHERE rowid="
                 "(SELECT rowid FROM memory_items WHERE id=?)", (item_id,))
-            self.conn.execute("DELETE FROM memory_relations WHERE item_id=?", (item_id,))
             self.conn.execute("DELETE FROM memory_vectors WHERE item_id=?", (item_id,))
             self.conn.execute("DELETE FROM memory_items WHERE id=?", (item_id,))
-            # Entities exist only as relation endpoints — drop any left orphaned
-            # so hard-deleted facts don't leave floating nodes in the graph view.
-            self.conn.execute(
-                "DELETE FROM memory_entities WHERE id NOT IN "
-                "(SELECT src FROM memory_relations UNION SELECT dst FROM memory_relations)")
             self.conn.commit()
+        # Relations it alone supported, its attributes, then orphaned entities —
+        # hard-deleted facts must not leave floating nodes in the graph view.
+        self.kg.item_deleted(item_id)
 
     def wipe(self) -> dict:
         """Erase everything (the danger-zone / clear_memory path)."""
@@ -755,8 +739,12 @@ class EngramStore:
             n = self.conn.execute("SELECT count(*) AS c FROM memory_items").fetchone()["c"]
             for t in ("memory_items", "memory_items_fts", "memory_entities",
                       "memory_relations", "memory_vectors", "core_memory",
-                      "core_memory_history", "consolidation_runs"):
+                      "core_memory_history", "consolidation_runs",
+                      "memory_entity_aliases", "memory_relation_sources",
+                      "memory_attributes"):
                 self.conn.execute(f"DELETE FROM {t}")
+            # User-chosen entity names go with the entities (graph_version stays).
+            self.conn.execute("DELETE FROM memory_meta WHERE key LIKE 'name:%'")
             self.conn.commit()
         return {"items": int(n)}
 

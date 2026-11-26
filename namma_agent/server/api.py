@@ -26,21 +26,53 @@ import json
 import queue
 import re
 import threading
+import time
 from datetime import datetime as _dt
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-from fastapi import FastAPI, File, Form, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import (
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from namma_agent.config import data_dir as _data_dir
 from namma_agent.core.logger import logger
 from namma_agent.core.providers.base import usage_tokens
 from namma_agent.service import NammaAgentService
 
-from namma_agent.config import data_dir as _data_dir
 _UPLOAD_DIR = _data_dir() / "uploads"
+_DEFAULT_MAX_UPLOAD_MB = 50
+
+
+def _upload_limit_bytes(config: Optional[dict]) -> int:
+    """``server.max_upload_mb`` (default 50) in bytes."""
+    try:
+        mb = float(((config or {}).get("server") or {}).get("max_upload_mb") or _DEFAULT_MAX_UPLOAD_MB)
+    except (TypeError, ValueError):
+        mb = _DEFAULT_MAX_UPLOAD_MB
+    return int(max(mb, 0.001) * 1024 * 1024)
+
+
+def _unique_upload_path(directory: Path, name: str) -> Path:
+    """``directory/name``, or ``name (2).ext``, ``name (3).ext``… if taken."""
+    dest = directory / name
+    stem, suffix = dest.stem, dest.suffix
+    n = 2
+    while dest.exists():
+        dest = directory / f"{stem} ({n}){suffix}"
+        n += 1
+    return dest
 _MEDIA_DIR = _data_dir() / "media"
 
 _WEBUI_DIST = Path(__file__).resolve().parent.parent / "webui" / "dist"
@@ -69,7 +101,7 @@ class OnboardingBody(BaseModel):
 
 
 class SettingsBody(BaseModel):
-    config: dict = {}   # deep-merged into config.local.yaml
+    config: dict = {}   # deep-merged into user_config.yaml
     env: dict = {}      # written to .env (e.g. API keys)
 
 
@@ -92,6 +124,61 @@ class McpServerToggleBody(BaseModel):
     enabled: bool = True
 
 
+class McpServersBody(BaseModel):
+    servers: list = []
+
+
+class McpServerBody(BaseModel):
+    server: dict
+    replace: bool = False
+
+
+class McpNameBody(BaseModel):
+    name: str
+
+
+class McpImportBody(BaseModel):
+    config: Any = None
+    url: str = ""
+
+
+class SetupSecretBody(BaseModel):
+    name: str
+    value: str
+
+
+class SetupVerifyBody(BaseModel):
+    provider: str
+    model: str = ""
+
+
+class ActiveModelBody(BaseModel):
+    model_id: str = ""
+
+
+class SetupOnboardBody(BaseModel):
+    type: str
+    model: str
+    key: str = ""
+    base_url: str = ""
+
+
+class SetupMailBody(BaseModel):
+    address: str
+    provider: str = "custom"
+    id: str = ""
+    imap_host: str = ""
+    smtp_host: str = ""
+    imap_port: int = 0
+    smtp_port: int = 0
+
+
+class McpPresetBody(BaseModel):
+    preset: str
+    params: dict = {}
+    name: str = ""
+
+
 class MemoryRecallBody(BaseModel):
     query: str = ""
     top_k: int = 8
@@ -107,6 +194,18 @@ class MemoryForgetBody(BaseModel):
     item_id: str = ""
     everything: bool = False
     hard: bool = False       # hard-delete instead of invalidate
+
+
+class MemoryGraphMergeBody(BaseModel):
+    """Phase 10: fold entity ``source`` into ``target``."""
+    source: str = ""
+    target: str = ""
+
+
+class MemoryGraphEntityBody(BaseModel):
+    """Phase 10: rename / retype an entity."""
+    name: str = ""
+    type: str = ""
 
 
 class MemoryCoreBody(BaseModel):
@@ -140,6 +239,13 @@ class UninstallBody(BaseModel):
 class NotifyBody(BaseModel):
     title: str = "Namma Agent"
     body: str = ""
+
+
+class TtsBody(BaseModel):
+    """POST /api/voice/tts — text to read with the OS voice (Phase 9)."""
+    text: str
+    voice: str = ""
+    rate: int = 0
 
 
 class AutostartBody(BaseModel):
@@ -381,8 +487,18 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.middleware("http")
     async def _require_token(request: Request, call_next):
         path = request.url.path
+        # Sandboxed visuals (iframe sandbox="allow-scripts", no same-origin) run
+        # with an opaque origin and send ``Origin: null``. Their CSP already
+        # blocks the network; refusing null-origin requests is the second lock.
+        if request.headers.get("origin") == "null":
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "forbidden"}, status_code=403)
         guarded = path.startswith("/api") or path.startswith("/v1")
-        if _auth_token() and guarded and path != "/api/health":
+        # Provider OAuth callbacks are a top-level redirect from the provider's
+        # site, which can't carry the token. They're guarded by their own
+        # single-use, 10-minute nonce in the path instead (core/oauth.py).
+        oauth_callback = bool(re.match(r"^/api/oauth/[a-z0-9_-]+/callback(/|$)", path))
+        if _auth_token() and guarded and path != "/api/health" and not oauth_callback:
             supplied = request.headers.get("x-namma-token") or \
                 request.query_params.get("token")
             authz = request.headers.get("authorization", "")
@@ -396,6 +512,27 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.get("/api/health")
     def health():
         return {"ok": True}
+
+    @app.post("/api/desktop/focus")
+    def desktop_focus():
+        """Bring this process's native window forward (a second launch calls this
+        instead of opening a duplicate window). ``focused: false`` = no window
+        here (headless server / browser fallback)."""
+        import sys as _sys
+
+        launcher = _sys.modules.get("namma_agent.app")
+        focused = bool(launcher is not None and launcher.focus_window())
+        return {"ok": True, "focused": focused}
+
+    @app.post("/api/desktop/update-state")
+    def desktop_update_state(body: dict):
+        """The desktop shell reports electron-updater's state here (Phase 9 W3),
+        so /api/update/check can tell the web UI an update is available."""
+        from namma_agent.core import desktop
+        if not desktop.enabled():
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "not running under the desktop app"}, status_code=404)
+        return {"ok": True, "state": desktop.set_update_state(body or {})}
 
     # -- inbound webhooks (Slack / WhatsApp) -------------------------------
     # These platforms can't be polled, so they push events here. We ACK fast and
@@ -434,7 +571,9 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         UI polls this: while unlinked it returns a QR data URI to scan; once the
         phone links the session, ``linked`` flips true and ``qr`` clears."""
         from namma_agent.comms.whatsapp_qr import (
-            WhatsAppQRChannel, _neonize_installed, whatsapp_mode,
+            WhatsAppQRChannel,
+            _neonize_installed,
+            whatsapp_mode,
         )
 
         if whatsapp_mode() != "qr":
@@ -489,10 +628,60 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def config():
         return service.info()
 
+    # -- OS-native voice (Phase 9): read-aloud + dictation via the system's own
+    # speech engines (Windows SAPI, macOS `say`, espeak-ng), not the browser's.
+    @app.get("/api/voice")
+    def voice_status():
+        from namma_agent.core import os_voice
+        return os_voice.status(service.config)
+
+    @app.post("/api/voice/tts")
+    def voice_tts(body: TtsBody):
+        from namma_agent.core import os_voice
+        prefs = service.config.get("voice") or {}
+        try:
+            wav = os_voice.synthesize(body.text, voice=body.voice or prefs.get("tts_voice", ""),
+                                      rate=body.rate or int(prefs.get("tts_rate", 0) or 0))
+        except os_voice.VoiceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return Response(content=wav, media_type="audio/wav", headers={"Cache-Control": "no-store"})
+
+    @app.post("/api/voice/stt")
+    async def voice_stt(request: Request):
+        """Dictation: the body is a WAV recording (the web UI records 16 kHz mono
+        PCM). Returns {text, engine}. The size cap is enforced while reading."""
+        from namma_agent.core import os_voice
+        chunks, size = [], 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > os_voice.MAX_STT_BYTES:
+                raise HTTPException(status_code=413, detail="That recording is too long.")
+            chunks.append(chunk)
+        prefs = service.config.get("voice") or {}
+        engine = request.query_params.get("engine") or prefs.get("stt_engine", "auto")
+        if engine == "browser":
+            engine = "auto"
+        try:
+            return await asyncio.to_thread(os_voice.transcribe, b"".join(chunks), engine,
+                                           prefs.get("stt_language", ""))
+        except os_voice.VoiceError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
     @app.get("/api/tools")
     def tools():
-        """All tools grouped by toolset, with enabled/destructive flags (Toolsets tab)."""
-        return {"tools": service.tools_detail()}
+        """All tools grouped by toolset, with enabled/destructive flags, plus the
+        active toolset profile and tool-search mode (Toolsets tab)."""
+        return service.tools_overview()
+
+    @app.post("/api/tools/profile")
+    def tools_profile(body: dict):
+        """Pick a toolset profile preset (general/productivity/code/research/minimal)."""
+        return service.set_tool_profile(str(body.get("profile") or ""))
+
+    @app.post("/api/tools/search")
+    def tools_search_mode(body: dict):
+        """Tool search mode: auto (defer past the threshold) | always | off."""
+        return service.set_tool_search(str(body.get("mode") or ""))
 
     # -- Skill & Tool packs (export / import) ------------------------------
     @app.get("/api/pack/items")
@@ -507,8 +696,8 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/pack/export")
     def pack_export(body: PackExportBody):
         """Build a pack zip from the selection and save it under ~/.namma_agent/exports."""
-        from namma_agent.core import packs
         from namma_agent.config import assistant_name
+        from namma_agent.core import packs
         from namma_agent.tools.authoring import USER_TOOLS_DIR
         if service.skills is None:
             return {"ok": False, "error": "skills unavailable"}
@@ -983,8 +1172,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         notifications switched off) — the UI then shows an in-app banner instead,
         so the notification still reaches the user in both the browser tab and
         the desktop window."""
-        from namma_agent.core.notifications import (notification_status,
-                                                    send_native_notification)
+        from namma_agent.core.notifications import notification_status, send_native_notification
         ok = send_native_notification(body.title, body.body)
         return {"ok": ok, "reason": "" if ok else notification_status().get("reason", "")}
 
@@ -1034,7 +1222,9 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
         from namma_agent.core.uninstaller import apply_uninstall
         result = apply_uninstall(body.scope)
-        if result.get("started"):
+        # Desktop app: the Electron shell runs the NSIS uninstaller and quits,
+        # stopping this backend itself, so don't race it by exiting first.
+        if result.get("started") and not result.get("shell_exits"):
             # Let the HTTP response flush, then shut the backend down so the
             # uninstaller can delete the (now-unlocked) install directory.
             threading.Timer(1.0, service.shutdown).start()
@@ -1047,6 +1237,44 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/onboarding")
     def complete_onboarding(body: OnboardingBody):
         return service.complete_onboarding(body.name, body.facts)
+
+    # -- setup (Phase 5): secure secrets, verification, first-run onboarding ----
+
+    @app.post("/api/setup/secret")
+    def setup_secret(body: SetupSecretBody):
+        """The ONLY way a credential value enters the app from the setup UI: the
+        secure field posts here → the vault. Never echoed, never logged; the
+        response carries the name only."""
+        result = service.setup_save_secret(body.name, body.value)
+        logger.info("[setup] secret %s saved=%s", body.name, result.get("ok"))
+        return result
+
+    @app.get("/api/setup/status")
+    def setup_status(google: bool = True):
+        return service.setup_status(check_gws=google)
+
+    @app.get("/api/setup/integrations")
+    def setup_integrations(google: bool = True):
+        return {"integrations": service.setup_integrations(check_gws=google)}
+
+    @app.post("/api/setup/verify")
+    def setup_verify(body: SetupVerifyBody):
+        """Real check of a provider (+ one tiny call when a model is given)."""
+        return service.setup_verify_provider(body.provider, body.model)
+
+    @app.post("/api/setup/onboard")
+    def setup_onboard(body: SetupOnboardBody):
+        """First run: save key → provider → verify → default model (only if OK)."""
+        return service.setup_onboard_provider(body.type, body.model, body.key, body.base_url)
+
+    @app.post("/api/setup/mail")
+    def setup_mail(body: SetupMailBody):
+        return service.setup_mail_add(body.address, body.provider, body.id, body.imap_host,
+                                      body.smtp_host, body.imap_port, body.smtp_port)
+
+    @app.post("/api/setup/mail/test")
+    def setup_mail_test(body: dict):
+        return service.setup_mail_test(str(body.get("account") or ""))
 
     @app.get("/api/settings")
     def get_settings():
@@ -1070,18 +1298,26 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/settings")
     def update_settings(body: SettingsBody):
-        from namma_agent.config import set_env_values, update_config
+        from namma_agent.config import update_config
+        from namma_agent.core.secrets import save_settings_env
 
+        # Secrets go to the vault (their stale .env copy is dropped); other env
+        # values go to .env. Names only are logged / returned — never values.
+        try:
+            saved = save_settings_env(body.env) if body.env else {"vault": [], "env": []}
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        written = saved["vault"] + saved["env"]
         merged = update_config(body.config) if body.config else None
-        written = set_env_values(body.env) if body.env else []
-        logger.info("[settings] updated config keys=%s env keys=%s",
-                    list((body.config or {}).keys()), written)
+        logger.info("[settings] updated config keys=%s env keys=%s (vault: %s)",
+                    list((body.config or {}).keys()), written, saved["vault"])
         # Apply live — rebuild the provider so a changed brain / base_url / API key
         # takes effect on the next turn, no restart. (Runs when the provider config
         # OR an env key changed; env-only edits rebuild against the current config.)
         if merged is not None or written:
             service.apply_config(merged)
         return {"ok": True, "config": merged, "env_written": written,
+                "vault_written": saved["vault"],
                 "note": "Applied live — no restart needed."}
 
     @app.post("/api/memory/clear")
@@ -1099,11 +1335,27 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/skills/toggle")
     def toggle_skill(body: SkillToggleBody):
-        """Enable/disable a skill; persists to config.local.yaml (skills.disabled).
+        """Enable/disable a skill; persists to user_config.yaml (skills.disabled).
 
         Approving a draft from the review queue is just this with enabled=true —
         the skill joins the catalog and stops being a proposal."""
         return service.set_skill_enabled(body.name, body.enabled)
+
+    @app.get("/api/skills/market")
+    def skills_market():
+        """The curated skills index, with installed flags."""
+        return service.skills_market_index()
+
+    @app.post("/api/skills/market/preview")
+    def skills_market_preview(body: dict):
+        """Fetch + analyse a skill from a URL (licence, files, scripts, risks)."""
+        return service.skills_market_preview(str(body.get("url") or ""))
+
+    @app.post("/api/skills/market/install")
+    def skills_market_install(body: dict):
+        """Install a previewed skill — lands DISABLED for review."""
+        return service.skills_market_install(str(body.get("url") or ""),
+                                             overwrite=bool(body.get("overwrite")))
 
     @app.post("/api/skills/delete")
     def delete_skill(body: SkillNameBody):
@@ -1115,7 +1367,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/tools/toggle")
     def toggle_tool(body: ToolToggleBody):
-        """Enable/disable a single tool; persists to config.local.yaml (tools.disabled)."""
+        """Enable/disable a single tool; persists to user_config.yaml (tools.disabled)."""
         return service.set_tool_enabled(body.name, body.enabled)
 
     @app.post("/api/toolset/toggle")
@@ -1139,6 +1391,47 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def mcp_server_toggle(body: McpServerToggleBody):
         """Enable/disable an entire MCP server (persists + reconnects)."""
         return service.set_mcp_server_enabled(body.name, body.enabled)
+
+    # Phase 5: validation, the add-server wizard, import, detection.
+    @app.post("/api/mcp/validate")
+    def mcp_validate(body: McpServersBody):
+        """Check a server list without saving: {ok, servers, errors, warnings}."""
+        return service.mcp_validate(body.servers)
+
+    @app.post("/api/mcp/servers")
+    def mcp_save_servers(body: McpServersBody):
+        """Replace the server list (Config editor). Refused when invalid."""
+        return service.mcp_save_servers(body.servers)
+
+    @app.post("/api/mcp/server/add")
+    def mcp_add_server(body: McpServerBody):
+        """Validate + persist ONE server and start only it."""
+        return service.mcp_add_server(body.server, replace=body.replace)
+
+    @app.post("/api/mcp/server/remove")
+    def mcp_remove_server(body: McpNameBody):
+        return service.mcp_remove_server(body.name)
+
+    @app.post("/api/mcp/import")
+    def mcp_import(body: McpImportBody):
+        """Preview servers from a pasted config (Claude Desktop / VS Code /
+        server.json) or a URL. Saves nothing."""
+        return service.mcp_import(body.config, url=body.url)
+
+    @app.get("/api/mcp/detect")
+    def mcp_detect():
+        """Runtimes, disk space, servers configured in other apps, Docker MCP images."""
+        return service.mcp_detect()
+
+    @app.get("/api/mcp/catalog")
+    def mcp_catalog():
+        """Curated server presets for the add-server wizard."""
+        return service.mcp_catalog()
+
+    @app.post("/api/mcp/preset")
+    def mcp_preset(body: McpPresetBody):
+        """Build (and validate) a server entry from a preset + answers. Saves nothing."""
+        return service.mcp_build_preset(body.preset, body.params, body.name)
 
     # -- Engram memory (the Memory tab — native, always on) -----------------
 
@@ -1177,6 +1470,51 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """The knowledge graph as {nodes, edges}. ``as_of`` (ISO timestamp)
         time-travels to what memory knew at that moment (the history slider)."""
         return service.memory_graph(include_expired=include_expired, as_of=as_of)
+
+    # Phase 10 graph primitives: nodes/edges come from /api/memory/graph; these
+    # are the focused reads and the two entity-management writes.
+    @app.get("/api/memory/graph/nodes")
+    def memory_graph_nodes(include_expired: bool = False, as_of: str = ""):
+        g = service.memory_graph(include_expired=include_expired, as_of=as_of)
+        return {"ok": True, "nodes": g["nodes"], "count": len(g["nodes"])}
+
+    @app.get("/api/memory/graph/edges")
+    def memory_graph_edges(include_expired: bool = False, as_of: str = ""):
+        g = service.memory_graph(include_expired=include_expired, as_of=as_of)
+        return {"ok": True, "edges": g["edges"], "count": len(g["edges"])}
+
+    @app.get("/api/memory/graph/entity/{entity_id}")
+    def memory_graph_entity(entity_id: str):
+        """Neighbourhood: attributes, aliases, relations and source facts."""
+        return service.memory_graph_entity(entity_id)
+
+    @app.post("/api/memory/graph/entity/{entity_id}")
+    def memory_graph_update_entity(entity_id: str, body: MemoryGraphEntityBody):
+        return service.memory_graph_update_entity(entity_id, name=body.name,
+                                                  type=body.type)
+
+    @app.get("/api/memory/graph/schema")
+    def memory_graph_schema():
+        """Entity types + relation types derived from the live graph."""
+        return service.memory_graph_schema()
+
+    @app.get("/api/memory/graph/ranked")
+    def memory_graph_ranked(limit: int = 50, include_self: bool = True):
+        """Entities by centrality / salience / recency (components included)."""
+        return service.memory_graph_ranked(limit=limit, include_self=include_self)
+
+    @app.get("/api/memory/graph/search")
+    def memory_graph_search(q: str = "", limit: int = 20):
+        return service.memory_graph_search(q, limit=limit)
+
+    @app.post("/api/memory/graph/merge")
+    def memory_graph_merge(body: MemoryGraphMergeBody):
+        return service.memory_graph_merge(body.source, body.target)
+
+    @app.post("/api/memory/graph/rebuild")
+    def memory_graph_rebuild():
+        """Re-derive the whole graph from the stored facts."""
+        return service.memory_graph_rebuild()
 
     @app.get("/api/memory/items")
     def memory_items(kind: str = "", include_expired: bool = False):
@@ -1229,7 +1567,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/memory/settings")
     def memory_settings_save(body: MemorySettingsBody):
-        """Persist memory tuning to config.local.yaml and apply it live."""
+        """Persist memory tuning to user_config.yaml and apply it live."""
         return service.save_memory_settings(body.settings)
 
     @app.get("/api/comms/status")
@@ -1239,7 +1577,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/comms/trust")
     def comms_trust(body: TrustBody):
         """Set a channel's trust level (owner/trusted/untrusted) — persisted to
-        config.local.yaml and applied to the running bridges immediately."""
+        user_config.yaml and applied to the running bridges immediately."""
         return service.set_channel_trust(body.channel, body.level)
 
     @app.get("/api/security/overview")
@@ -1296,6 +1634,89 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     def search_chats(q: str = ""):
         """Cross-chat keyword search for the sidebar search box."""
         return {"results": service.search_chats(q)}
+
+    # -- message actions (Phase 4) ------------------------------------------------
+
+    @app.delete("/api/sessions/{session_id}/turns/{turn_id}")
+    def turn_delete(session_id: str, turn_id: int):
+        ok = service.db.delete_turn(session_id, turn_id)
+        if ok:
+            event_log.publish({"type": "history_changed", "session_id": session_id})
+        return {"ok": ok}
+
+    @app.post("/api/sessions/{session_id}/truncate")
+    def turn_truncate(session_id: str, body: dict):
+        """Rewind a chat: delete the given turn and everything after it (regenerate
+        and edit-and-resend then send the user message again)."""
+        try:
+            turn_id = int(body.get("from_turn_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="from_turn_id is required") from exc
+        removed = service.db.delete_turns_from(session_id, turn_id)
+        event_log.publish({"type": "history_changed", "session_id": session_id})
+        return {"ok": True, "removed": removed}
+
+    @app.post("/api/sessions/{session_id}/branch")
+    def turn_branch(session_id: str, body: dict):
+        """A new chat that copies this one up to and including the given turn."""
+        try:
+            turn_id = int(body.get("upto_turn_id"))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="upto_turn_id is required") from exc
+        new_id = service.db.branch_session(session_id, turn_id)
+        if not new_id:
+            raise HTTPException(status_code=404, detail="nothing to branch")
+        return {"ok": True, "session_id": new_id}
+
+    # -- inline visuals & render feedback (Phase 4) ------------------------------
+
+    @app.get("/api/visuals/{visual_id}")
+    def visual_html(visual_id: str):
+        """The stored HTML of a render_visual visual. The client wraps it in a
+        sandboxed iframe (srcdoc, CSP connect-src 'none'); it is served as plain
+        text so the browser never renders it on the app's origin."""
+        from fastapi.responses import PlainTextResponse
+
+        from namma_agent.tools.visuals import load_visual
+        html = load_visual(visual_id)
+        if html is None:
+            raise HTTPException(status_code=404, detail="no such visual")
+        return PlainTextResponse(html, headers={"X-Content-Type-Options": "nosniff",
+                                                "Cache-Control": "private, max-age=3600"})
+
+    @app.post("/api/render_error")
+    def render_error(body: dict):
+        """A mermaid / chart / visual / A2UI block failed to render in the browser.
+        Noted per chat; the model hears about it at the start of its next turn."""
+        return service.note_render_error(
+            str(body.get("session_id") or ""), str(body.get("kind") or "visual"),
+            str(body.get("error") or ""), str(body.get("snippet") or ""))
+
+    # -- delegation runs (Phase 3) ---------------------------------------------
+
+    @app.get("/api/runs")
+    def runs_list(session_id: str = "", kind: str = "", limit: int = 100):
+        """Sub-agent runs (delegate_task children and background tasks), newest first."""
+        return {"runs": service.list_runs(session_id=session_id, kind=kind, limit=limit)}
+
+    @app.get("/api/runs/{run_id}")
+    def runs_get(run_id: str):
+        run = service.get_run(run_id)
+        if run is None:
+            raise HTTPException(status_code=404, detail="no such run")
+        return run
+
+    @app.post("/api/runs/{run_id}/cancel")
+    def runs_cancel(run_id: str):
+        """Cancel a run and its whole subtree."""
+        return service.cancel_run(run_id)
+
+    @app.get("/api/usage/requests")
+    def usage_requests(session_id: str = "", limit: int = 100, days: int = 7):
+        """Per-request usage log (Phase 2): the newest model calls — chat steps
+        and background work — plus the by-kind breakdown and cache-read ratio."""
+        return {"requests": service.db.usage_requests(session_id=session_id, limit=limit),
+                "breakdown": service.db.usage_breakdown(days=days)}
 
     @app.get("/api/status")
     def background_status():
@@ -1357,7 +1778,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/learning_settings")
     def learning_settings_save(body: LearningSettingsBody):
-        """Persist to config.local.yaml and apply live (runners start/stop now)."""
+        """Persist to user_config.yaml and apply live (runners start/stop now)."""
         return service.save_learning_settings(body.settings)
 
     # -- weekly self-review (measured self-improvement) -----------------------
@@ -1382,18 +1803,101 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.get("/api/providers")
     def providers():
-        """Provider catalog (with .env key-set flags) + the active provider config."""
-        from namma_agent.core.providers.catalog import provider_catalog
+        """The provider catalogue in the Phase 9 contract shape —
+        ``{providers: [{id, label, group, auth, key_env, key_url, base_url,
+        needs_base_url, key_set, connected, docs_url, …}], groups, active}``."""
+        from namma_agent.core.providers.catalog import GROUPS, provider_catalog
 
         pcfg = service.config.get("provider") or {}
         return {
-            "providers": provider_catalog(),
+            "providers": provider_catalog(service.configured_providers()),
+            "groups": list(GROUPS),
             "active": {
                 "type": pcfg.get("type", ""),
                 "model": pcfg.get("model", ""),
                 "base_url": pcfg.get("base_url", ""),
             },
         }
+
+    # -- provider OAuth (Phase 9 W2: OpenRouter PKCE) -----------------------
+    from namma_agent.core.oauth import OAuthError, OAuthManager
+
+    oauth = OAuthManager()
+    app.state.oauth = oauth
+
+    @app.post("/api/providers/{provider_id}/oauth/start")
+    def provider_oauth_start(provider_id: str, request: Request):
+        """Begin an official PKCE sign-in. Returns ``{authorize_url}`` for the UI
+        to open; the provider redirects back to ``/api/oauth/{id}/callback/…``."""
+        from fastapi.responses import JSONResponse
+
+        server_base = str(request.base_url).rstrip("/")
+        # Only this app's own pages may start a flow: CORS is open (*), so without
+        # this a third-party site could start one and later feed the callback a
+        # code from ITS OWN account (login CSRF → the user's chats on its key).
+        # (Loopback origins on any port are this machine — e.g. the Vite dev server.)
+        origin = (request.headers.get("origin") or "").rstrip("/")
+        loopback = bool(re.match(r"^https?://(localhost|127\.0\.0\.1|\[::1\])(:\d+)?$", origin))
+        if origin and origin != server_base and not loopback:
+            return JSONResponse({"ok": False, "error": "cross-origin sign-in refused"},
+                                status_code=403)
+        if not oauth.supports(provider_id):
+            return JSONResponse({"ok": False, "error": f"{provider_id!r} has no sign-in flow"},
+                                status_code=404)
+        try:
+            flow = oauth.start(provider_id, server_base)
+        except OAuthError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+        logger.info("[oauth] %s sign-in started", provider_id)
+        return {"ok": True, "authorize_url": flow["authorize_url"]}
+
+    def _oauth_finish(provider_id: str, state: str, code: str, error: str = ""):
+        from urllib.parse import quote
+
+        from fastapi.responses import RedirectResponse
+
+        if error:
+            msg = f"Sign-in was cancelled or refused ({error})."
+        else:
+            try:
+                key_env, key = oauth.finish(provider_id, state, code)
+                saved = service.setup_save_secret(key_env, key)
+                if saved.get("ok"):
+                    logger.info("[oauth] %s connected (vault=%s)", provider_id, saved.get("vault"))
+                    return RedirectResponse(f"/settings/model?connected={quote(provider_id)}",
+                                            status_code=303)
+                msg = saved.get("error") or "Couldn't store the key."
+            except OAuthError as exc:
+                msg = str(exc)
+        logger.warning("[oauth] %s sign-in failed: %s", provider_id, msg)
+        return RedirectResponse(f"/settings/model?oauth_error={quote(msg)}"
+                                f"&provider={quote(provider_id)}", status_code=303)
+
+    @app.get("/api/oauth/{provider_id}/callback/{state}")
+    def provider_oauth_callback_nonce(provider_id: str, state: str, code: str = "",
+                                      error: str = ""):
+        """OpenRouter echoes no ``state``, so the nonce rides in the path."""
+        return _oauth_finish(provider_id, state, code, error)
+
+    @app.get("/api/oauth/{provider_id}/callback")
+    def provider_oauth_callback(provider_id: str, code: str = "", state: str = "",
+                                error: str = ""):
+        """Contract path; the nonce comes as ``?state=``."""
+        return _oauth_finish(provider_id, state, code, error)
+
+    # -- the default model (Phase 9 W2: explicit active_model) ---------------
+
+    @app.get("/api/active_model")
+    def get_active_model():
+        return {"model_id": service.active_model_id()}
+
+    @app.post("/api/active_model")
+    def post_active_model(body: ActiveModelBody):
+        """Make a configured model the default brain (``{model_id}``; "" clears)."""
+        result = service.set_active_model(body.model_id)
+        if result.get("ok"):
+            logger.info("[settings] default model -> %s", result.get("model_id"))
+        return result
 
     @app.get("/api/env_status")
     def env_status(keys: str = ""):
@@ -1412,7 +1916,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/configured_providers")
     def save_configured_providers(body: ConfiguredProvidersBody):
-        """Persist the named provider connections to config.local.yaml and apply
+        """Persist the named provider connections to user_config.yaml and apply
         them live (no restart): models built on these providers rebuild on the
         next turn with the new type/base_url/key."""
         from namma_agent.config import configured_providers as _norm
@@ -1432,7 +1936,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
     @app.post("/api/configured_models")
     def save_configured_models(body: ConfiguredModelsBody):
-        """Persist the model-profile list to config.local.yaml and apply it live
+        """Persist the model-profile list to user_config.yaml and apply it live
         (no restart): new profiles are immediately switchable in chat."""
         from namma_agent.config import configured_models as _norm
         from namma_agent.config import update_config
@@ -1474,33 +1978,210 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         """Save an attached document and return its path so the agent can read it
         (via read_document). Used by the chat UI's attach button."""
         _UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-        safe_name = Path(file.filename or "upload").name
-        dest = _UPLOAD_DIR / safe_name
-        data = await file.read()
-        dest.write_bytes(data)
-        logger.info("[upload] saved %s (%d bytes)", dest, len(data))
-        return {"ok": True, "path": str(dest.resolve()), "name": safe_name, "bytes": len(data)}
+        limit = _upload_limit_bytes(service.config)
+        safe_name = Path(file.filename or "upload").name or "upload"
+        dest = _unique_upload_path(_UPLOAD_DIR, safe_name)
+        # Stream to disk in chunks with a hard size cap: reading the whole body
+        # into memory let one request exhaust RAM, and a same-named upload
+        # silently overwrote an earlier attachment.
+        size = 0
+        try:
+            with dest.open("wb") as fh:
+                while chunk := await file.read(1024 * 1024):
+                    size += len(chunk)
+                    if size > limit:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"file exceeds the {limit // (1024 * 1024)} MB upload limit "
+                                   "(server.max_upload_mb)")
+                    fh.write(chunk)
+        except BaseException:
+            dest.unlink(missing_ok=True)
+            raise
+        logger.info("[upload] saved %s (%d bytes)", dest, size)
+        return {"ok": True, "path": str(dest.resolve()), "name": dest.name, "bytes": size}
+
+    # -- event protocol v2 (Phase 4): one app-level log, seq + replay ---------
+    #
+    # Every chat event goes through ``event_log`` (server/event_log.py): it gets
+    # a ``seq``, lands in a ring buffer, and fans out to EVERY connected socket.
+    # A reconnecting client resumes from its last seq, so a dropped connection
+    # no longer loses the in-flight reply. Turn state that must survive a
+    # reconnect (approval / password waits, Stop flags, per-chat locks) lives
+    # here at app level, not inside one connection.
+    from namma_agent.server.event_log import EventLog
+
+    event_log = EventLog(size=500)
+    app.state.event_log = event_log
+    _broadcast = getattr(service, "broadcast", None)
+    if _broadcast is not None:
+        # Process-wide events (sub-agent runs that outlive a turn) join the log.
+        _broadcast.subscribe(lambda e, p: event_log.publish({"type": e, **p}))
+    approvals: dict[str, queue.Queue] = {}
+    passwords: dict[str, queue.Queue] = {}
+    # Tools the user chose to "allow for the rest of this session", keyed by
+    # session id — remembered for that chat only.
+    session_allow: dict[str, set[str]] = {}
+    counter = itertools.count()
+    # Per-session cancel flags so the Stop button only halts the chat it was
+    # pressed in — several turns (one per chat) can run concurrently.
+    cancel_flags: dict[str, dict] = {}
+    # One turn at a time per chat (keyed by event loop too: test clients each
+    # run their own loop, and an asyncio.Lock is bound to the loop it was used
+    # on). A new prompt waits for a stopping turn to wind down.
+    turn_locks: dict[tuple, asyncio.Lock] = {}
+    # Strong references to running turn tasks: a turn outlives the socket that
+    # started it (the client may reconnect and resume), and asyncio only keeps
+    # weak references to tasks — an unreferenced one can be collected mid-run.
+    turn_tasks: set = set()
+
+    def publish(item: dict) -> dict:
+        return event_log.publish(item)
+
+    def sink(event: str, payload: dict):
+        publish({"type": event, **payload})
+
+    def make_approval(session_id: str):
+        def approval(tool: str, args: dict) -> bool:
+            # Already approved for the whole session? Run it without prompting.
+            if tool in session_allow.get(session_id, set()):
+                return True
+            aid = str(next(counter))
+            resp_q: queue.Queue = queue.Queue()
+            approvals[aid] = resp_q
+            publish({"type": "approval_request", "id": aid, "tool": tool,
+                     "args": args, "session_id": session_id})
+            # Wait for the answer in short slices so Stop also releases a turn
+            # parked on an approval card (it used to block for up to 300 s).
+            resp = None
+            deadline = time.monotonic() + 300
+            try:
+                while resp is None:
+                    flag = cancel_flags.get(session_id)
+                    if (flag and flag.get("stop")) or time.monotonic() >= deadline:
+                        approvals.pop(aid, None)
+                        return False
+                    try:
+                        resp = resp_q.get(timeout=0.25)
+                    except queue.Empty:
+                        continue
+            finally:
+                # Every open tab drops the card, whoever answered.
+                publish({"type": "approval_resolved", "id": aid, "session_id": session_id})
+            # The client answers with {approved, scope}: scope "session" remembers
+            # the tool so later calls in this chat skip the prompt. (A bare bool is
+            # still honored for safety.)
+            if not isinstance(resp, dict):
+                return bool(resp)
+            approved = bool(resp.get("approved"))
+            if approved and resp.get("scope") == "session":
+                session_allow.setdefault(session_id, set()).add(tool)
+            return approved
+        return approval
+
+    def askpass(prompt: str):
+        """Request a sudo password from the UI. The secret is returned to the
+        caller (run_shell) and never logged or persisted here."""
+        pid = "pw" + str(next(counter))
+        resp_q: queue.Queue = queue.Queue()
+        passwords[pid] = resp_q
+        publish({"type": "password_request", "id": pid, "prompt": prompt})
+        try:
+            return resp_q.get(timeout=180) or None
+        except queue.Empty:
+            return None
+
+    async def run_turn(text: str, session_id: Optional[str], mode: str,
+                       client_ref: Optional[str], model: Optional[str] = None):
+        # Resolve the session id up front so every event of this turn — tokens
+        # included — is tagged with it. New chats (no session_id) get a fresh
+        # session row here, bound to the chosen model; the client maps its
+        # provisional ref to this id.
+        sid = session_id or service.db.create_session(
+            persona=service.persona.id, model=model or None)
+        # Switching model mid-chat no longer needs a new session (Phase 4): the
+        # client sends the model it wants for THIS turn and it becomes the
+        # chat's model from here on.
+        sess = service.db.get_session(sid)
+        bound = (sess or {}).get("model") or ""
+        if model and model != bound:
+            service.db.set_session_model(sid, model)
+            bound = model
+        effective_model = bound or model or ""
+        key = (id(asyncio.get_running_loop()), sid)
+        lock = turn_locks.setdefault(key, asyncio.Lock())
+        if lock.locked():
+            # Visible "queued" state: this prompt waits for the turn that is
+            # still running (or winding down after Stop) in the same chat.
+            publish({"type": "turn_queued", "session_id": sid, "client_ref": client_ref})
+        async with lock:
+            await _run_locked_turn(text, sid, mode, client_ref, effective_model)
+
+    async def _run_locked_turn(text: str, sid: str, mode: str,
+                               client_ref: Optional[str], effective_model: str):
+        flag = {"stop": False}
+        cancel_flags[sid] = flag
+        publish({"type": "session_started", "session_id": sid, "client_ref": client_ref,
+                 "model": effective_model})
+
+        def on_token_sid(t: str):
+            publish({"type": "token", "text": t, "session_id": sid})
+
+        try:
+            result = await asyncio.to_thread(
+                service.run_turn, text, sid, sink, on_token_sid,
+                make_approval(sid), mode, lambda: flag["stop"], askpass,
+                effective_model,
+            )
+            _u = result.usage or {}
+            publish({
+                "type": "turn_result",
+                "content": result.content,
+                "session_id": result.session_id,
+                "tools_used": result.tools_used,
+                # Per-turn stats for the UI: time-to-first-token (seconds) and the
+                # headline token total — fresh input + cache writes + output, summed
+                # across the whole tool loop. Cheap cache *reads* are reported
+                # separately as `cached` so the headline matches the provider's
+                # usage dashboard.
+                "ttft": result.ttft,
+                "tokens": usage_tokens(_u),
+                "cached": _u.get("cache_read_tokens", 0) or 0,
+                "exit_reason": result.exit_reason,
+                "user_turn_id": result.user_turn_id,
+                "assistant_turn_id": result.assistant_turn_id,
+                # Structured activity timeline (thinking / tool steps) for the
+                # transparency UI — pinned under the reply, persisted via turn meta.
+                "steps": result.steps,
+            })
+            # Auto-title the chat from its first exchange (background, best-effort)
+            # so the sidebar shows a concise label, not the raw first message.
+            async def _title(tsid: str):
+                title = await asyncio.to_thread(service.auto_title, tsid)
+                if title:
+                    publish({"type": "session_titled", "session_id": tsid, "title": title})
+            asyncio.create_task(_title(result.session_id))
+        except Exception as exc:  # noqa: BLE001
+            logger.error("[ws] turn failed: %s", exc)
+            publish({"type": "error", "message": str(exc), "session_id": sid})
+        finally:
+            # Only drop OUR flag — never a newer turn's.
+            if cancel_flags.get(sid) is flag:
+                cancel_flags.pop(sid, None)
 
     @app.websocket("/ws")
     async def ws(websocket: WebSocket):
         # Phase 6a: same token as /api/* (?token= on the WS URL — headers are
         # awkward from browsers). 4401 = our "unauthorized" close code.
-        if not _token_ok(websocket.query_params.get("token")):
+        # The desktop shell injects X-Namma-Token on every request to its
+        # backend (including this upgrade), so the page never holds the token.
+        if not _token_ok(websocket.query_params.get("token")
+                         or websocket.headers.get("x-namma-token")):
             await websocket.close(code=4401)
             return
         await websocket.accept()
         loop = asyncio.get_running_loop()
         outgoing: asyncio.Queue = asyncio.Queue()
-        approvals: dict[str, queue.Queue] = {}
-        passwords: dict[str, queue.Queue] = {}
-        # Tools the user chose to "allow for the rest of this session" — keyed by
-        # session id, so a session-wide approval is remembered for that chat only and
-        # later calls to the same tool skip the prompt. Cleared when the socket closes.
-        session_allow: dict[str, set[str]] = {}
-        counter = itertools.count()
-        # Per-session cancel flags so the Stop button only halts the chat it was
-        # pressed in — several turns (one per chat) can run concurrently here.
-        cancel_flags: dict[str, dict] = {}
 
         async def sender():
             while True:
@@ -1511,122 +2192,49 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
 
         sender_task = asyncio.create_task(sender())
 
-        def push(item: dict):
+        def push(item):
+            """Connection-local send (thread-safe). ``None`` stops the sender."""
             loop.call_soon_threadsafe(outgoing.put_nowait, item)
 
-        def sink(event: str, payload: dict):
-            push({"type": event, **payload})
+        # Not subscribed to the log until the client says where it left off
+        # (``resume``) — so replay and live events can't interleave. A client
+        # that sends anything else first is subscribed live-only.
+        sub = {"unsubscribe": None}
 
-        def on_token(text: str):
-            push({"type": "token", "text": text})
+        def ensure_subscribed(after=None, boot=None) -> None:
+            if sub["unsubscribe"] is not None:
+                if after is None:
+                    return
+                sub["unsubscribe"]()          # a second resume restarts the feed
+            unsubscribe, replay, ok = event_log.subscribe(push, after=after, boot=boot)
+            sub["unsubscribe"] = unsubscribe
+            for item in replay:
+                push(item)
+            if not ok:
+                push({"type": "resync_required", "boot": event_log.boot,
+                      "seq": event_log.seq})
 
-        def make_approval(session_id: str):
-            def approval(tool: str, args: dict) -> bool:
-                # Already approved for the whole session? Run it without prompting.
-                if tool in session_allow.get(session_id, set()):
-                    return True
-                aid = str(next(counter))
-                resp_q: queue.Queue = queue.Queue()
-                approvals[aid] = resp_q
-                push({"type": "approval_request", "id": aid, "tool": tool,
-                      "args": args, "session_id": session_id})
-                try:
-                    resp = resp_q.get(timeout=300)
-                except queue.Empty:
-                    return False
-                # The client answers with {approved, scope}: scope "session" remembers
-                # the tool so later calls in this chat skip the prompt. (A bare bool is
-                # still honored for safety.)
-                if not isinstance(resp, dict):
-                    return bool(resp)
-                approved = bool(resp.get("approved"))
-                if approved and resp.get("scope") == "session":
-                    session_allow.setdefault(session_id, set()).add(tool)
-                return approved
-            return approval
-
-        def askpass(prompt: str):
-            """Request a sudo password from the UI. The secret is returned to the
-            caller (run_shell) and never logged or persisted here."""
-            pid = "pw" + str(next(counter))
-            resp_q: queue.Queue = queue.Queue()
-            passwords[pid] = resp_q
-            push({"type": "password_request", "id": pid, "prompt": prompt})
-            try:
-                return resp_q.get(timeout=180) or None
-            except queue.Empty:
-                return None
-
-        async def run_turn(text: str, session_id: Optional[str], mode: str,
-                           client_ref: Optional[str], model: Optional[str] = None):
-            # Resolve the session id up front so every event of this turn — tokens
-            # included — is tagged with it. New chats (no session_id) get a fresh
-            # session row here, bound to the chosen model; the client maps its
-            # provisional ref to this id.
-            sid = session_id or service.db.create_session(
-                persona=service.persona.id, model=model or None)
-            # A session's model is sticky: the first turn binds it, later turns use
-            # the bound model (switching mid-chat starts a NEW session, by design).
-            sess = service.db.get_session(sid)
-            bound = (sess or {}).get("model") or ""
-            if not bound and model:
-                service.db.set_session_model(sid, model)
-                bound = model
-            effective_model = bound or model or ""
-            flag = {"stop": False}
-            cancel_flags[sid] = flag
-            push({"type": "session_started", "session_id": sid, "client_ref": client_ref,
-                  "model": effective_model})
-
-            def on_token_sid(t: str):
-                push({"type": "token", "text": t, "session_id": sid})
-
-            try:
-                result = await asyncio.to_thread(
-                    service.run_turn, text, sid, sink, on_token_sid,
-                    make_approval(sid), mode, lambda: flag["stop"], askpass,
-                    effective_model,
-                )
-                _u = result.usage or {}
-                push({
-                    "type": "turn_result",
-                    "content": result.content,
-                    "session_id": result.session_id,
-                    "tools_used": result.tools_used,
-                    # Per-turn stats for the UI: time-to-first-token (seconds) and the
-                    # headline token total — fresh input + cache writes + output, summed
-                    # across the whole tool loop. Cheap cache *reads* (the prompt prefix
-                    # re-served on every step) are reported separately as `cached` so the
-                    # headline matches the provider's usage dashboard.
-                    "ttft": result.ttft,
-                    "tokens": usage_tokens(_u),
-                    "cached": _u.get("cache_read_tokens", 0) or 0,
-                    # Structured activity timeline (thinking / tool steps) for the
-                    # transparency UI — pinned under the reply, persisted via turn meta.
-                    "steps": result.steps,
-                })
-                # Auto-title the chat from its first exchange (background, best-effort)
-                # so the sidebar shows a concise label, not the raw first message.
-                async def _title(tsid: str):
-                    title = await asyncio.to_thread(service.auto_title, tsid)
-                    if title:
-                        push({"type": "session_titled", "session_id": tsid, "title": title})
-                asyncio.create_task(_title(result.session_id))
-            except Exception as exc:  # noqa: BLE001
-                logger.error("[ws] turn failed: %s", exc)
-                push({"type": "error", "message": str(exc), "session_id": sid})
-            finally:
-                cancel_flags.pop(sid, None)
+        push({"type": "hello", "boot": event_log.boot, "seq": event_log.seq})
 
         try:
             while True:
                 msg = await websocket.receive_json()
                 mtype = msg.get("type")
+                if mtype == "resume":
+                    try:
+                        after = int(msg.get("from_seq"))
+                    except (TypeError, ValueError):
+                        after = None
+                    ensure_subscribed(after=after, boot=msg.get("boot"))
+                    continue
+                ensure_subscribed()
                 if mtype == "user_input":
-                    asyncio.create_task(run_turn(
+                    task = asyncio.create_task(run_turn(
                         msg.get("text", ""), msg.get("session_id"),
                         msg.get("mode", "agent"), msg.get("client_ref"),
                         msg.get("model")))
+                    turn_tasks.add(task)
+                    task.add_done_callback(turn_tasks.discard)
                 elif mtype == "approval_response":
                     q = approvals.pop(msg.get("id"), None)
                     if q is not None:
@@ -1645,8 +2253,10 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
                         list(cancel_flags.values()) if sid is None else [])
                     for f in flags:
                         f["stop"] = True
-                    push({"type": "stop_speaking"})  # tell the browser to hush
-                    push({"type": "stopped", "session_id": sid})
+                    push({"type": "stop_speaking"})  # tell this browser to hush
+                    # "stopping" until the turn really ends (its turn_result).
+                    publish({"type": "stopped", "session_id": sid,
+                             "running": bool(flags)})
                 elif mtype == "stop_speech":
                     push({"type": "stop_speaking"})  # barge-in: cancel browser TTS
                 elif mtype == "ping":
@@ -1654,6 +2264,8 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         except WebSocketDisconnect:
             pass
         finally:
+            if sub["unsubscribe"] is not None:
+                sub["unsubscribe"]()
             push(None)
             await sender_task
 

@@ -20,6 +20,12 @@ from namma_agent.core.tools import ToolRegistry, ToolResult
 
 _MAX_READ = 200_000  # chars
 _FIND_CAP = 500      # max paths returned by find_files
+#: Directory names find_files never descends into.
+_FIND_SKIP_DIRS = frozenset({
+    ".git", ".hg", ".svn", ".venv", "venv", "env", "node_modules", "__pycache__",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", "dist", "build",
+    ".next", ".cache", "site-packages", "graphify-out",
+})
 
 # Buckets for organize_dir — extension (lowercased, no dot) → folder name.
 _ORGANIZE_BUCKETS = {
@@ -50,7 +56,18 @@ def _read_file(args: dict) -> ToolResult:
     p = Path(path).expanduser()
     if not p.is_file():
         return ToolResult(ok=False, content="", error=f"not a file: {path}")
-    text = p.read_text(encoding="utf-8", errors="replace")[:_MAX_READ]
+    full = p.read_text(encoding="utf-8", errors="replace")
+    try:
+        offset = max(0, int(args.get("offset") or 0))
+        length = int(args.get("max_chars") or _MAX_READ)
+    except (TypeError, ValueError):
+        return ToolResult(ok=False, content="", error="offset/max_chars must be integers")
+    length = max(1, min(length, _MAX_READ))
+    text = full[offset:offset + length]
+    end = offset + len(text)
+    if offset or end < len(full):
+        text += (f"\n\n[read_file: characters {offset}-{end} of {len(full)}. "
+                 + (f"Continue with offset={end}.]" if end < len(full) else "End of file.]"))
     return ToolResult(ok=True, content=text)
 
 
@@ -158,7 +175,11 @@ def _find_files(args: dict) -> ToolResult:
     if not base.is_dir():
         return ToolResult(ok=False, content="", error=f"not a directory: {root}")
     matches: list[str] = []
-    for dirpath, _dirs, files in os.walk(base):
+    for dirpath, dirs, files in os.walk(base):
+        # Never descend into dependency / build / VCS trees — a search from the
+        # app's own folder otherwise burns its whole result cap inside .venv or
+        # node_modules and returns nothing useful.
+        dirs[:] = [d for d in dirs if d not in _FIND_SKIP_DIRS]
         for name in files:
             if fnmatch.fnmatch(name.lower(), pattern.lower()):
                 matches.append(str(Path(dirpath) / name))
@@ -195,9 +216,15 @@ def _organize_dir(args: dict) -> ToolResult:
 
 
 def register(registry: ToolRegistry) -> None:
-    registry.register("read_file", "Read a UTF-8 text file and return its contents.", {
+    registry.register("read_file", ("Read a UTF-8 text file and return its contents. "
+                                     "Large files: page through with offset/max_chars."), {
         "type": "object",
-        "properties": {"path": {"type": "string", "description": "absolute or ~ path"}},
+        "properties": {
+            "path": {"type": "string", "description": "absolute or ~ path"},
+            "offset": {"type": "integer", "description": "character offset to start at (default 0)"},
+            "max_chars": {"type": "integer",
+                          "description": f"max characters to return (default/max {_MAX_READ})"},
+        },
         "required": ["path"],
     }, _read_file)
 

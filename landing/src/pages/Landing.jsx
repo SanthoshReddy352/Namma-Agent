@@ -13,7 +13,7 @@ const Mega = (
       <div className="navx__mega-grid">
         <a className="mega-item" href="#capabilities" onClick={sc("capabilities")}><span className="ico"><Lines size={20} /></span><div><b>Tools</b><span>~85 native actions</span></div></a>
         <a className="mega-item" href="#memory" onClick={sc("memory")}><span className="ico pine"><Brain size={20} /></span><div><b>Memory</b><span>Facts that persist</span></div></a>
-        <a className="mega-item" href="#graph" onClick={sc("graph")}><span className="ico"><Graph size={20} /></span><div><b>Knowledge graph</b><span>Optional, via Cognee</span></div></a>
+        <a className="mega-item" href="#graph" onClick={sc("graph")}><span className="ico"><Graph size={20} /></span><div><b>Knowledge graph</b><span>Built in, zero setup</span></div></a>
         <a className="mega-item" href="#learn" onClick={sc("learn")}><span className="ico pine"><Cap size={20} /></span><div><b>Learning Room</b><span>One module at a time</span></div></a>
       </div>
       <div className="navx__mega-foot"><span className="muted" style={{ fontSize: "var(--fs-small)" }}>One agent, any brain, your machine</span><a href="#capabilities" onClick={sc("capabilities")}>Explore →</a></div>
@@ -104,7 +104,7 @@ export default function Landing() {
         <div className="shell" data-reveal>
           <div className="marquee-mask">
             <div className="marquee" aria-hidden="true">
-              {["Anthropic", "OpenAI", "Google", "Ollama", "LM Studio", "MCP", "Cognee", "Anthropic", "OpenAI", "Google", "Ollama", "LM Studio", "MCP", "Cognee"].map((n, i) => (
+              {["Anthropic", "OpenAI", "Google", "Ollama", "LM Studio", "MCP", "OpenRouter", "Anthropic", "OpenAI", "Google", "Ollama", "LM Studio", "MCP", "OpenRouter"].map((n, i) => (
                 <span key={i} style={{ fontFamily: "var(--font-display)", fontSize: "1.25rem", color: "var(--ink-faint)" }}>{n}</span>
               ))}
             </div>
@@ -147,15 +147,15 @@ export default function Landing() {
         <section id="graph" className="section shell">
           <div className="graph-wrap">
             <div data-reveal="left">
-              <span className="eyebrow"><span className="pixel-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>&nbsp; Optional memory</span>
+              <span className="eyebrow"><span className="pixel-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>&nbsp; Built-in memory</span>
               <h2 style={{ margin: "var(--s-3) 0 var(--s-4)" }}>It remembers how things connect.</h2>
-              <p className="muted" style={{ maxWidth: "46ch" }}>Turn on the optional Cognee layer and your facts stop being a flat list. They become a graph: people, files, and ideas linked by how they relate, so the assistant can follow a thread instead of guessing. It runs containerized and reaches the agent over MCP, adding no Python dependencies.</p>
+              <p className="muted" style={{ maxWidth: "46ch" }}>Engram, the built-in memory, keeps your facts as more than a flat list. People, files, and ideas become entities linked by how they relate, so the assistant can follow a thread instead of guessing. It lives in the same local SQLite database as everything else, with nothing extra to install.</p>
               <ul className="lede-list">
-                <li><Check /> Semantic search over everything it has learned.</li>
+                <li><Check /> Keyword search over everything it has learned, plus optional embeddings.</li>
                 <li><Check /> Entities and relationships, not just keywords.</li>
-                <li><Check /> One command to set up, Docker is all you need.</li>
+                <li><Check /> Browse and correct it in the Memory tab.</li>
               </ul>
-              <div className="row" style={{ marginTop: "var(--s-6)", gap: "var(--s-3)" }}><span className="badge badge--pine"><span className="dot"></span> Cognee</span><span className="badge badge--quiet"><span className="dot"></span> via MCP</span><span className="badge badge--quiet"><span className="dot"></span> no extra deps</span></div>
+              <div className="row" style={{ marginTop: "var(--s-6)", gap: "var(--s-3)" }}><span className="badge badge--pine"><span className="dot"></span> Engram</span><span className="badge badge--quiet"><span className="dot"></span> local SQLite</span><span className="badge badge--quiet"><span className="dot"></span> no extra deps</span></div>
             </div>
             <div className="graph-card" data-reveal="right" aria-hidden="true">
               <svg viewBox="0 0 420 340" fill="none" xmlns="http://www.w3.org/2000/svg">

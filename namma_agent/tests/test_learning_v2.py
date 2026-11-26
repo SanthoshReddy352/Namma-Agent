@@ -41,12 +41,11 @@ def _module_sid(db, topic, mid):
 def test_dangling_visual_is_repaired_with_render(db, topic, monkeypatch):
     """In a module thread, when the model says it'll draw a diagram but DOESN'T call
     render_diagram, the agent forces one render so the promised picture appears."""
+    # Keep the render hermetic/offline — pretend the API returned a real PNG.
+    import namma_agent.tools.learning_media as lm
     from namma_agent.core.agent import Agent
     from namma_agent.core.persona import load_persona
     from namma_agent.core.providers.base import LLMResponse, Provider, ToolCall
-
-    # Keep the render hermetic/offline — pretend the API returned a real PNG.
-    import namma_agent.tools.learning_media as lm
     from namma_agent.tools.learning_media import register as register_media
     fake_png = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
                 b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89" + b"\x00" * 300)
@@ -612,6 +611,7 @@ def test_pose_quiz_persists_card_outside_model_history(db, topic):
 
 def test_session_history_restores_answered_quiz_after_assistant_turn(db, topic):
     from fastapi.testclient import TestClient
+
     from namma_agent.server.api import create_app
 
     sid, payload = _pose(db, topic, "m1")
@@ -650,6 +650,7 @@ def test_session_history_exposes_module_done_for_finished_module(db, topic):
     re-derive the 'Continue to the next module' card on reload — the live
     learning_progress event is transient and otherwise lost."""
     from fastapi.testclient import TestClient
+
     from namma_agent.server.api import create_app
 
     sid = _module_sid(db, topic, "m1")
@@ -667,6 +668,7 @@ def test_session_history_exposes_module_done_for_finished_module(db, topic):
 def test_session_history_omits_module_done_while_module_in_progress(db, topic):
     """An unfinished module's thread carries no module_done — no premature card."""
     from fastapi.testclient import TestClient
+
     from namma_agent.server.api import create_app
 
     sid = _module_sid(db, topic, "m1")
@@ -677,6 +679,7 @@ def test_session_history_omits_module_done_while_module_in_progress(db, topic):
 def test_session_history_module_done_has_no_next_on_final_module(db, topic):
     """Finishing the last module yields module_done with next=None (path complete)."""
     from fastapi.testclient import TestClient
+
     from namma_agent.server.api import create_app
 
     sid = _module_sid(db, topic, "m3")
@@ -828,6 +831,7 @@ def test_learning_from_document_flags_non_syllabus(db, tmp_path):
 
 def test_path_session_endpoint_seeds_intro_once(db, topic):
     from fastapi.testclient import TestClient
+
     from namma_agent.server.api import create_app
 
     svc = _service(db, ["ok"])

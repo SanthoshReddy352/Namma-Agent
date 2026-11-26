@@ -10,7 +10,7 @@
    ───────────────────────────────────────────────────────────────────────── */
 :root, .theme-default {
   --paper: 246 248 252; --paper-soft: 238 241 247; --paper-panel: 255 255 255; --paper-sink: 233 237 245;
-  --ink: 16 19 26; --ink-soft: 90 96 110; --ink-faint: 154 160 173;
+  --ink: 16 19 26; --ink-soft: 90 96 110; --ink-faint: 104 110 123;
   --line: 230 233 240; --line-soft: 239 241 246;
   --brand: 47 107 255; --brand-soft: 231 238 255; --brand-deep: 31 79 214; --brand-wash: 241 245 255;
   --accent-bright: 111 155 255;
@@ -18,7 +18,7 @@
 }
 .theme-slate {
   --paper: 244 246 249; --paper-soft: 233 237 242; --paper-panel: 255 255 255; --paper-sink: 226 231 238;
-  --ink: 27 34 48; --ink-soft: 92 102 120; --ink-faint: 151 161 178;
+  --ink: 27 34 48; --ink-soft: 92 102 120; --ink-faint: 98 108 125;
   --line: 221 227 234; --line-soft: 234 238 243;
   --brand: 61 96 148; --brand-soft: 228 235 243; --brand-deep: 45 74 120; --brand-wash: 238 243 248;
   --accent-bright: 138 168 211;
@@ -26,7 +26,7 @@
 }
 .theme-classic {
   --paper: 250 249 245; --paper-soft: 243 241 234; --paper-panel: 255 255 255; --paper-sink: 239 236 227;
-  --ink: 45 42 38; --ink-soft: 107 103 96; --ink-faint: 156 151 141;
+  --ink: 45 42 38; --ink-soft: 107 103 96; --ink-faint: 114 109 99;
   --line: 232 228 217; --line-soft: 240 237 228;
   --brand: 204 120 92; --brand-soft: 224 168 144; --brand-deep: 184 98 63; --brand-wash: 246 236 230;
   --accent-bright: 224 168 144;
@@ -34,21 +34,80 @@
 }
 .theme-mono {
   --paper: 250 250 250; --paper-soft: 242 242 242; --paper-panel: 255 255 255; --paper-sink: 235 235 235;
-  --ink: 23 23 23; --ink-soft: 92 92 92; --ink-faint: 158 158 158;
+  --ink: 23 23 23; --ink-soft: 92 92 92; --ink-faint: 110 110 110;
   --line: 228 228 228; --line-soft: 239 239 239;
   --brand: 63 63 70; --brand-soft: 231 231 234; --brand-deep: 24 24 27; --brand-wash: 244 244 245;
   --accent-bright: 161 161 170;
   --night: 18 18 18; --night-soft: 31 31 31; --night-panel: 38 38 38; --night-line: 56 56 56; --night-ink: 237 237 237; --night-faint: 150 150 150;
 }
+/* Imperium (Phase 9, owner's Roman direction): parchment and marble by day,
+   Tyrian purple for the accent, bronze-gold for warnings and highlights; by
+   night a deep wine-black with a rose-purple accent. Text meets 4.5:1. */
+.theme-imperium {
+  --paper: 248 244 236; --paper-soft: 240 234 222; --paper-panel: 255 252 246; --paper-sink: 233 225 211;
+  --ink: 38 26 24; --ink-soft: 98 80 72; --ink-faint: 110 92 82;
+  --line: 228 218 202; --line-soft: 238 231 219;
+  --brand: 122 30 78; --brand-soft: 238 220 230; --brand-deep: 94 20 60; --brand-wash: 247 237 241;
+  --accent-bright: 222 140 186;
+  --night: 22 14 18; --night-soft: 33 22 28; --night-panel: 44 30 37; --night-line: 64 46 54; --night-ink: 242 233 224; --night-faint: 178 160 152;
+}
+.theme-imperium.dark, .dark .theme-imperium { --brand: 150 48 102; --brand-deep: 176 64 124; }
+/* Imperium headings: Cinzel (OFL), display only — body text stays the UI font. */
+.theme-imperium .font-serif, .theme-imperium h1, .theme-imperium h2 {
+  font-family: "Cinzel", "Trajan Pro", Georgia, serif; letter-spacing: 0.02em;
+}
 /* Mono needs a lighter accent in dark mode so primary buttons stay visible. */
 .theme-mono.dark { --brand: 82 82 91; --brand-deep: 113 113 122; }
+
+/* ─────────────────────────────────────────────────────────────────────────
+   PHASE 6 SEMANTIC TOKENS — the one set components should use (bg-surface,
+   text-fg-muted, border-border, bg-accent, text-danger …). Derived from each
+   theme's palette above and flipped under .dark, so a component never needs a
+   `dark:` twin. `--ink-faint` (→ --fg-subtle) was darkened to meet 4.5:1 on
+   every light surface; the night faint tones already pass.
+   ───────────────────────────────────────────────────────────────────────── */
+:root, .theme-default, .theme-slate, .theme-classic, .theme-mono, .theme-imperium {
+  --bg: var(--paper); --surface: var(--paper-panel); --surface-raised: var(--paper-panel);
+  --surface-sunken: var(--paper-soft);
+  --surface-hover: var(--paper-soft); --surface-press: var(--paper-sink);
+  --fg: var(--ink); --fg-muted: var(--ink-soft); --fg-subtle: var(--ink-faint); --fg-soft: var(--ink-soft);
+  --border: var(--line);
+  --accent: var(--brand); --accent-fg: 255 255 255; --accent-wash: var(--brand-wash);
+  --danger: 200 30 30; --warning: 161 98 7; --success: 4 120 87; --focus: var(--brand);
+  /* Data-viz series (charts, memory graph) — validated in both modes. */
+  --chart-1: 37 99 235; --chart-2: 217 119 6; --chart-3: 5 150 105; --chart-4: 220 38 38;
+  --chart-5: 124 58 237; --chart-6: 8 145 178; --chart-7: 219 39 119; --chart-8: 101 163 13;
+  --graph-1: 124 196 255; --graph-2: 201 160 255; --graph-3: 126 231 135; --graph-4: 255 166 87;
+  --graph-5: 255 123 156; --graph-6: 121 224 216; --graph-7: 242 204 96; --graph-8: 160 179 255;
+  --graph-9: 255 155 210; --graph-10: 155 227 125;
+  --canvas-bg: 251 252 254; --canvas-ring: 255 255 255; --canvas-label: 51 65 85;
+  --canvas-edge: 100 116 139; --canvas-hover: 51 65 85; --flow-idle: 194 201 214;
+  --katex-error: 200 30 30;
+  /* Brand art (owner's images): the statue's navy ink. */
+  --logo-ink: 44 56 104;
+}
+.dark, .dark .theme-default, .dark .theme-slate, .dark .theme-classic, .dark .theme-mono, .dark .theme-imperium {
+  --bg: var(--night); --surface: var(--night-soft); --surface-raised: var(--night-panel);
+  --surface-sunken: var(--night);
+  --surface-hover: var(--night-soft); --surface-press: var(--night-soft);
+  --fg: var(--night-ink); --fg-muted: var(--night-faint); --fg-subtle: var(--night-faint); --fg-soft: var(--night-ink);
+  --border: var(--night-line);
+  --accent-wash: var(--night-soft);
+  --danger: 248 113 113; --warning: 251 191 36; --success: 52 211 153; --focus: var(--accent-bright);
+  --chart-1: 96 165 250; --chart-2: 251 191 36; --chart-3: 52 211 153; --chart-4: 248 113 113;
+  --chart-5: 167 139 250; --chart-6: 34 211 238; --chart-7: 244 114 182; --chart-8: 163 230 53;
+  --canvas-bg: 7 10 16; --canvas-ring: 7 10 16; --canvas-label: 199 210 224;
+  --canvas-edge: 143 163 189; --canvas-hover: 226 232 240; --flow-idle: 71 85 105;
+  --katex-error: 248 113 113;
+  --logo-ink: 178 192 238;
+}
 
 html, body, #root { height: 100%; margin: 0; }
 
 body {
   background: rgb(var(--paper));
   color: rgb(var(--ink));
-  font-family: Inter, system-ui, "Segoe UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, Inter, Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 .dark body { background: rgb(var(--night)); color: rgb(var(--night-ink)); }
@@ -57,25 +116,235 @@ body {
    desktop-webview defaults suppress selection; force it on for content, and keep
    buttons / icons non-selectable so clicking them never starts a drag-select. */
 html, body, #root { -webkit-user-select: text; user-select: text; }
-button, svg, [role="button"] { -webkit-user-select: none; user-select: none; }
+button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; user-select: none; }
+
+/* Phase 9 titlebar band: drag regions (Electron) and room for the native window
+   controls drawn by titleBarOverlay. Without WCO the env() fallbacks give 0. */
+.app-drag { -webkit-app-region: drag; app-region: drag; }
+.app-no-drag, .app-drag :is(button, a, input, select, textarea, [role="button"]) { -webkit-app-region: no-drag; app-region: no-drag; }
+:root {
+  --titlebar-height: 34px;                       /* Hermes' compact band */
+  /* Width of the native window controls (Electron titleBarOverlay); 0 in a browser. */
+  --titlebar-wco-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  --titlebar-tools-right: max(0.75rem, var(--titlebar-wco-right));
+  --titlebar-tools-width: 60px;                  /* two 28px tools + gap */
+  --titlebar-reserve-right: calc(var(--titlebar-tools-right) + var(--titlebar-tools-width) + 0.75rem);
+  --titlebar-reserve-left: 58px;                 /* 20px inset + 28px tool + gap */
+}
+.titlebar-cluster-left { top: 3px; left: 20px; }   /* centre on the 34px rail/logo axis */
+.titlebar-cluster-right { top: 3px; right: var(--titlebar-tools-right); }
+
+/* ── Brand art (Phase 9) ───────────────────────────────────────────────────
+   Single-colour masks tinted by tokens, so they follow light/dark themes. */
+/* Small marks use a bolder line mask so the engraving survives. */
+.brand-logo-bold { -webkit-mask-image: url(/brand/logo-mask-bold.png) !important; mask-image: url(/brand/logo-mask-bold.png) !important; }
+/* The highlighted mark: a coin in the accent wash with a soft glow; the
+   statue's silhouette is filled so the engraving never reads see-through. */
+.brand-medallion {
+  background: radial-gradient(circle at 34% 28%, rgb(var(--surface-raised)) 0%, rgb(var(--accent-wash)) 58%, rgb(var(--accent) / 0.22) 100%);
+  box-shadow: 0 0 0 1px rgb(var(--accent) / 0.35), 0 0 0 5px rgb(var(--accent) / 0.07), 0 10px 30px -8px rgb(var(--accent) / 0.5);
+  overflow: hidden;
+}
+.brand-medallion-fill, .brand-medallion-ink {
+  -webkit-mask-position: 50% 12%; mask-position: 50% 12%;
+  -webkit-mask-size: 86% auto; mask-size: 86% auto;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.brand-medallion-fill { background-color: rgb(var(--surface-raised)); -webkit-mask-image: url(/brand/logo-fill.png); mask-image: url(/brand/logo-fill.png); }
+.brand-medallion-ink { background-color: rgb(var(--logo-ink)); -webkit-mask-image: url(/brand/logo-mask.png); mask-image: url(/brand/logo-mask.png); }
+.brand-logo-fill, .brand-logo-ink {
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+}
+.brand-logo-ink { background-color: rgb(var(--logo-ink)); -webkit-mask-image: url(/brand/logo-mask.png); mask-image: url(/brand/logo-mask.png); }
+.brand-logo-fill { display: none; -webkit-mask-image: url(/brand/logo-fill.png); mask-image: url(/brand/logo-fill.png); }
+
+/* Dark themes: light-on-dark line art turns the engraving's fine hatching into
+   scattered bright pixels with nothing behind it. So in the dark the mark is a
+   light coin, as in daylight: an ivory face tinted by the theme accent, the
+   silhouette filled, the engraving in dark ink. */
+:root { --coin-face: var(--paper-panel); --coin-ink: var(--logo-ink); }
+.dark {
+  --coin-face: 247 245 239;
+  --coin-ink: 28 31 46;
+}
+.dark .brand-medallion {
+  background: radial-gradient(circle at 34% 28%,
+    rgb(var(--coin-face)) 0%,
+    color-mix(in srgb, rgb(var(--accent)) 16%, rgb(232 230 224)) 62%,
+    color-mix(in srgb, rgb(var(--accent)) 34%, rgb(205 203 198)) 100%);
+}
+.dark .brand-medallion-fill { background-color: rgb(var(--coin-face)); }
+.dark .brand-medallion-ink { background-color: rgb(var(--coin-ink)); }
+.dark .brand-logo {
+  border-radius: 9999px; overflow: hidden;
+  background: radial-gradient(circle at 34% 28%,
+    rgb(var(--coin-face)) 0%,
+    color-mix(in srgb, rgb(var(--accent)) 18%, rgb(228 226 220)) 100%);
+  box-shadow: 0 0 0 1px rgb(var(--accent) / 0.4);
+}
+.dark .brand-logo-fill { display: block; background-color: rgb(var(--coin-face)); }
+.dark .brand-logo-fill, .dark .brand-logo-ink {
+  -webkit-mask-position: 50% 14%; mask-position: 50% 14%;
+  -webkit-mask-size: 84% auto; mask-size: 84% auto;
+}
+.dark .brand-logo-ink { background-color: rgb(var(--coin-ink)); }
+
+/* The solid medallion (home screen): an opaque coin face, a crisp rim and the
+   bold engraving, the same look as the small sidebar mark, just larger. */
+.brand-medallion-solid,
+.dark .brand-medallion-solid {
+  background: rgb(var(--coin-face));
+  box-shadow: 0 0 0 2px rgb(var(--accent) / 0.55), 0 0 0 7px rgb(var(--accent) / 0.10), 0 12px 32px -10px rgb(var(--accent) / 0.55);
+}
+.brand-medallion-solid .brand-medallion-fill { background-color: rgb(var(--coin-face)); }
+.brand-medallion-solid .brand-medallion-ink { background-color: rgb(var(--coin-ink)); }
+/* ── Chat background: painted, crumpled paper (Phase 9 W1, slice 4) ─────────
+   Art from scripts/make_chat_art.py. Each layer is a mask or neutral texture
+   coloured here from tokens: the theme accent, the mode's paint, the ink.  */
+.chat-bg {
+  isolation: isolate; container-type: inline-size;
+  background: rgb(var(--bg));
+  --paint-a: var(--brand);
+  --paint-a-alpha: 0.40; --paint-b-alpha: 0.32; --art-alpha: 0.30;
+  --paper-blend: multiply; --paper-alpha: 0.45;
+  --bg-ink: var(--ink);
+}
+.chat-bg[data-mode="agent"] { --paint-b: 202 138 4; }    /* Imperator: gold */
+.chat-bg[data-mode="chat"]  { --paint-b: 194 84 64; }    /* Scriba: terracotta */
+.chat-bg[data-mode="setup"] { --paint-b: 13 148 136; }   /* Architectus: teal */
+.dark .chat-bg {
+  --paint-a: var(--accent-bright);
+  --paint-a-alpha: 0.36; --paint-b-alpha: 0.28; --art-alpha: 0.20;
+  --paper-blend: soft-light; --paper-alpha: 1;
+  --bg-ink: var(--night-ink);
+}
+.dark .chat-bg[data-mode="agent"] { --paint-b: 251 191 36; }
+.dark .chat-bg[data-mode="chat"]  { --paint-b: 248 128 100; }
+.dark .chat-bg[data-mode="setup"] { --paint-b: 45 212 191; }
+
+.chat-bg-layer { position: absolute; inset: 0; }
+.chat-bg-wash {
+  inset: -2%;                                   /* room for the slow drift */
+  -webkit-mask: var(--wash) center / cover no-repeat;
+          mask: var(--wash) center / cover no-repeat;
+  transition: background-color 0.8s ease;
+  animation: chat-bg-drift 48s ease-in-out infinite alternate;
+}
+.chat-bg-wash-a { --wash: url(/brand/bg/wash-a.webp); background-color: rgb(var(--paint-a) / var(--paint-a-alpha)); }
+.chat-bg-wash-b {
+  --wash: url(/brand/bg/wash-b.webp); background-color: rgb(var(--paint-b) / var(--paint-b-alpha));
+  animation: chat-bg-bloom 1.4s ease-out, chat-bg-drift 56s ease-in-out 1.4s infinite alternate-reverse;
+}
+@keyframes chat-bg-drift { from { transform: translate3d(-0.6%, -0.4%, 0) scale(1.01); } to { transform: translate3d(0.6%, 0.5%, 0) scale(1.03); } }
+@keyframes chat-bg-bloom { from { opacity: 0; transform: scale(0.97); filter: blur(6px); } to { opacity: 1; transform: scale(1.01); filter: blur(0); } }
+
+/* The owner's line art, inked in the theme's ink and printed into the paper
+   (multiply on light themes, screen on dark). Each piece is cropped to its
+   drawing and sits flush with a screen edge; a second, intersected mask
+   feathers it out of that edge, so it reads as reaching in from the corner
+   rather than starting in empty space. */
+.chat-bg { --art-blend: multiply; }
+.dark .chat-bg { --art-blend: screen; }
+.chat-bg-art {
+  position: absolute;
+  background-color: rgb(var(--bg-ink) / var(--art-alpha));
+  mix-blend-mode: var(--art-blend);
+  -webkit-mask: var(--art) center / 100% 100% no-repeat, var(--feather);
+  -webkit-mask-composite: source-in;
+          mask: var(--art) center / 100% 100% no-repeat, var(--feather);
+          mask-composite: intersect;
+}
+/* Top-right: the inked hand hangs in from the top edge; its drips fade out. */
+.chat-bg-art-drip {
+  --art: url(/brand/bg/art-drip.webp);
+  --feather: linear-gradient(to bottom, #000 0%, #000 55%, transparent 96%);
+  top: 0; right: clamp(24px, 7%, 140px);
+  height: clamp(220px, 48%, 460px); aspect-ratio: 350 / 640;
+  transform-origin: 50% 0;
+}
+/* Bottom-right: a hand rises from the bottom edge; the wrist melts into it. */
+.chat-bg-art-rise {
+  --art: url(/brand/bg/art-rise.webp);
+  --feather: linear-gradient(to top, transparent 0%, #000 26%, #000 100%);
+  bottom: 0; right: clamp(16px, 4%, 96px);
+  height: clamp(240px, 54%, 520px); aspect-ratio: 398 / 900;
+}
+/* Bottom-left: the masks, feathered from the corner outwards. */
+.chat-bg-art-masks {
+  --art: url(/brand/bg/art-masks.webp);
+  --feather: radial-gradient(130% 120% at 0% 100%, #000 55%, transparent 100%);
+  left: clamp(8px, 2%, 40px); bottom: clamp(8px, 3%, 40px);
+  height: clamp(150px, 30%, 300px); aspect-ratio: 515 / 731; transform: rotate(-6deg);
+}
+/* While a turn runs, the ink keeps flowing from the hand. */
+.chat-bg[data-busy] .chat-bg-art-drip { animation: chat-bg-ink 2.6s ease-in-out infinite; }
+@keyframes chat-bg-ink { 50% { background-color: rgb(var(--paint-b) / calc(var(--art-alpha) + 0.25)); transform: rotate(-1.2deg); } }
+/* Narrow chats: the art would sit under the text; keep only the paint. */
+@container (max-width: 760px) { .chat-bg-art-masks, .chat-bg-art-rise { display: none; } }
+
+.chat-bg-paper {
+  background: url(/brand/bg/paper-shade.webp) center / cover no-repeat;
+  mix-blend-mode: var(--paper-blend); opacity: var(--paper-alpha);
+}
+.dark .chat-bg-paper { background-image: url(/brand/bg/paper.webp); }
+
+/* The reading column stays calm: the theme's background, fading out sideways. */
+.chat-bg { --chat-veil: var(--bg); --chat-veil-alpha: 0.66; }
+.dark .chat-bg { --chat-veil-alpha: 0.6; }
+/* Gallery pages (Projects, Learning, Memory): wide grids, so an even veil
+   instead of a reading column; cards are translucent with their own blur. */
+.chat-bg[data-variant="page"] .chat-bg-veil { background: rgb(var(--chat-veil) / 0.42); }
+.dark .chat-bg[data-variant="page"] .chat-bg-veil { background: rgb(var(--chat-veil) / 0.4); }
+.chat-bg-veil {
+  background: linear-gradient(90deg,
+    rgb(var(--chat-veil) / 0) 0,
+    rgb(var(--chat-veil) / 0) calc(50% - 38rem),
+    rgb(var(--chat-veil) / var(--chat-veil-alpha)) calc(50% - 25rem),
+    rgb(var(--chat-veil) / var(--chat-veil-alpha)) calc(50% + 25rem),
+    rgb(var(--chat-veil) / 0) calc(50% + 38rem),
+    rgb(var(--chat-veil) / 0) 100%);
+}
+
+/* Home hero: a slow, soft glow behind the medallion. */
+.hero-halo { background: radial-gradient(circle, rgb(var(--accent) / 0.22) 0%, rgb(var(--accent) / 0.08) 45%, transparent 70%); animation: hero-breathe 5s ease-in-out infinite; }
+@keyframes hero-breathe { 50% { transform: scale(1.08); opacity: 0.75; } }
+
+/* Text over the painted background: a soft halo in the background colour
+   lifts every glyph off the paper, and body text is a touch heavier. */
+.chat-legible { text-shadow: 0 0 1px rgb(var(--bg) / 0.7), 0 0 10px rgb(var(--bg) / 0.9), 0 0 2px rgb(var(--bg) / 0.8); font-weight: 450; }
+.chat-legible :is(strong, b, h1, h2, h3, h4, th) { font-weight: 650; }
+.chat-legible :is(pre, code, table, .no-halo, button, input, textarea) { text-shadow: none; }
+
+/* Composer: the placeholder stays on one line (ellipsis), never a scrollbar. */
+.composer-input::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* One visible focus ring for every interactive element (keyboard only). */
+:where(button, a, input, select, textarea, summary, [role="button"], [role="option"], [role="menuitem"], [tabindex]):focus-visible {
+  outline: 2px solid rgb(var(--focus)); outline-offset: 2px;
+}
+
+/* Honour reduced motion: no transitions or animations beyond an instant fade. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
+  }
+}
 
 /* Scrollbars — thin, sleek, site-wide. Subtle by default; darken on hover. */
-* { scrollbar-width: thin; scrollbar-color: rgba(0,0,0,0.18) transparent; }
-.dark * { scrollbar-color: rgba(255,255,255,0.16) transparent; }
-::-webkit-scrollbar { width: 7px; height: 7px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb {
-  background: rgba(0,0,0,0.16); border-radius: 999px;
-  border: 1px solid transparent; background-clip: padding-box;
-  transition: background 0.2s;
-}
-::-webkit-scrollbar-thumb:hover { background: rgba(0,0,0,0.30); }
-.dark ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.14); }
-.dark ::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.28); }
-::-webkit-scrollbar-corner { background: transparent; }
+/* Ultra-thin, faint scrollbars app-wide: a 3px hairline in the text colour at
+   low opacity that firms up a little on hover. No track, no arrows. */
+* { scrollbar-width: thin; scrollbar-color: rgb(var(--fg) / 0.12) transparent; }
+::-webkit-scrollbar { width: 4px; height: 4px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-button { display: none; width: 0; height: 0; }
+::-webkit-scrollbar-thumb { background: rgb(var(--fg) / 0.12); border-radius: 999px; }
+::-webkit-scrollbar-thumb:hover { background: rgb(var(--fg) / 0.26); }
 
 /* ── Markdown rendering (clean formatting, no raw * or ###) ─────────────── */
-.md { font-size: 15px; line-height: 1.7; word-wrap: break-word; }
+.md { font-size: 15px; /* = text-prose */ line-height: 1.7; word-wrap: break-word; }
 .md > :first-child { margin-top: 0; }
 .md > :last-child { margin-bottom: 0; }
 .md p { margin: 0 0 0.8em; }

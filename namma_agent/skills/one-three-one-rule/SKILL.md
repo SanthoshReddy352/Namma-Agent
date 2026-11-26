@@ -7,7 +7,7 @@ description: >
   statement, three options with pros/cons, and one concrete recommendation. Use
   when the user asks for a "1-3-1", says "give me options", or needs help choosing.
 platforms: [linux, macos, windows]
-version: 1.0.0
+version: 1.1.0
 category: communication
 metadata:
   hermes:
@@ -32,8 +32,9 @@ user has already decided.
 ## Procedure
 
 1. **Problem** (one sentence) — the core decision; the *what*, not the *how*.
-2. **Options** (exactly three: A, B, C) — genuinely distinct strategies, each with
-   a brief description, pros, and cons.
+2. **Options** (exactly three: A, B, C) — genuinely distinct strategies. Present
+   them as one markdown table (columns: option · what it is · pros · cons · effort)
+   so they can be compared at a glance.
 3. **Recommendation** (one option) — your direct judgment and why.
 4. **Definition of Done** — concrete, verifiable success criteria for the pick.
 5. **Implementation Plan** — concrete steps/commands for the recommended option.

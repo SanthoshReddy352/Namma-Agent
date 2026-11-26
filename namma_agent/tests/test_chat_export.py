@@ -104,11 +104,11 @@ def test_export_endpoint_returns_zip():
     from fastapi.testclient import TestClient
 
     from namma_agent.core.memory import Database
+    from namma_agent.core.providers.base import LLMResponse
     from namma_agent.core.tools import ToolRegistry
     from namma_agent.server.api import create_app
     from namma_agent.service import NammaAgentService
     from namma_agent.tests.test_server import ScriptedProvider
-    from namma_agent.core.providers.base import LLMResponse
 
     db = Database(":memory:")
     svc = NammaAgentService(config={"persona": "core", "conversation": {}},

@@ -2,7 +2,6 @@
 markitdown, self-knowledge, self-authoring, gws graceful-degrade."""
 from __future__ import annotations
 
-
 from namma_agent.core.agent import Agent
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import load_persona
@@ -83,7 +82,7 @@ def test_clear_memory_tool():
                  lambda a: forgotten.append(a) or ToolResult(ok=True, content="done"))
     out = reg.execute("clear_memory", {"scope": "all"})
     assert out.ok
-    assert forgotten == [{"everything": True}]   # Cognee graph wiped
+    assert forgotten == []                       # no Cognee side-call any more
     assert db.search_turns("hi") == []           # transcripts wiped
 
 
@@ -162,4 +161,5 @@ def test_gws_without_cli(monkeypatch):
 def test_formatting_rules_in_prompt():
     sp = load_persona().system_prompt()
     assert "FORMATTING" in sp
-    assert "never use markdown headings" in sp.lower() or "headings (#)" in sp
+    assert "Short replies have no headings" in sp           # long answers may use "## "
+    assert "markdown table" in sp                            # comparisons are tables

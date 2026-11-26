@@ -5,6 +5,7 @@ import {
   deleteSession, getProject, newProjectSession, renameSession, trustProjectDocument,
   updateProject, uploadProjectDocument,
 } from "../api.js";
+import { IconPencil, IconTrash, IconX } from "@tabler/icons-react";
 
 const MAX_DOCS = 25;
 
@@ -68,13 +69,13 @@ export default function ProjectDetailView() {
 
   return (
     <>
-      <header className="flex items-center justify-between px-6 h-12 border-b border-line dark:border-night-line">
-        <div className="flex items-center gap-2 text-[13px] text-ink-faint dark:text-night-faint">
-          <button onClick={() => navigate("/projects")} className="hover:text-ink dark:hover:text-night-ink">Projects</button>
+      <header className="flex items-center justify-between px-6 h-12 border-b border-border">
+        <div className="flex items-center gap-2 text-sm text-fg-subtle">
+          <button onClick={() => navigate("/projects")} className="hover:text-fg">Projects</button>
           <span>/</span>
-          <span className="text-ink dark:text-night-ink truncate max-w-[40ch]">{project.name}</span>
+          <span className="text-fg truncate max-w-[40ch]">{project.name}</span>
         </div>
-        <button onClick={removeProject} className="text-[13px] text-ink-faint hover:text-brand-deep">Delete project</button>
+        <button onClick={removeProject} className="text-sm text-ink-faint hover:text-brand-deep">Delete project</button>
       </header>
 
       <main className="flex-1 overflow-y-auto px-6 py-6">
@@ -84,7 +85,7 @@ export default function ProjectDetailView() {
             <EditableText value={project.name} onSave={(v) => saveField({ name: v })}
                           className="font-serif text-2xl" placeholder="Project name" />
             <EditableText value={project.description} onSave={(v) => saveField({ description: v })}
-                          className="text-ink-soft dark:text-night-faint mt-1 text-[14px]" multiline
+                          className="text-fg-muted mt-1 text-base" multiline
                           placeholder="Add a short brief so I always keep the right context…" />
           </div>
 
@@ -93,21 +94,21 @@ export default function ProjectDetailView() {
                           confirmAction={confirmAction} />
 
           {/* Dedicated memory */}
-          <section className="rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel p-4">
+          <section className="rounded-2xl border border-border bg-surface-raised p-4">
             <div className="flex items-center justify-between mb-2">
               <h2 className="font-medium">Project memory</h2>
-              <span className="text-[12px] text-ink-faint dark:text-night-faint">{memory.length} {memory.length === 1 ? "note" : "notes"}</span>
+              <span className="text-xs text-fg-subtle">{memory.length} {memory.length === 1 ? "note" : "notes"}</span>
             </div>
-            <p className="text-[12.5px] text-ink-faint dark:text-night-faint mb-3">
+            <p className="text-sm text-fg-subtle mb-3">
               Facts I always keep for this project. I add to it as we work; you can curate it here.
             </p>
             <div className="space-y-1.5 mb-3">
-              {memory.length === 0 && <div className="text-[13px] text-ink-faint dark:text-night-faint">No saved memory yet.</div>}
+              {memory.length === 0 && <div className="text-sm text-fg-subtle">No saved memory yet.</div>}
               {memory.map((m) => (
-                <div key={m.id} className="group flex items-start gap-2 rounded-lg px-3 py-2 bg-paper-soft dark:bg-night text-[13.5px]">
+                <div key={m.id} className="group flex items-start gap-2 rounded-lg px-3 py-2 bg-surface-sunken text-base">
                   <span className="flex-1">{m.content}</span>
                   <button onClick={() => removeMem(m.id)} className="opacity-0 group-hover:opacity-100 text-ink-faint hover:text-brand-deep">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                    <IconX size={14} stroke={2} aria-hidden="true" />
                   </button>
                 </div>
               ))}
@@ -116,9 +117,9 @@ export default function ProjectDetailView() {
               <input value={memDraft} onChange={(e) => setMemDraft(e.target.value)}
                      onKeyDown={(e) => { if (e.key === "Enter") addMem(); }}
                      placeholder="Add a memory note…"
-                     className="flex-1 rounded-lg px-3 py-2 text-[13.5px] bg-paper-soft dark:bg-night border border-line dark:border-night-line outline-none focus:border-brand" />
+                     className="flex-1 rounded-lg px-3 py-2 text-base bg-surface-sunken border border-border outline-none focus:border-brand" />
               <button onClick={addMem} disabled={!memDraft.trim()}
-                      className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep disabled:opacity-50 text-[13.5px]">Add</button>
+                      className="px-3 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep disabled:opacity-50 text-base">Add</button>
             </div>
           </section>
 
@@ -126,13 +127,13 @@ export default function ProjectDetailView() {
           <section>
             <div className="flex items-center justify-between mb-2">
               <h2 className="font-medium">Chats</h2>
-              <button onClick={startChat} className="flex items-center gap-1.5 text-[13px] text-brand-deep hover:underline">
+              <button onClick={startChat} className="flex items-center gap-1.5 text-sm text-brand-deep hover:underline">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M12 5v14M5 12h14" /></svg>
                 New chat in project
               </button>
             </div>
             <div className="space-y-1">
-              {sessions.length === 0 && <div className="text-[13px] text-ink-faint dark:text-night-faint">No chats filed here yet.</div>}
+              {sessions.length === 0 && <div className="text-sm text-fg-subtle">No chats filed here yet.</div>}
               {sessions.map((s) => (
                 <ProjectChatRow key={s.id} s={s} onOpen={() => openChat(s.id)}
                                 onRename={(t) => renameChat(s.id, t)} onDelete={() => removeChat(s.id)} />
@@ -180,45 +181,45 @@ function DocumentsPanel({ projectId, documents, onChanged, confirmAction }) {
   const fmtSize = (b) => (b >= 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.max(1, Math.round(b / 1024))} KB`);
 
   return (
-    <section className="rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel p-4">
+    <section className="rounded-2xl border border-border bg-surface-raised p-4">
       <div className="flex items-center justify-between mb-2">
         <h2 className="font-medium">Documents</h2>
-        <span className="text-[12px] text-ink-faint dark:text-night-faint">{documents.length}/{MAX_DOCS} files · 10 MB each</span>
+        <span className="text-xs text-fg-subtle">{documents.length}/{MAX_DOCS} files · 10 MB each</span>
       </div>
-      <p className="text-[12.5px] text-ink-faint dark:text-night-faint mb-3">
+      <p className="text-sm text-fg-subtle mb-3">
         I index these and ground my answers in them across every chat in this project. Each upload is
         screened for prompt injection; flagged files stay quarantined until you trust them.
       </p>
 
       <div className="space-y-1.5 mb-3">
-        {documents.length === 0 && <div className="text-[13px] text-ink-faint dark:text-night-faint">No documents yet.</div>}
+        {documents.length === 0 && <div className="text-sm text-fg-subtle">No documents yet.</div>}
         {documents.map((d) => (
-          <div key={d.id} className="group rounded-lg px-3 py-2 bg-paper-soft dark:bg-night text-[13.5px]">
+          <div key={d.id} className="group rounded-lg px-3 py-2 bg-surface-sunken text-base">
             <div className="flex items-center gap-2">
               <DocIcon status={d.status} />
               <span className="flex-1 truncate">{d.name}</span>
-              <span className="text-[11.5px] text-ink-faint dark:text-night-faint shrink-0">
+              <span className="text-xs text-fg-subtle shrink-0">
                 {fmtSize(d.bytes)}{d.status === "ready" || d.status === "trusted" ? ` · ${d.chunk_count} chunks` : ""}
               </span>
               {d.status === "flagged" && (
-                <span className="shrink-0 text-[11px] font-medium px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-300">⚠ flagged</span>
+                <span className="shrink-0 text-2xs font-medium px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-500/15 text-red-700 dark:text-red-300">⚠ flagged</span>
               )}
               {d.status === "trusted" && (
-                <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300">trusted</span>
+                <span className="shrink-0 text-2xs px-1.5 py-0.5 rounded bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-300">trusted</span>
               )}
               {d.status === "error" && (
-                <span className="shrink-0 text-[11px] px-1.5 py-0.5 rounded bg-paper-sink dark:bg-night-soft text-ink-faint">couldn't index</span>
+                <span className="shrink-0 text-2xs px-1.5 py-0.5 rounded bg-surface-press text-ink-faint">couldn't index</span>
               )}
               {d.status === "flagged" && (
-                <button onClick={() => trust(d)} className="shrink-0 text-[12px] text-brand-deep hover:underline opacity-0 group-hover:opacity-100">Trust</button>
+                <button onClick={() => trust(d)} className="shrink-0 text-xs text-brand-deep hover:underline opacity-0 group-hover:opacity-100">Trust</button>
               )}
               <button onClick={() => remove(d)} title="Remove document"
                       className="shrink-0 text-ink-faint hover:text-brand-deep opacity-0 group-hover:opacity-100">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+                <IconX size={14} stroke={2} aria-hidden="true" />
               </button>
             </div>
             {d.status === "flagged" && d.flag_reasons?.length > 0 && (
-              <div className="mt-1.5 ml-6 text-[12px] text-red-700/80 dark:text-red-300/80">
+              <div className="mt-1.5 ml-6 text-xs text-red-700/80 dark:text-red-300/80">
                 {d.flag_reasons.slice(0, 2).map((r, i) => <div key={i} className="truncate">• {r}</div>)}
               </div>
             )}
@@ -226,13 +227,13 @@ function DocumentsPanel({ projectId, documents, onChanged, confirmAction }) {
         ))}
       </div>
 
-      {error && <div className="mb-2 text-[12.5px] text-red-700 dark:text-red-300">{error}</div>}
+      {error && <div className="mb-2 text-sm text-red-700 dark:text-red-300">{error}</div>}
 
       <input ref={fileRef} type="file" multiple className="hidden"
              accept=".pdf,.docx,.pptx,.xlsx,.txt,.md,.csv,.html,.json,.yaml,.log,.epub"
              onChange={(e) => { upload([...(e.target.files || [])]); e.target.value = ""; }} />
       <button onClick={() => fileRef.current?.click()} disabled={busy || documents.length >= MAX_DOCS}
-              className="w-full rounded-xl border border-dashed border-line dark:border-night-line px-3 py-2.5 text-[13px] text-ink-soft dark:text-night-faint hover:border-brand hover:text-brand-deep transition disabled:opacity-50">
+              className="w-full rounded-xl border border-dashed border-border px-3 py-2.5 text-sm text-fg-muted hover:border-brand hover:text-brand-deep transition disabled:opacity-50">
         {busy ? "Uploading & indexing…"
           : documents.length >= MAX_DOCS ? "Document limit reached (25)" : "+ Add documents"}
       </button>
@@ -268,20 +269,20 @@ function ProjectChatRow({ s, onOpen, onRename, onDelete }) {
     return (
       <input ref={ref} autoFocus value={draft} onChange={(e) => setDraft(e.target.value)} onBlur={commit}
              onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }}
-             className="w-full rounded-lg px-3 py-2 text-[13.5px] bg-paper-soft dark:bg-night border border-brand-soft outline-none" />
+             className="w-full rounded-lg px-3 py-2 text-base bg-surface-sunken border border-brand-soft outline-none" />
     );
   }
 
   return (
-    <div className="group flex items-center rounded-lg bg-paper-soft dark:bg-night hover:bg-paper-sink dark:hover:bg-night-soft">
-      <button onClick={onOpen} className="flex-1 text-left truncate px-3 py-2 text-[13.5px]">{s.title}</button>
-      <button title="Rename" onClick={(e) => { e.stopPropagation(); setDraft(s.title); setEditing(true); }}
-              className="px-1 text-ink-faint hover:text-ink dark:hover:text-night-ink opacity-0 group-hover:opacity-100">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5Z" /></svg>
+    <div className="group flex items-center rounded-lg bg-surface-sunken hover:bg-surface-press">
+      <button onClick={onOpen} className="flex-1 text-left truncate px-3 py-2 text-base">{s.title}</button>
+      <button aria-label="Rename" title="Rename" onClick={(e) => { e.stopPropagation(); setDraft(s.title); setEditing(true); }}
+              className="px-1 text-ink-faint hover:text-fg opacity-0 group-hover:opacity-100">
+        <IconPencil size={14} stroke={1.8} aria-hidden="true" />
       </button>
-      <button title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}
+      <button aria-label="Delete" title="Delete" onClick={(e) => { e.stopPropagation(); onDelete(); }}
               className="pr-3 pl-1 text-ink-faint hover:text-brand-deep opacity-0 group-hover:opacity-100">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
+        <IconTrash size={14} stroke={1.8} aria-hidden="true" />
       </button>
     </div>
   );
@@ -305,7 +306,7 @@ function EditableText({ value, onSave, className = "", placeholder = "", multili
       : <input {...common} onKeyDown={(e) => { if (e.key === "Enter") commit(); if (e.key === "Escape") setEditing(false); }} />;
   }
   return (
-    <div onClick={() => setEditing(true)} className={`cursor-text ${className} ${!value ? "text-ink-faint dark:text-night-faint italic" : ""}`}>
+    <div onClick={() => setEditing(true)} className={`cursor-text ${className} ${!value ? "text-fg-subtle italic" : ""}`}>
       {value || placeholder}
     </div>
   );

@@ -61,10 +61,25 @@ Set importance by how much answering FUTURE questions depends on it:
   0.4-0.6 useful background that may change
   0.1-0.3 incidental detail  (prefer omitting it entirely over storing it)
 
+Each fact also carries ONE graph triple (subject → predicate → object):
+- subject/object are short canonical NAMES of things ("Python", "Priya",
+  "Namma Agent", "Hyderabad"), no articles or descriptions. Refer to the user
+  as exactly "user" (never "I", "the user", or their name). Resolve pronouns.
+- predicate: present-tense snake_case, preferring: lives_in, from, works_at,
+  studies_at, works_on, works_as, uses, likes, dislikes, prefers, has_pet,
+  has_sister, has_brother, friend_of, works_with, married_to, preparing_for,
+  owns, member_of, has_name, is_a.
+- a plain value (an age, a date, a number) may be the object; it is stored as
+  an attribute of the subject, not as a separate thing.
+- subject_type / object_type: one of person, organization, place, project,
+  technology, animal, event, concept, product.
+
 Return ONLY a JSON array (no prose, no markdown). Each element:
 {"text": "<one self-contained sentence, third person>",
  "kind": "fact|preference|event",
- "subject": "<entity>", "predicate": "<snake_case relation>", "object": "<entity>",
+ "subject": "<entity>", "subject_type": "<type>",
+ "predicate": "<snake_case relation>",
+ "object": "<entity or value>", "object_type": "<type or null for a value>",
  "importance": <0.0-1.0>}
 Most exchanges contain nothing durable — then return []."""
 
@@ -85,6 +100,11 @@ Set "core" ONLY for identity-grade durable facts (name, role, standing preferenc
 a lasting instruction) — the small always-in-context memory. Otherwise null."""
 
 _FENCE_RE = re.compile(r"^```[a-z]*\s*|\s*```$", re.MULTILINE)
+
+
+def _opt_str(value) -> Optional[str]:
+    value = str(value or "").strip()
+    return value if value and value.lower() not in ("null", "none") else None
 
 
 class EngramWriter:
@@ -281,14 +301,18 @@ class EngramWriter:
             importance=float(cand.get("importance") or 0.5),
             source=source,
             screen_status="pending" if pending else "ok",
-            pending_supersedes=supersede_id if pending else None)
+            pending_supersedes=supersede_id if pending else None,
+            subject_type=_opt_str(cand.get("subject_type")),
+            object_type=_opt_str(cand.get("object_type")))
         if pending:
             logger.info("[engram] fact held for your approval: %s", ctext[:80])
             return {"op": "PENDING", "id": item_id, "text": ctext}
 
-        if cand.get("subject") and cand.get("object") and cand.get("predicate"):
-            self.store.add_relation(str(cand["subject"]), str(cand["predicate"]),
-                                    str(cand["object"]), item_id=item_id)
+        # Phase 10: the triple goes through entity resolution, typing and
+        # graph-level contradiction handling (core.engram.graph).
+        conf = cand.get("confidence")
+        self.store.link_item(item_id, confidence=float(conf) if isinstance(
+            conf, (int, float)) else (0.9 if source == "manual" else None))
         self._embed_item(item_id, ctext)
         if supersede_id:
             self.store.invalidate(supersede_id, superseded_by=item_id)

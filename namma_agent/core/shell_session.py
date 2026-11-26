@@ -102,6 +102,7 @@ class ShellResult:
     cwd: str
     timed_out: bool = False
     died: bool = False  # the shell process ended during this command
+    cancelled: bool = False  # the user pressed Stop; the command was killed
 
 
 def _shell_env() -> dict:
@@ -343,7 +344,17 @@ class PersistentShell:
             return ShellResult(ok=ec == 0 and not flags.get("timed_out") and not flags.get("died"),
                                exit_code=ec, output=out, cwd=self.cwd, **flags)
 
+        # The turn's Stop button (a contextvar on this — the agent's — thread).
+        # Checked every poll so Stop kills a long-running command instead of
+        # letting it run to its timeout while the UI already says "stopped".
+        from namma_agent.core.interactive import get_current_cancel
+        should_cancel = get_current_cancel()
+
         while True:
+            if should_cancel is not None and should_cancel():
+                _finalize(pending)
+                self._kill()
+                return _result(-1, "", cancelled=True)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 _finalize(pending)

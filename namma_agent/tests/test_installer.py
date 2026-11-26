@@ -251,6 +251,9 @@ def test_bootstrap_takes_offline_path_when_runtime_bundled(tmp_path, monkeypatch
     monkeypatch.setattr(core, "ensure_dependencies", _boom("ensure_dependencies"))
     # Shortcuts/PATH shell out on Windows — stub them; not what this test covers.
     monkeypatch.setattr(core, "create_shortcuts", lambda *_a, **_k: None)
+    # Embeddings setup would try to install Ollama: a CI runner has none, and
+    # this test is about the offline runtime path, not the embedder.
+    monkeypatch.setattr(core, "setup_embeddings", lambda *_a, **_k: True)
     monkeypatch.setattr(core, "add_to_path", lambda *_a, **_k: None)
 
     install_dir = tmp_path / "install"

@@ -1,0 +1,27 @@
+{
+  "name": "namma-agent-desktop",
+  "productName": "Namma Agent",
+  "version": "2.3.2",
+  "description": "Namma Agent desktop app: the Electron shell around the local Namma Agent backend.",
+  "main": "src/main.js",
+  "author": "Namma Agent contributors",
+  "license": "MIT",
+  "private": true,
+  "homepage": "https://github.com/SanthoshReddy352/Namma-Agent",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test test/shell.test.js",
+    "stage": "node scripts/stage.js",
+    "dist": "node scripts/stage.js && electron-builder --win nsis --publish never",
+    "dist:dir": "node scripts/stage.js && electron-builder --win dir --publish never",
+    "dist:linux": "node scripts/stage.js && electron-builder --linux AppImage --publish never"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.11",
+    "ws": "8.18.3"
+  },
+  "devDependencies": {
+    "electron": "45.3.4",
+    "electron-builder": "26.18.1"
+  }
+}

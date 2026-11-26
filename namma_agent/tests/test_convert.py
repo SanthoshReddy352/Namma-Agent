@@ -7,8 +7,8 @@ import zipfile
 import pytest
 
 from namma_agent.core.tools import ToolRegistry
-from namma_agent.tools import load_tools
 from namma_agent.tools import convert as convert_mod
+from namma_agent.tools import load_tools
 
 _SAMPLE = """\
 # Trip Report

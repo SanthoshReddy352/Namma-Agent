@@ -23,6 +23,8 @@ RUN pip install --no-cache-dir \
     ddgs requests python-multipart
 
 COPY namma_agent/ namma_agent/
+# Server-lite defaults: seeded ONCE into the volume's user config
+# (/app/data/user_config.yaml) on first boot; UI edits then persist there.
 COPY deploy/config.server-lite.yaml namma_agent/config.local.yaml
 COPY --from=webui /build/dist namma_agent/webui/dist
 

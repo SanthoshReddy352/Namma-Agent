@@ -465,7 +465,7 @@ def test_service_consolidate_settings_roundtrip(svc, monkeypatch, tmp_path):
     assert out["consolidate_background"] is False
     assert svc.engram.scheduler.idle_minutes == 45.0
     assert svc.engram.scheduler.daily_at == "02:15"
-    local = (tmp_path / "config.local.yaml").read_text(encoding="utf-8")
+    local = cfg.user_config_file().read_text(encoding="utf-8")
     assert "background: false" in local and "daily_at: 02:15" in local
     # malformed time is ignored, valid state untouched
     svc.save_memory_settings({"daily_at": "25:99"})
@@ -485,3 +485,33 @@ def test_engram_facade_consolidate_records(svc):
     out = svc.engram.consolidate(reason="daily")
     assert out["ok"]
     assert svc.engram.status()["last_consolidation"]["reason"] == "daily"
+
+
+@pytest.fixture
+def coarse_clock(monkeypatch):
+    """Windows' time.time() ticks every ~15.6 ms before Python 3.13, so items
+    written back to back share a timestamp. Freeze the store's clock to make
+    that the norm, not a coin toss."""
+    import namma_agent.core.engram.store as store_mod
+    monkeypatch.setattr(store_mod, "_now", lambda: "2026-11-26T12:00:00+00:00")
+
+
+def test_newest_first_survives_identical_timestamps(coarse_clock):
+    """Every newest-first listing breaks timestamp ties by insertion order."""
+    cons, store, *_ = _consolidator()
+    ids = [store.add_item(f"distinct fact number {i} about topic {i * 7}") for i in range(4)]
+    assert [r["id"] for r in store.list_items(limit=10)] == list(reversed(ids))
+    assert [r["id"] for r in store.unaudited_items(limit=10)] == list(reversed(ids))
+
+
+def test_merge_similar_insights_keeps_the_newest_under_a_coarse_clock(coarse_clock):
+    cons, store, *_ = _consolidator()
+    old = store.add_item("The user is deeply invested in AI/AGI development, consistently "
+                         "working on projects like Namma and AGI, utilizing LM Studio "
+                         "and Docker", kind="insight")
+    new = store.add_item("The user demonstrates a deep, methodical investment in AI/AGI "
+                         "development, consistently working on projects like Namma and AGI "
+                         "while utilizing LM Studio and Docker for implementation",
+                         kind="insight")
+    assert store.merge_similar_insights() == 1
+    assert store.get_item(old)["superseded_by"] == new

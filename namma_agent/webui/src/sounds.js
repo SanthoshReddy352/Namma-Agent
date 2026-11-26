@@ -12,6 +12,8 @@
 // client-only (like the theme) and live in localStorage — there's no server side
 // to this feature.
 
+import { triggerHaptic, warmAudio } from "./haptics.js";
+
 const LS_ENABLED = "namma-sound-enabled";
 const LS_PRESET = "namma-sound-preset";
 const LS_VOLUME = "namma-sound-volume";
@@ -38,6 +40,7 @@ export const SOUND_EVENTS = [
   { id: "approval", label: "Approval needed" },
   { id: "input", label: "Input needed" },
   { id: "error", label: "Turn failed" },
+  { id: "click", label: "Button clicks" },
 ];
 
 const DEFAULT_PRESET = "two-note";
@@ -165,6 +168,12 @@ const PRESET_NOTES = {
 // Fixed cues for the non-completion events — kept short and distinct.
 const EVENT_NOTES = {
   sent: () => [{ freq: 1046.5, dur: 0.07, gain: 0.1 }],
+  // Every click (Hermes-style): a soft, short "tock": a bright transient over
+  // a low body, under 40 ms, quiet enough to fade into the background.
+  click: () => [
+    { freq: 2093, type: "triangle", dur: 0.022, gain: 0.035, attack: 0.002 },
+    { freq: 210, to: 150, type: "sine", dur: 0.035, gain: 0.06, attack: 0.002 },
+  ],
   // Intermediate step (a tool/action starting) — a very soft, quick tick so a
   // multi-step turn feels alive without becoming noisy.
   tool: () => [{ freq: 1396.91, dur: 0.045, gain: 0.05 }],
@@ -198,4 +207,46 @@ export function playSound(event) {
   if (!soundsEnabled() || !soundEventEnabled(event)) return;
   const notes = event === "complete" ? notesForCompletion(completionPreset()) : EVENT_NOTES[event]?.();
   if (notes) play(notes);
+}
+
+// ── Click sounds (Phase 9) ────────────────────────────────────────────────────
+// One capture-phase listener for the whole app: any press on a button-like
+// control plays the "click" cue (subject to the master switch, the per-event
+// toggle and the volume). Disabled controls stay silent.
+export const CLICKABLE = 'button, [role="button"], [role="tab"], [role="option"], [role="menuitem"], [role="radio"], [role="switch"], [role="checkbox"], a[href], summary, select, input[type="checkbox"], input[type="radio"], input[type="range"]';
+
+export function clickTarget(el) {
+  const hit = el && el.closest ? el.closest(CLICKABLE) : null;
+  if (!hit || hit.disabled || hit.getAttribute("aria-disabled") === "true") return null;
+  return hit;
+}
+
+// Which of Hermes Agent's haptic intents a control gets (see haptics.js): the
+// same vocabulary Hermes uses on its buttons, menus, toggles and dialogs.
+export function clickIntent(el) {
+  if (!el) return "selection";
+  const label = (el.getAttribute("aria-label") || el.getAttribute("title") || "").toLowerCase();
+  const role = el.getAttribute("role") || "";
+  const type = (el.getAttribute("type") || "").toLowerCase();
+  if (type === "submit" || /^(send|submit)\b/.test(label)) return "submit";
+  if (role === "switch" || role === "checkbox" || role === "radio" || type === "checkbox" || type === "radio") return "crisp";
+  if (/^(close|dismiss|cancel)\b/.test(label)) return "close";
+  if (el.getAttribute("aria-haspopup") || el.getAttribute("aria-expanded") === "false") return "open";
+  return "selection";
+}
+
+let _clicksInstalled = false;
+export function installClickSounds(doc = typeof document !== "undefined" ? document : null) {
+  if (!doc || _clicksInstalled) return () => {};
+  _clicksInstalled = true;
+  warmAudio();
+  const onDown = (e) => {
+    if (e.button !== undefined && e.button !== 0) return;
+    const hit = clickTarget(e.target);
+    if (!hit || !soundsEnabled() || !soundEventEnabled("click")) return;
+    // Hermes Agent's click: web-haptics' audible pattern for this intent.
+    triggerHaptic(clickIntent(hit));
+  };
+  doc.addEventListener("pointerdown", onDown, { capture: true, passive: true });
+  return () => { doc.removeEventListener("pointerdown", onDown, { capture: true }); _clicksInstalled = false; };
 }

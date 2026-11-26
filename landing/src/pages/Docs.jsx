@@ -21,7 +21,7 @@ const NAV = [
     ["naming", "Name your assistant"],
   ]],
   ["Memory & comms", [
-    ["cognee", "Cognee memory"],
+    ["memory", "Engram memory"],
     ["comms", "Telegram & Discord"],
     ["other-setups", "Other setups"],
   ]],
@@ -275,34 +275,12 @@ models:
               <Note><code>NAMMA_*</code> environment-variable names (API keys, Telegram tokens) are intentionally left unchanged. They are stable identifiers, not display text.</Note>
             </section>
 
-            {/* COGNEE */}
-            <section id="cognee" className="docs-sec">
-              <h2>Cognee memory (optional)</h2>
-              <p>Namma Agent can use <a className="inline" href="https://www.cognee.ai" target="_blank" rel="noreferrer">Cognee</a> to add semantic and knowledge-graph memory on top of the built-in SQLite store. It is opt-in and non-destructive: with it off, Namma behaves exactly as before.</p>
-              <p>Cognee runs fully containerized and Namma talks to it through the built-in MCP client, so it adds <strong>no new Python dependencies</strong>. The only prerequisite is Docker.</p>
-              <Diagram src={`${D}/cognee-mcp.png`} alt="Cognee via MCP" caption="The agent reaches a containerized cognee-mcp server over stdio. Cognee's heavy native stack — Ollama for local extraction and embeddings, plus LanceDB, Kuzu, and SQLite — stays inside Docker, never in Namma's venv." />
-              <h3>Setup (one command)</h3>
-              <p>From the project root, the setup script starts the Ollama container, pulls the local models, pulls the Cognee image, and writes <code>.env.cognee</code>:</p>
-              <Code title="PowerShell (Windows)" code={`powershell -ExecutionPolicy Bypass -File scripts/setup_cognee.ps1`} />
-              <Code title="bash (Linux / macOS / Git-Bash)" code={`bash scripts/setup_cognee.sh`} />
-              <h3>Register Cognee in Namma</h3>
-              <p>Open <strong>Settings → MCP → Config</strong> and paste the server entry, adjusting the <code>--env-file</code> path for your OS:</p>
-              <Code title="MCP config" lang="json" code={`{
-  "servers": [
-    {
-      "name": "cognee",
-      "command": ["docker","run","-i","--rm","--network","agi_default",
-                  "--env-file","D:/AGI/.env.cognee",
-                  "-v","cognee-data:/cognee-data","cognee/cognee-mcp:main"],
-      "enabled": true,
-      "connect_timeout": 90,
-      "call_timeout": 900
-    }
-  ]
-}`} />
-              <p>Click <strong>Save &amp; reconnect</strong>. Under <strong>Settings → MCP → Servers</strong> you should see <code>cognee</code> connected with its tools: <code>remember</code>, <code>recall</code>, and <code>forget</code>.</p>
-              <Note kind="pine" title="Why the long timeouts">Cognee cold-starts in about 20 seconds and a full graph build (<code>cognify</code>) can take minutes on CPU. The defaults (60s / 120s) are too short, so the entry raises them.</Note>
-              <p>For the cloud track, point Namma at managed Cognee Cloud from <strong>Settings → MCP → Cognee → Backend</strong>. Same Namma code, same Memory tab, only the single MCP server entry differs.</p>
+            {/* MEMORY */}
+            <section id="memory" className="docs-sec">
+              <h2>Engram memory</h2>
+              <p>Long-term memory is built in. Engram stores facts, entities, and the relations between them in the same local SQLite database as your chats, with full-text search and optional embeddings. There is nothing to install and nothing to start.</p>
+              <p>Browse, search, and correct what the assistant remembers from the <strong>Memory</strong> tab. Memory writes can be approval-gated, and anything learned from an untrusted channel is quarantined rather than indexed.</p>
+              <Note kind="pine" title="External memory engines">Any memory engine that speaks MCP (Mem0, Zep, Cognee, …) can still be attached as an ordinary MCP server under <strong>Settings → MCP</strong>. Its tools appear next to the built-in ones.</Note>
             </section>
 
             {/* COMMS */}
@@ -357,7 +335,7 @@ NAMMA_DISCORD_TOKEN=...`} />
             <section id="architecture" className="docs-sec">
               <h2>Architecture</h2>
               <p>One service wires a provider, a tool registry, memory, and document intelligence into a single agent loop. Surfaces (the web UI, voice, and messaging) all feed the same loop, so behaviour is identical no matter where a message comes from.</p>
-              <Diagram src={`${D}/architecture-overview.png`} alt="System architecture" caption="Surfaces send messages to the FastAPI service, which drives the agent loop. The loop talks to the provider chain and the capability set: tools, memory, document RAG, and the MCP client that reaches Cognee." />
+              <Diagram src={`${D}/architecture-overview.png`} alt="System architecture" caption="Surfaces send messages to the FastAPI service, which drives the agent loop. The loop talks to the provider chain and the capability set: tools, memory, document RAG, and the MCP client." />
               <p>Adding a capability is dropping one file into <code>namma_agent/tools/</code> with a <code>register()</code> function. There is no intent routing graph; the model calls tools natively.</p>
             </section>
 
@@ -406,7 +384,7 @@ NAMMA_DISCORD_TOKEN=...`} />
                 ["ModuleNotFoundError: anthropic", "Install your provider SDK: pip install anthropic / openai / google-genai."],
                 ["Native window doesn't open", "pywebview missing or no display. Use --server and open the browser."],
                 ["Provider/auth errors on first chat", "Key missing or typo in .env, or provider.type doesn't match the key you set."],
-                ["server closed the connection (Cognee)", "Cold start exceeds the default timeout. Set connect_timeout: 90 in the MCP entry."],
+                ["MCP server: server closed the connection", "Slow cold start exceeds the default timeout. Set connect_timeout: 90 in the MCP entry."],
               ]} />
               <div className="docs-foot-nav">
                 <Link to="/" className="btn btn--secondary">← Back to site</Link>

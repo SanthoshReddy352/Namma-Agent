@@ -226,6 +226,24 @@ class OpenAICompatProvider(Provider):
         m = (self.model or "").lower()
         return m.startswith("gpt-5.6") or "5.6-" in m
 
+    def _prompt_cache_key(self) -> str:
+        """A stable per-chat ``prompt_cache_key`` for native OpenAI. OpenAI routes
+        requests sharing a key to the same cache shard, which raises the hit rate
+        for the long, repeated prefix (tools + system prompt + history) of a chat.
+        Only sent to api.openai.com — other OpenAI-compatible servers may reject
+        unknown parameters. Empty when there is no current chat."""
+        if self.name != "openai":
+            return ""
+        if self.base_url and "api.openai.com" not in self.base_url:
+            return ""
+        try:
+            from namma_agent.core.interactive import get_current_session
+
+            session = get_current_session() or ""
+        except Exception:  # noqa: BLE001
+            session = ""
+        return f"namma-{session[:24]}" if session else ""
+
     # -- generate ----------------------------------------------------------
 
     def generate(
@@ -258,6 +276,9 @@ class OpenAICompatProvider(Provider):
             body["tools"] = wire_tools
             if self._requires_reasoning_effort_none_for_tools():
                 body["reasoning_effort"] = "none"
+        cache_key = self._prompt_cache_key()
+        if cache_key:
+            body["prompt_cache_key"] = cache_key
 
         last_exc: Optional[Exception] = None
         for attempt in range(self.max_retries):
@@ -301,6 +322,10 @@ class OpenAICompatProvider(Provider):
                     or "support" in err_str
                 ):
                     body["reasoning_effort"] = "none"
+                    adapted = True
+
+                if "prompt_cache_key" in err_str and "prompt_cache_key" in body:
+                    body.pop("prompt_cache_key", None)
                     adapted = True
 
                 if adapted:

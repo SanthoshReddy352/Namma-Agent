@@ -57,6 +57,22 @@ def get_current_session() -> Optional[str]:
     return _SESSION.get()
 
 
+# The in-flight turn's cancel check (the Stop button). Set by Agent.process_turn
+# so a tool that runs its own agent (delegate_task) can hand the SAME check to
+# the child — otherwise Stop never reaches a sub-agent and it runs to completion.
+_CANCEL: "contextvars.ContextVar[Optional[Callable[[], bool]]]" = (
+    contextvars.ContextVar("namma_agent_cancel", default=None)
+)
+
+
+def set_current_cancel(fn: Optional[Callable[[], bool]]) -> None:
+    _CANCEL.set(fn)
+
+
+def get_current_cancel() -> Optional[Callable[[], bool]]:
+    return _CANCEL.get()
+
+
 # The Provider driving the in-flight turn — i.e. the model the user picked for
 # THIS chat. Set by the service around every turn so tools that spin up their own
 # agent (delegate_task / background_task) run the sub-agent on the same working

@@ -25,8 +25,8 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from namma_agent.comms.inbound import InboundBridge
-from namma_agent.core.logger import logger
 from namma_agent.config import data_dir as _data_dir
+from namma_agent.core.logger import logger
 
 _MAX_CHARS = 3800  # safe margin under Telegram's 4096 limit
 _API = "https://api.telegram.org/bot{token}/{method}"

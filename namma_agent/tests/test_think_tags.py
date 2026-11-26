@@ -3,7 +3,9 @@ the splitter routes it to the thinking channel and keeps it out of the answer.""
 from __future__ import annotations
 
 from namma_agent.core.providers.openai_compat import (
-    _THINK_BLOCK_RE, _ThinkTagSplitter, _partial_tag_tail,
+    _THINK_BLOCK_RE,
+    _partial_tag_tail,
+    _ThinkTagSplitter,
 )
 
 

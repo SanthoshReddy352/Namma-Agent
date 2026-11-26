@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import { copyText } from "../clipboard.js";
+import { IconActivity, IconAlertTriangle, IconChevronDown, IconCircleCheck, IconCircleX, IconLoader2, IconMessage, IconSparkles } from "@tabler/icons-react";
 
 // ── Friendly tool labels (Hermes-style: "Searched …", "Ran …", "Opened …") ──────
 // Map a tool name + its args to a short human phrase. Unknown tools fall back to a
@@ -21,11 +23,11 @@ const VERBS = {
   // Engram — the native memory engine.
   memory_search: "Searched memory", memory_save: "Saved to memory",
   memory_forget: "Forgot a memory", search_conversations: "Searched past chats",
-  // External memory plugin (only if a Cognee MCP server is attached).
-  mcp_cognee_recall: "Recalled from plugin memory", mcp_cognee_remember: "Saved to plugin memory",
-  mcp_cognee_forget: "Forgot from plugin memory",
+  // Tool search (deferred tools).
+  tool_search: "Searched tools", tool_describe: "Looked up tool", tool_call: "Ran tool",
   use_skill: "Used a skill", list_skills: "Listed skills",
-  delegate_task: "Delegated a subtask",
+  delegate_task: "Delegated to sub-agents", background_task: "Started a background task",
+  check_background_task: "Checked a background task", cancel_background_task: "Cancelled a background task",
   add_task: "Added a task", list_tasks: "Listed tasks", complete_task: "Completed a task",
   add_reminder: "Set a reminder", list_reminders: "Listed reminders",
   render_diagram: "Drew a diagram", render_simulation: "Built a simulation",
@@ -55,54 +57,41 @@ export function toolLabel(tool, args = {}) {
 export function StatusIcon({ state, size = 14 }) {
   if (state === "running") {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4"
-           strokeLinecap="round" className="text-brand animate-spin" style={{ animationDuration: "1.2s" }}>
-        <path d="M21 12a9 9 0 1 1-9-9" />
-      </svg>
+      <IconLoader2 size={size} stroke={2.4} className="text-brand animate-spin" style={{ animationDuration: "1.2s" }} aria-hidden="true" />
     );
   }
   if (state === "ok") {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
-           strokeLinecap="round" strokeLinejoin="round" className="text-emerald-500">
-        <circle cx="12" cy="12" r="9" /><path d="m8.5 12.5 2.5 2.5 5-5.5" />
-      </svg>
+      <IconCircleCheck size={size} stroke={2.2} className="text-emerald-500" aria-hidden="true" />
     );
   }
   if (state === "fail") {
     return (
-      <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2"
-           strokeLinecap="round" strokeLinejoin="round" className="text-red-500">
-        <circle cx="12" cy="12" r="9" /><path d="m9 9 6 6M15 9l-6 6" />
-      </svg>
+      <IconCircleX size={size} stroke={2.2} className="text-red-500" aria-hidden="true" />
     );
   }
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-         className="text-ink-faint dark:text-night-faint">
+         className="text-fg-subtle">
       <circle cx="12" cy="12" r="9" />
     </svg>
   );
 }
 
 const SparkIcon = ({ size = 12 }) => (
-  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
-       strokeLinecap="round" strokeLinejoin="round">
-    <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
-    <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9L19 15Z" />
-  </svg>
+  <IconSparkles size={size} stroke={1.8} aria-hidden="true" />
 );
 
 // Streamed model reasoning — an inset "Thinking" panel, capped at a safety height
 // (it can run long) with internal scroll, so it never swallows the screen.
 function ThinkingBlock({ text }) {
   return (
-    <li className="rounded-xl bg-paper-soft dark:bg-night-soft border-l-2 border-brand/50 px-3 py-2">
-      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider font-medium text-brand-deep dark:text-brand mb-1">
+    <li className="rounded-xl bg-surface-hover border-l-2 border-brand/50 px-3 py-2">
+      <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wider font-medium text-brand-deep dark:text-brand mb-1">
         <SparkIcon />
         Thinking
       </div>
-      <div className="max-h-[160px] overflow-y-auto text-[12.5px] text-ink-soft dark:text-night-faint whitespace-pre-wrap leading-relaxed">
+      <div className="max-h-[160px] overflow-y-auto text-sm text-fg-muted whitespace-pre-wrap leading-relaxed">
         {text}
       </div>
     </li>
@@ -125,22 +114,22 @@ function TerminalBlock({ item }) {
     if (running && bodyRef.current) bodyRef.current.scrollTop = bodyRef.current.scrollHeight;
   }, [out, running]);
   return (
-    <li className="rounded-xl overflow-hidden border border-line dark:border-night-line bg-zinc-900">
+    <li className="rounded-xl overflow-hidden border border-border bg-zinc-900">
       <button type="button" onClick={() => setUserOpen(!open)}
               title={open ? "Collapse the terminal output" : "Show the terminal output"}
               className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-zinc-800 transition">
         <span className="shrink-0"><StatusIcon state={item.state} /></span>
-        <code className="min-w-0 flex-1 truncate font-mono text-[12.5px] text-zinc-100">
+        <code className="min-w-0 flex-1 truncate font-mono text-sm text-zinc-100">
           <span className="text-emerald-400 select-none">$ </span>{cmd}
         </code>
         {declined && (
-          <span className="shrink-0 text-[11px] font-medium text-amber-400">declined</span>
+          <span className="shrink-0 text-2xs font-medium text-amber-400">declined</span>
         )}
         <Chevron open={open} />
       </button>
       {open && (out || running) && (
         <pre ref={bodyRef}
-             className="max-h-[240px] overflow-y-auto px-3 pb-2.5 pt-1 border-t border-zinc-700/60 font-mono text-[11.5px] leading-relaxed text-zinc-300 whitespace-pre-wrap break-words">
+             className="max-h-[240px] overflow-y-auto px-3 pb-2.5 pt-1 border-t border-zinc-700/60 font-mono text-xs leading-relaxed text-zinc-300 whitespace-pre-wrap break-words">
           {out || (running ? "…" : "")}
         </pre>
       )}
@@ -157,43 +146,117 @@ function ApprovalCard({ item, onApprove }) {
   return (
     <li className="rounded-xl border border-amber-300/70 dark:border-amber-500/40 bg-amber-50/80 dark:bg-amber-500/10 px-3 py-2.5">
       <div className="flex items-start gap-2">
-        <svg className="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" width="15" height="15" viewBox="0 0 24 24"
-             fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z" />
-          <line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
-        </svg>
+        <IconAlertTriangle size={15} stroke={2} className="mt-0.5 shrink-0 text-warning" aria-hidden="true" />
         <div className="min-w-0 flex-1">
-          <div className="text-[13px] text-ink dark:text-night-ink">
+          <div className="text-sm text-fg">
             Needs your approval to run <span className="font-medium">{toolLabel(item.tool, item.args)}</span>.
           </div>
           {hasArgs && (
             <button type="button" onClick={() => setOpen((o) => !o)}
-                    className="mt-0.5 text-[11.5px] text-ink-faint dark:text-night-faint hover:text-ink dark:hover:text-night-ink">
+                    className="mt-0.5 text-xs text-fg-subtle hover:text-fg">
               {open ? "Hide details" : "Show details"}
             </button>
           )}
           {open && hasArgs && (
-            <pre className="mt-1.5 text-[11.5px] bg-paper-soft dark:bg-night rounded-md p-2.5 overflow-auto max-h-40 text-ink-soft dark:text-night-faint">
+            <pre className="mt-1.5 text-xs bg-surface-sunken rounded-md p-2.5 overflow-auto max-h-40 text-fg-muted">
               {JSON.stringify(item.args, null, 2)}
             </pre>
           )}
           <div className="flex flex-wrap gap-2 mt-2">
             <button onClick={() => onApprove?.(item.id, true, "once")}
-                    className="px-3 py-1 rounded-md bg-brand text-white hover:bg-brand-deep text-[12.5px] font-medium">
+                    className="px-3 py-1 rounded-md bg-brand text-white hover:bg-brand-deep text-sm font-medium">
               Allow once
             </button>
             <button onClick={() => onApprove?.(item.id, true, "session")}
                     title="Don't ask again for this tool for the rest of this chat"
-                    className="px-3 py-1 rounded-md border border-brand/60 text-brand-deep dark:text-brand hover:bg-brand-wash dark:hover:bg-night-soft text-[12.5px] font-medium">
+                    className="px-3 py-1 rounded-md border border-brand/60 text-brand-deep dark:text-brand hover:bg-accent-wash text-sm font-medium">
               Allow for session
             </button>
             <button onClick={() => onApprove?.(item.id, false, "once")}
-                    className="px-3 py-1 rounded-md text-ink-soft dark:text-night-ink border border-line dark:border-night-line hover:bg-paper-soft dark:hover:bg-night-soft text-[12.5px]">
+                    className="px-3 py-1 rounded-md text-fg-soft border border-border hover:bg-surface-hover text-sm">
               Deny
             </button>
           </div>
         </div>
       </div>
+    </li>
+  );
+}
+
+// Step inspector (Phase 4): click a tool step to see its full input and output,
+// how long it took, and copy either.
+function Inspector({ item }) {
+  const args = JSON.stringify(item.args || {}, null, 2);
+  const out = item.output || item.summary || "";
+  return (
+    <div className="mt-1.5 ml-5 space-y-1.5 text-xs">
+      <div className="flex items-center gap-3 text-fg-subtle">
+        <span className="font-mono">{item.tool}</span>
+        {typeof item.ms === "number" && <span>{item.ms < 1000 ? `${item.ms} ms` : `${(item.ms / 1000).toFixed(1)} s`}</span>}
+        <span>{item.state}</span>
+      </div>
+      <InspectorPane label="Input" text={args} />
+      {out && <InspectorPane label="Output" text={out} />}
+    </div>
+  );
+}
+
+function InspectorPane({ label, text }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="rounded-lg border border-border overflow-hidden">
+      <div className="flex items-center justify-between px-2 py-1 bg-surface-hover text-2xs text-fg-subtle">
+        <span>{label}</span>
+        <button type="button" aria-label={`Copy ${label.toLowerCase()}`}
+                onClick={async () => { if (await copyText(text)) { setCopied(true); setTimeout(() => setCopied(false), 1200); } }}
+                className="hover:text-fg">{copied ? "Copied" : "Copy"}</button>
+      </div>
+      <pre className="max-h-48 overflow-auto px-2 py-1.5 text-xs whitespace-pre-wrap break-words">{text}</pre>
+    </div>
+  );
+}
+
+function PlanCard({ plan }) {
+  const done = plan.filter((t) => t.status === "done").length;
+  return (
+    <li className="rounded-lg border border-border px-2.5 py-1.5 text-sm">
+      <div className="text-fg-subtle mb-0.5">Plan · {done}/{plan.length} done</div>
+      <ul className="space-y-0.5">
+        {plan.map((t, i) => (
+          <li key={i} className={t.status === "done" ? "line-through text-fg-subtle" : "text-fg"}>
+            {t.status === "done" ? "✓" : t.status === "in_progress" ? "▸" : "○"} {t.text}
+          </li>
+        ))}
+      </ul>
+    </li>
+  );
+}
+
+function ToolRow({ it }) {
+  const [open, setOpen] = useState(false);
+  const declined = it.state === "fail" && it.summary === "declined";
+  return (
+    <li className="text-base">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
+              title={open ? "Hide details" : "Show input, output and timing"}
+              className="flex items-start gap-2 text-left w-full rounded hover:bg-surface-hover focus-visible:outline focus-visible:outline-2 focus-visible:outline-brand">
+        <span className="mt-[2.5px] shrink-0"><StatusIcon state={it.state} /></span>
+        <span className={it.state === "running"
+          ? "text-fg font-medium"
+          : "text-fg-soft"}>
+          {toolLabel(it.tool, it.args)}
+          {declined && (
+            <span className="ml-1.5 text-xs font-medium text-warning">— you declined this</span>
+          )}
+          {it.summary && it.state === "fail" && !declined && (
+            <span className="ml-1.5 text-red-500">— {String(it.summary).slice(0, 80)}</span>
+          )}
+          {typeof it.ms === "number" && it.ms >= 1000 && (
+            <span className="ml-1.5 text-xs text-fg-subtle">{(it.ms / 1000).toFixed(1)} s</span>
+          )}
+        </span>
+      </button>
+      {open && <Inspector item={it} />}
     </li>
   );
 }
@@ -212,35 +275,26 @@ export function StepList({ items, onApprove }) {
         }
         if (it.kind === "preamble") {
           return (
-            <li key={i} className="flex items-start gap-2 text-[13px] italic text-ink-soft dark:text-night-faint">
-              <svg className="mt-[3px] shrink-0" width="13" height="13" viewBox="0 0 24 24" fill="none"
-                   stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-              </svg>
+            <li key={i} className="flex items-start gap-2 text-sm italic text-fg-muted">
+              <IconMessage size={13} stroke={1.8} className="mt-[3px] shrink-0" aria-hidden="true" />
               <span>“{it.text}”</span>
             </li>
           );
         }
+        if (it.kind === "notice") {
+          return (
+            <li key={i} role="note" className="flex items-start gap-2 text-sm text-warning">
+              <span aria-hidden="true">ⓘ</span><span>{it.text}</span>
+            </li>
+          );
+        }
+        if (it.kind === "plan") {
+          return <PlanCard key={i} plan={it.plan || []} />;
+        }
         if (it.tool === "run_shell") {
           return <TerminalBlock key={i} item={it} />;
         }
-        const declined = it.state === "fail" && it.summary === "declined";
-        return (
-          <li key={i} className="flex items-start gap-2 text-[13.5px]">
-            <span className="mt-[2.5px] shrink-0"><StatusIcon state={it.state} /></span>
-            <span className={it.state === "running"
-              ? "text-ink dark:text-night-ink font-medium"
-              : "text-ink-soft dark:text-night-ink"}>
-              {toolLabel(it.tool, it.args)}
-              {declined && (
-                <span className="ml-1.5 text-[12px] font-medium text-amber-600 dark:text-amber-400">— you declined this</span>
-              )}
-              {it.summary && it.state === "fail" && !declined && (
-                <span className="ml-1.5 text-red-500">— {String(it.summary).slice(0, 80)}</span>
-              )}
-            </span>
-          </li>
-        );
+        return <ToolRow key={i} it={it} />;
       })}
     </ul>
   );
@@ -257,18 +311,11 @@ function summarize(items) {
 }
 
 const ActivityIcon = () => (
-  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-       strokeLinecap="round" strokeLinejoin="round" className="text-brand-deep">
-    <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-  </svg>
+  <IconActivity size={14} stroke={2} className="text-brand-deep" aria-hidden="true" />
 );
 
 const Chevron = ({ open }) => (
-  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-       strokeLinecap="round" strokeLinejoin="round"
-       className={`text-ink-faint dark:text-night-faint transition-transform ${open ? "rotate-180" : ""}`}>
-    <path d="m6 9 6 6 6-6" />
-  </svg>
+  <IconChevronDown size={16} stroke={2} className={`text-ink-faint dark:text-night-faint transition-transform ${open ? "rotate-180" : ""}`} aria-hidden="true" />
 );
 
 // Persisted activity shown UNDER an assistant reply: the same premium card as the
@@ -278,18 +325,18 @@ export default function Activity({ items }) {
   const [open, setOpen] = useState(false);
   if (!items || items.length === 0) return null;
   return (
-    <div className="mb-2 rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel shadow-soft overflow-hidden">
+    <div className="mb-2 rounded-2xl border border-border bg-surface-raised shadow-soft overflow-hidden">
       <button type="button" onClick={() => setOpen((o) => !o)}
               title={open ? "Collapse the activity" : "Show the thinking and tool steps behind this reply"}
-              className="w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-paper-soft dark:hover:bg-night-soft transition">
-        <span className="flex items-center gap-2 text-[12.5px] font-medium text-ink-soft dark:text-night-ink">
+              className="w-full flex items-center justify-between px-3.5 py-2 text-left hover:bg-surface-hover transition">
+        <span className="flex items-center gap-2 text-sm font-medium text-fg-soft">
           <ActivityIcon />
           {summarize(items)}
         </span>
         <Chevron open={open} />
       </button>
       {open && (
-        <div className="max-h-[260px] overflow-y-auto px-3.5 pb-2.5 pt-0.5 border-t border-line/70 dark:border-night-line/70">
+        <div className="max-h-[260px] overflow-y-auto px-3.5 pb-2.5 pt-0.5 border-t border-border/70">
           <StepList items={items} />
         </div>
       )}

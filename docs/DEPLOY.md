@@ -78,8 +78,8 @@ sudo bash /opt/namma-agent/deploy/install.sh   # idempotent — re-running IS th
 ```
 
 It pulls the latest code, updates deps, rebuilds the UI if needed, and
-restarts the service. Your `.env`, `config.local.yaml`, and `data/` are never
-touched.
+restarts the service. Your `.env` and `data/` (including `data/user_config.yaml`)
+are never touched.
 
 ## Backup = copy the data folder
 
@@ -88,7 +88,7 @@ Everything the agent knows lives in `/opt/namma-agent/data/` (or the
 self-review snapshots.
 
 ```bash
-sudo tar czf namma-backup-$(date +%F).tgz -C /opt/namma-agent data .env namma_agent/config.local.yaml
+sudo tar czf namma-backup-$(date +%F).tgz -C /opt/namma-agent data .env
 ```
 
 **One caveat:** secrets stored in the OS **vault** (Settings → Security) are

@@ -1,45 +1,37 @@
-import { useId } from "react";
-
-// Brand mark — "Orbit Spark": a four-point spark of insight crossed by a tilted
-// orbit ring. Name-independent art (no letter). Scales crisply from favicon to
-// hero. `size` is px; colors come from the brand blue gradient.
-export default function Logo({ size = 28, className = "", title = "" }) {
-  const id = useId().replace(/:/g, "");
-  const gid = `lg-${id}`;
+// Brand mark (Phase 9): the laurel-crowned statue chosen by the owner.
+//
+// Two forms:
+//  - "plain"     — the engraving alone, as a single-colour mask in `--logo-ink`
+//                  (what chat avatars use); in dark themes it sits on a small
+//                  light coin (see index.css) so it never looks like noise;
+//  - "medallion" — the highlighted mark: a round coin in the accent wash with
+//                  a soft glow, the statue's silhouette filled in the surface
+//                  colour (so the engraving no longer reads see-through) and
+//                  the line work on top. Small sizes switch to a bolder line
+//                  mask so the detail survives.
+//  - `solid`     — the medallion on an opaque coin face with the bold engraving
+//                  at any size (the home screen's large mark), instead of the
+//                  translucent wash; reads cleanly on the painted background.
+// `size` is the square box in px.
+export default function Logo({ size = 28, className = "", title = "", variant = "plain", solid = false }) {
+  const a11y = { role: title ? "img" : undefined, "aria-label": title || undefined, "aria-hidden": title ? undefined : true };
+  if (variant !== "medallion") {
+    // Light themes: just the engraving. Dark themes (CSS): the same engraving
+    // on a light coin with the silhouette filled, so the fine hatching never
+    // reads as loose bright pixels on a dark field.
+    return (
+      <span {...a11y} className={`brand-logo relative inline-block shrink-0 align-middle ${className}`}
+            style={{ width: size, height: size }}>
+        <span className="brand-logo-fill absolute inset-0" />
+        <span className={`brand-logo-ink absolute inset-0 ${size <= 32 ? "brand-logo-bold" : ""}`} />
+      </span>
+    );
+  }
   return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 100 100"
-      className={className}
-      role={title ? "img" : "presentation"}
-      aria-label={title || undefined}
-      xmlns="http://www.w3.org/2000/svg"
-    >
-      {/* Colors follow the active theme's accent (--brand / --accent-bright). */}
-      <defs>
-        <linearGradient id={gid} x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stopColor="rgb(var(--accent-bright))" />
-          <stop offset="0.55" stopColor="rgb(var(--brand))" />
-          <stop offset="1" stopColor="rgb(var(--brand-deep))" />
-        </linearGradient>
-      </defs>
-      {/* tilted orbit ring */}
-      <ellipse
-        cx="50" cy="50" rx="44" ry="19" fill="none"
-        stroke="rgb(var(--brand))" strokeWidth="3" opacity="0.45"
-        transform="rotate(-28 50 50)"
-      />
-      {/* main four-point spark (concave diamond) */}
-      <path
-        d="M 50 12 C 53.5 38 62 46.5 88 50 C 62 53.5 53.5 62 50 88 C 46.5 62 38 53.5 12 50 C 38 46.5 46.5 38 50 12 Z"
-        fill={`url(#${gid})`}
-      />
-      {/* accent mini-spark */}
-      <path
-        d="M 78 18 C 79 25.5 81 27.5 88.5 28.5 C 81 29.5 79 31.5 78 39 C 77 31.5 75 29.5 67.5 28.5 C 75 27.5 77 25.5 78 18 Z"
-        fill="rgb(var(--accent-bright))"
-      />
-    </svg>
+    <span {...a11y} className={`brand-medallion ${solid ? "brand-medallion-solid" : ""} relative inline-block shrink-0 align-middle rounded-full ${className}`}
+          style={{ width: size, height: size }}>
+      <span className="brand-medallion-fill absolute inset-0" />
+      <span className={`brand-medallion-ink absolute inset-0 ${size <= 40 || solid ? "brand-logo-bold" : ""}`} />
+    </span>
   );
 }

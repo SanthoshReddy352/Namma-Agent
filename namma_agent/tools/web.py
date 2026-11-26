@@ -20,7 +20,7 @@ import urllib.request
 from namma_agent.core.docscan import screen_web_text
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
-from namma_agent.core.urlguard import BlockedURL, guarded_opener, check_url
+from namma_agent.core.urlguard import BlockedURL, check_url, guarded_opener
 
 _FETCH_CAP = 512 * 1024  # bytes read off the wire
 _USER_AGENT = (

@@ -1,0 +1,39 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<title>Starting…</title>
+<style>
+  :root { --bg: #f6f8fc; --fg: #10131a; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg);
+    font: 14px "Segoe UI Variable", "Segoe UI", system-ui, sans-serif; overflow: hidden; }
+  .band { position: fixed; inset: 0 0 auto 0; height: 34px; -webkit-app-region: drag; }
+  main { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 18px; }
+  img { width: 72px; height: 72px; opacity: .95; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; letter-spacing: .01em; }
+  .bar { width: 160px; height: 3px; border-radius: 3px; overflow: hidden; background: color-mix(in srgb, var(--fg) 12%, transparent); }
+  .bar i { display: block; width: 40%; height: 100%; border-radius: 3px; background: color-mix(in srgb, var(--fg) 55%, transparent);
+    animation: slide 1.2s ease-in-out infinite; }
+  p { margin: 0; font-size: 12px; opacity: .6; }
+  @keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+  @media (prefers-reduced-motion: reduce) { .bar i { animation: none; width: 100%; opacity: .5; } }
+</style>
+</head>
+<body>
+<div class="band"></div>
+<main>
+  <img src="icon.png" alt="">
+  <h1 id="name">Namma Agent</h1>
+  <div class="bar"><i></i></div>
+  <p>Starting the local engine…</p>
+</main>
+<script>
+  const q = new URLSearchParams(location.search);
+  const ok = (c) => /^#[0-9a-f]{6}$/i.test(c || "");
+  if (ok(q.get("bg"))) document.documentElement.style.setProperty("--bg", q.get("bg"));
+  if (ok(q.get("fg"))) document.documentElement.style.setProperty("--fg", q.get("fg"));
+  if (q.get("name")) { document.getElementById("name").textContent = q.get("name"); document.title = q.get("name"); }
+</script>
+</body>
+</html>

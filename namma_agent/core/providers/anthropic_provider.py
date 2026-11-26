@@ -116,7 +116,9 @@ class AnthropicProvider(Provider):
     ) -> LLMResponse:
         import anthropic
 
-        client = anthropic.Anthropic(api_key=self._api_key, timeout=self.timeout_s)
+        # base_url: Anthropic-compatible endpoints (MiniMax, Tencent TokenPlan).
+        client = anthropic.Anthropic(api_key=self._api_key, base_url=self.base_url or None,
+                                     timeout=self.timeout_s)
         system_text, convo = self.split_system(messages)
         wire_messages = self._to_wire_messages(convo)
         wire_tools = self._to_wire_tools(tools)

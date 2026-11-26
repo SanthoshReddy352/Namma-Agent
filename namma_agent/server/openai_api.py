@@ -137,9 +137,10 @@ def register_openai_api(app: FastAPI, service) -> None:
     def _run(text: str, session_id: str, model: str, on_token=None):
         # No approval channel over HTTP → destructive tools are declined, the
         # same contract routines and watchers run under.
+        from namma_agent.core.trust import decline_all
         return service.run_turn(
             text, session_id=session_id, on_token=on_token,
-            approval=lambda _name, _args: False,
+            approval=decline_all,
             model_id=model or None)
 
     @app.get("/v1/models")

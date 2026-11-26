@@ -1,6 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import { uploadFile } from "../api.js";
-import { handsFreeSupported } from "../handsfree.js";
+import SelectMenu from "./ui/SelectMenu.jsx";
+import { dictationEngine, startBrowserDictation, startRecording, transcribe } from "../voice.js";
+import { MODES, modeById } from "../roles.js";
+import RoleEmblem from "./RoleEmblem.jsx";
+import { IconChevronDown, IconMicrophone, IconPaperclip, IconPlayerStopFilled, IconSend } from "@tabler/icons-react";
 
 // Textarea never grows past this (the "net safety height") — it scrolls instead.
 const MAX_H = 200;
@@ -14,14 +18,17 @@ const SLASH_COMMANDS = [
   { cmd: "/clear", desc: "Wipe Namma Agent's memory" },
   { cmd: "/agent", desc: "Switch to agent mode (tools + skills)" },
   { cmd: "/chat", desc: "Switch to chat mode (talk only)" },
+  { cmd: "/setup", desc: "Setup mode: models, MCP, Google, email, messaging" },
   { cmd: "/help", desc: "Show available commands" },
 ];
 const BANG_HINT = [{ cmd: "!<command>", desc: "Run a shell command, e.g. !df -h" }];
 
-// claude.ai-style composer: rounded card with attach, a textarea, a mode pill,
-// and a send button that becomes a stop button while a turn is running.
-export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocus, name = "Namma Agent",
-                                   handsfree = false, setHandsfree, handsfreeStatus = "off" }) {
+// Composer (Phase 9, Hermes layout): the text on top, a toolbar row below —
+// attach, the mode list and the model chip on the left; dictation, hands-free
+// and send (stop while a turn runs) on the right. Always stacked, so narrow
+// windows never squeeze the text field.
+export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocus, name = "Namma Agent", skills = [],
+                                   handsfree = false, setHandsfree, handsfreeStatus = "off", modelLabel, onOpenModelPicker }) {
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -44,9 +51,16 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
     const el = taRef.current;
     if (!el) return;
     el.style.height = "auto";
-    const content = el.scrollHeight;
-    if (!oneLineRef.current) oneLineRef.current = content; // first pass runs on the empty field
+    // One text line + vertical padding. An empty field is always exactly one
+    // line: a placeholder that wraps in a narrow window must not grow the box
+    // or summon a scrollbar.
+    const cs = getComputedStyle(el);
+    const lineH = parseFloat(cs.lineHeight) || parseFloat(cs.fontSize) * 1.5 || 22;
+    const oneLine = Math.ceil(lineH + parseFloat(cs.paddingTop || 0) + parseFloat(cs.paddingBottom || 0));
+    if (!oneLineRef.current) oneLineRef.current = oneLine;
+    const content = el.value ? el.scrollHeight : oneLine;
     el.style.height = Math.min(content, MAX_H) + "px";
+    el.style.overflowY = content > MAX_H ? "auto" : "hidden";
     setExpanded((prev) => {
       if (!el.value.trim()) return false; // empty → controls back on the side
       return prev || content > oneLineRef.current * EXPAND_RATIO;
@@ -55,7 +69,6 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
   // Re-measure on text change *and* after an expand (the width changes with it, so
   // the height must be recomputed); the sticky logic keeps this from looping.
   useLayoutEffect(() => { autosize(); }, [text, expanded]);
-  const sttSupported = typeof window !== "undefined" && ("SpeechRecognition" in window || "webkitSpeechRecognition" in window);
 
   function submit() {
     if (busy) return;
@@ -78,42 +91,78 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
   }
 
   // Browser-native speech-to-text (Web Speech API) — dictates into the textarea.
-  function record() {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) return;
-    if (recRef.current) { recRef.current.stop(); return; }
-    const rec = new SR();
-    rec.lang = "en-US";
-    rec.interimResults = false;
-    rec.onresult = (e) => {
-      const said = e.results[0][0].transcript;
-      setText((v) => (v ? v + " " + said : said));
-    };
-    rec.onend = () => { setRecording(false); recRef.current = null; };
-    rec.onerror = () => { setRecording(false); recRef.current = null; };
-    recRef.current = rec;
-    setRecording(true);
-    rec.start();
+  // Dictation (Phase 9): record the mic and let the server transcribe it with
+  // the OS engine (Windows SAPI) or the cloud endpoint; the browser's own
+  // recognizer is the fallback. Click once to start, again to stop.
+  const [transcribing, setTranscribing] = useState(false);
+  const [dictErr, setDictErr] = useState("");
+  async function record() {
+    setDictErr("");
+    if (recRef.current) {               // second click: stop and transcribe
+      const rec = recRef.current;
+      recRef.current = null;
+      setRecording(false);
+      if (rec.kind === "browser") { rec.handle.stop(); return; }
+      setTranscribing(true);
+      try {
+        const wav = await rec.handle.stop();
+        const { text: said } = await transcribe(wav);
+        if (said) setText((v) => (v ? v + " " + said : said));
+        else setDictErr("I didn't catch that. Try again a little closer to the mic.");
+      } catch (e) {
+        setDictErr(String(e?.message || e));
+      } finally {
+        setTranscribing(false);
+        taRef.current?.focus();
+      }
+      return;
+    }
+    const engine = await dictationEngine();
+    if (!engine) { setDictErr("Dictation isn't available here."); return; }
+    try {
+      if (engine === "browser") {
+        const handle = startBrowserDictation({
+          onText: (said) => setText((v) => (v ? v + " " + said : said)),
+          onEnd: () => { setRecording(false); recRef.current = null; },
+        });
+        recRef.current = { kind: "browser", handle };
+      } else {
+        recRef.current = { kind: "server", handle: await startRecording() };
+      }
+      setRecording(true);
+    } catch (e) {
+      setDictErr(e?.name === "NotAllowedError" ? "Microphone access was blocked." : String(e?.message || e));
+    }
   }
+
 
   // Command hints: show when the message begins with / or !
   let hints = null;
   if (text.startsWith("/")) {
-    hints = SLASH_COMMANDS.filter((c) => c.cmd.startsWith(text.split(" ")[0]));
+    const typed = text.split(" ")[0].toLowerCase();
+    // Built-in commands, then enabled skills: "/deep-research <topic>" runs
+    // that skill's procedure for this message (the server loads it).
+    hints = [
+      ...SLASH_COMMANDS,
+      ...skills.map((s) => ({ cmd: "/" + s.name, desc: s.description, skill: true })),
+    ].filter((c) => c.cmd.toLowerCase().startsWith(typed)).slice(0, 12);
   } else if (text.startsWith("!")) {
     hints = BANG_HINT;
   }
 
   return (
-    <div className="relative rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel shadow-soft">
+    <div className="relative rounded-2xl border border-border/80 bg-surface-raised/80 backdrop-blur-md shadow-soft">
+      {dictErr && (
+        <div role="alert" className="absolute -top-8 left-2 right-2 truncate text-sm text-danger">{dictErr}</div>
+      )}
       {hints && hints.length > 0 && (
-        <div className="absolute bottom-full mb-2 left-0 right-0 rounded-xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel shadow-pop overflow-hidden">
+        <div className="absolute bottom-full mb-2 left-0 right-0 rounded-xl border border-border bg-surface-raised shadow-pop overflow-hidden">
           {hints.map((h) => (
             <button key={h.cmd} type="button"
                     onClick={() => { if (h.cmd.includes("<")) return; setText(h.cmd + " "); }}
-                    className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-paper-soft dark:hover:bg-night-soft">
-              <span className="font-mono text-[13px] text-brand-deep">{h.cmd}</span>
-              <span className="text-[12.5px] text-ink-soft dark:text-night-faint">{h.desc}</span>
+                    className="w-full flex items-center gap-3 px-3 py-2 text-left hover:bg-surface-hover">
+              <span className="font-mono text-sm text-brand-deep shrink-0">{h.cmd}</span>
+              <span className="text-sm text-fg-muted truncate">{h.skill ? "Skill · " : ""}{h.desc}</span>
             </button>
           ))}
         </div>
@@ -121,7 +170,7 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
       {attachments.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-3 pt-3">
           {attachments.map((a, i) => (
-            <span key={i} className="flex items-center gap-1.5 text-[12px] bg-paper-soft dark:bg-night-soft border border-line dark:border-night-line rounded-md px-2 py-1">
+            <span key={i} className="flex items-center gap-1.5 text-xs bg-surface-hover border border-border rounded-md px-2 py-1">
               📎 {a.name}
               <button onClick={() => setAttachments((x) => x.filter((_, j) => j !== i))}
                       className="text-ink-faint hover:text-ink">×</button>
@@ -133,7 +182,7 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
           the textarea expands (up to MAX_H) and, past EXPAND_AT, the layout flips to
           a column so the controls drop to the bottom of the box. Same element order
           in both layouts, so the textarea never remounts (keeps focus while typing). */}
-      <div className={`p-2.5 flex gap-2 ${expanded ? "flex-col" : "items-center"}`}>
+      <div className="p-2.5 flex flex-col gap-1">
         <input ref={fileRef} type="file" multiple className="hidden" onChange={onPick} />
         <textarea
           ref={taRef}
@@ -142,43 +191,33 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
           rows={1}
-          placeholder={mode === "chat" ? `Chat with ${name}…` : `Ask ${name} to do something…`}
-          className={`resize-none bg-transparent outline-none px-1.5 py-2 text-[15px] placeholder:text-ink-faint dark:placeholder:text-night-faint overflow-y-auto max-h-[200px] ${expanded ? "w-full" : "flex-1 min-w-0"}`}
+          placeholder={mode === "chat" ? `Message ${name}…`
+            : mode === "setup" ? "What should we set up?"
+            : `Ask ${name} to do something…`}
+          className="composer-input resize-none bg-transparent outline-none px-1.5 py-2 text-prose placeholder:text-fg-subtle overflow-y-hidden max-h-[200px] w-full"
         />
-        <div className={`flex items-center gap-1.5 ${expanded ? "w-full justify-end" : "shrink-0"}`}>
-          <button title="Attach a document" onClick={() => fileRef.current?.click()}
-                  className="h-9 w-9 grid place-items-center rounded-lg text-ink-soft dark:text-night-faint hover:bg-paper-soft dark:hover:bg-night-soft">
+        <div className="flex items-center gap-1 w-full flex-wrap">
+          <button aria-label="Attach a document" title="Attach a document" onClick={() => fileRef.current?.click()}
+                  className="h-9 w-9 grid place-items-center rounded-lg text-fg-muted hover:bg-surface-hover">
             {uploading ? <span className="text-xs">…</span> : <PaperclipIcon />}
           </button>
-          <ModePill mode={mode} setMode={setMode} />
-          {sttSupported && (
-            <button title={recording ? "Stop dictation" : "Dictate (browser speech-to-text)"} onClick={record}
-                    className={`h-9 w-9 grid place-items-center rounded-lg hover:bg-paper-soft dark:hover:bg-night-soft ${recording ? "text-brand animate-pulse" : "text-ink-soft dark:text-night-faint"}`}>
-              <MicIcon />
-            </button>
-          )}
-          {setHandsfree && handsFreeSupported() && (
-            <button
-              onClick={() => setHandsfree(!handsfree)}
-              title={handsfree
-                ? (handsfreeStatus === "awaiting" ? "Listening for your command…"
-                   : handsfreeStatus === "speaking" ? "Speaking the reply…"
-                   : `Hands-free is ON — say “${name}, …” (click to turn off)`)
-                : `Hands-free mode: say “${name}, …” to talk (click to turn on)`}
-              className={`h-9 w-9 grid place-items-center rounded-lg hover:bg-paper-soft dark:hover:bg-night-soft
-                ${handsfree
-                  ? (handsfreeStatus === "awaiting" ? "text-brand animate-pulse" : "text-brand")
-                  : "text-ink-soft dark:text-night-faint"}`}>
-              <HeadsetIcon />
-            </button>
-          )}
+          <ModeMenu mode={mode} setMode={setMode} />
+          {onOpenModelPicker && <ModelChip label={modelLabel} onClick={onOpenModelPicker} />}
+          <span className="flex-1" aria-hidden="true" />
+          <button type="button" onClick={record} disabled={transcribing}
+                  aria-label={recording ? "Stop dictation" : transcribing ? "Transcribing…" : "Dictate"}
+                  title={recording ? "Stop and transcribe" : transcribing ? "Transcribing…" : "Dictate (your system's speech recognition)"}
+                  aria-pressed={recording}
+                  className={`h-9 w-9 grid place-items-center rounded-lg hover:bg-surface-hover disabled:opacity-60 ${recording ? "text-danger animate-pulse" : transcribing ? "text-brand animate-pulse" : "text-fg-muted"}`}>
+            <MicIcon />
+          </button>
           {busy ? (
-            <button title="Stop" onClick={onStop}
-                    className="h-9 w-9 grid place-items-center rounded-lg bg-ink dark:bg-night-ink text-paper dark:text-night">
+            <button aria-label="Stop" title="Stop" onClick={onStop}
+                    className="h-9 w-9 grid place-items-center rounded-lg bg-fg text-bg">
               <StopIcon />
             </button>
           ) : (
-            <button title="Send" onClick={submit} disabled={!text.trim() && attachments.length === 0}
+            <button aria-label="Send" title="Send" onClick={submit} disabled={!text.trim() && attachments.length === 0}
                     className="h-9 w-9 grid place-items-center rounded-lg bg-brand text-white disabled:opacity-30 hover:bg-brand-deep transition">
               <SendIcon />
             </button>
@@ -189,21 +228,43 @@ export default function Composer({ onSend, onStop, busy, mode, setMode, autoFocu
   );
 }
 
-function ModePill({ mode, setMode }) {
+// Phase 9: modes are picked from a list (Hermes-style), each shown as its
+// Roman role with a one-line description. Replaces the old 3-way pill.
+function RoleTile({ role, emblem, size = 22 }) {
   return (
-    <div className="flex items-center rounded-lg bg-paper-soft dark:bg-night-soft p-0.5 text-[12px] font-medium">
-      {["agent", "chat"].map((m) => (
-        <button key={m} onClick={() => setMode(m)}
-                className={`px-2.5 py-1 rounded-md capitalize transition ${mode === m ? "bg-paper-panel dark:bg-night-panel text-ink dark:text-night-ink shadow-soft" : "text-ink-faint dark:text-night-faint"}`}>
-          {m}
-        </button>
-      ))}
-    </div>
+    <span aria-hidden="true" style={{ width: size, height: size }} title={role}
+          className="grid place-items-center shrink-0 rounded-md bg-accent-wash text-accent">
+      <RoleEmblem role={emblem || role} size={Math.round(size * 0.72)} />
+    </span>
   );
 }
 
-const PaperclipIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" /></svg>);
-const MicIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z" /><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3" /></svg>);
-const HeadsetIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 14v-2a9 9 0 0 1 18 0v2" /><path d="M3 14a2 2 0 0 1 2-2h1a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-3ZM21 14a2 2 0 0 0-2-2h-1a2 2 0 0 0-2 2v3a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3Z" /><path d="M21 17v1a3 3 0 0 1-3 3h-4" /></svg>);
-const SendIcon = () => (<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m22 2-7 20-4-9-9-4Z" /><path d="M22 2 11 13" /></svg>);
-const StopIcon = () => (<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="2" /></svg>);
+function ModeMenu({ mode, setMode }) {
+  const options = MODES.map((m) => ({
+    id: m.id, label: `${m.label} · ${m.role}`, description: m.description,
+    leading: <RoleTile role={m.role} emblem={m.emblem} size={28} />,
+  }));
+  return (
+    <SelectMenu label="Mode" value={mode} onChange={setMode} options={options}
+                renderTrigger={() => {
+                  const cur = modeById(mode);
+                  return (<><RoleTile role={cur.role} emblem={cur.emblem} /><span className="text-fg">{cur.label}</span></>);
+                }} />
+  );
+}
+
+// The model chip: shows the current model and opens the model picker overlay.
+function ModelChip({ label, onClick }) {
+  return (
+    <button type="button" onClick={onClick} aria-label={`Model: ${label || "choose a model"}`} title="Choose a model"
+            className="inline-flex items-center gap-1 h-8 max-w-[180px] rounded-md px-2 text-sm text-fg-muted hover:text-fg hover:bg-surface-sunken transition-colors duration-fast">
+      <span className="truncate">{label || "Choose a model"}</span>
+      <IconChevronDown size={12} stroke={2} aria-hidden="true" />
+    </button>
+  );
+}
+
+const PaperclipIcon = () => (<IconPaperclip size={18} stroke={2} aria-hidden="true" />);
+const MicIcon = () => (<IconMicrophone size={18} stroke={2} aria-hidden="true" />);
+const SendIcon = () => (<IconSend size={18} stroke={2} aria-hidden="true" />);
+const StopIcon = () => (<IconPlayerStopFilled size={16} aria-hidden="true" />);

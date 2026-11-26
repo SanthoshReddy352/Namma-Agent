@@ -21,8 +21,6 @@ from namma_agent.config import load_config
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-
 _REL_RE = re.compile(r"\bin\s+(\d+)\s*(second|sec|minute|min|hour|hr|day)s?\b", re.I)
 _HHMM_RE = re.compile(r"\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b")
 _UNIT_SECONDS = {"second": 1, "sec": 1, "minute": 60, "min": 60,
@@ -63,7 +61,12 @@ def _store_path() -> Path:
         path = cfg.get("store_path")
     except Exception:  # noqa: BLE001
         path = None
-    return Path(path).expanduser() if path else _REPO_ROOT / "data" / "reminders.json"
+    if path:
+        return Path(path).expanduser()
+    # The data dir, not <repo>/data: honours NAMMA_DATA_DIR, so a scratch or test
+    # run never plants reminders that later fire in the owner's real app.
+    from namma_agent.config import data_dir  # noqa: PLC0415
+    return data_dir() / "reminders.json"
 
 
 def _load() -> list[dict]:

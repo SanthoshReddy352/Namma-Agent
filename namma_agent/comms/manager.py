@@ -19,7 +19,9 @@ from namma_agent.comms.slack import SlackChannel, SlackInbound, SlackSocketInbou
 from namma_agent.comms.telegram import TelegramChannel, TelegramInbound
 from namma_agent.comms.whatsapp import WhatsAppChannel, WhatsAppInbound
 from namma_agent.comms.whatsapp_qr import (
-    WhatsAppQRChannel, WhatsAppQRInbound, whatsapp_mode,
+    WhatsAppQRChannel,
+    WhatsAppQRInbound,
+    whatsapp_mode,
 )
 from namma_agent.core.logger import logger
 

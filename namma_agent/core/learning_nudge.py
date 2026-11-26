@@ -20,9 +20,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Optional
 
+from namma_agent.config import data_dir as _data_dir
 from namma_agent.core.logger import logger
 
-from namma_agent.config import data_dir as _data_dir
 STATE_PATH = _data_dir() / "learning_nudges.json"
 
 

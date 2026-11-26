@@ -25,12 +25,12 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from namma_agent.config import data_dir as _data_dir
 from namma_agent.core import urlguard
 from namma_agent.core.interactive import record_artifact
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
-from namma_agent.config import data_dir as _data_dir
 _MEDIA = _data_dir() / "media"
 _TIMEOUT = 12
 
@@ -408,7 +408,9 @@ def _render_diagram(args: dict) -> ToolResult:
             ok=False, content="",
             error="'code' must be valid Mermaid source — the first line has to be a "
                   "diagram declaration (e.g. 'flowchart TD', 'sequenceDiagram', "
-                  "'classDiagram', 'mindmap'). Don't pass prose or JSON.")
+                  "'classDiagram', 'mindmap'). Don't pass prose or JSON. For NUMBERS "
+                  "(bar / line / pie charts) don't use Mermaid at all: write a ```chart "
+                  "block in your reply instead.")
 
     out_dir = _media_dir("diagrams")
     name = f"{uuid.uuid4().hex}.png"
@@ -440,10 +442,26 @@ def _render_diagram(args: dict) -> ToolResult:
     # retry — a malformed diagram is now possible (the model authors the source), so
     # an honest error beats silently swallowing it.
     logger.warning("[learning_media] no server PNG (api: %s; local: %s)", api_err, local_err)
+    if _is_syntax_error(api_err):
+        return ToolResult(
+            ok=False, content="",
+            error=f"diagram render failed — the Mermaid looks invalid ({api_err[:160]}). "
+                  "Fix the syntax and try again, or write it as a ```mermaid block.")
+    # No image renderer reachable (offline, mermaid.ink down, no local browser):
+    # the chat renders Mermaid itself, so the diagram still appears — inline, right
+    # here — instead of the turn dead-ending on a missing PNG.
+    fence = f"```mermaid\n{code}\n```"
     return ToolResult(
-        ok=False, content="",
-        error=f"diagram render failed (mermaid.ink: {api_err}; local: {local_err}). "
-              "If this looks like a syntax error, fix the Mermaid and call render_diagram again.")
+        ok=True,
+        content=(fence + "\n\n(No image renderer was reachable, so the chat draws this "
+                 "diagram itself. Write ```mermaid blocks directly next time.)"),
+        data={"inline": fence, "kind": "diagram", "fallback": "client"})
+
+
+def _is_syntax_error(api_err: str) -> bool:
+    """mermaid.ink answers HTTP 400 for a diagram it can't parse; network and
+    service failures look different (and say nothing about the syntax)."""
+    return (api_err or "").strip().lower() == "mermaid.ink returned 400"
 
 
 def _fetch_image(args: dict) -> ToolResult:

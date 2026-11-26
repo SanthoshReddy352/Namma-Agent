@@ -84,8 +84,19 @@ on GitHub's **free** runners:
 1. builds the branded installer on **each** OS — `NammaAgentInstaller-2.3.0.exe`,
    `NammaAgent-2.3.0.dmg`, `NammaAgentInstaller-2.3.0-x86_64.AppImage`, plus a
    ready-to-run source zip,
-2. **creates the GitHub Release** for the tag and attaches all of them, with
+2. builds the **Windows desktop app** installer (job `desktop`):
+   `NammaAgentSetup-2.3.0.exe`, its `.blockmap`, and **`latest.yml`**. Its version
+   comes from `namma_agent/version.py`.
+3. **creates the GitHub Release** for the tag and attaches all of them, with
    auto-generated notes.
+
+> **Desktop app auto-update depends on this release.** Installed desktop apps read
+> `latest.yml` from the repository's **latest published release** and offer the update
+> when its version is higher than theirs. So:
+> - bump `version.py` for every release, since the same version is never offered again;
+> - publish the release: drafts and pre-releases are ignored;
+> - keep all three desktop files attached. The `.blockmap` makes later downloads
+>   smaller, and `latest.yml` is what the app looks for.
 
 So after `git push --tags`: open the repo's **Actions** tab, watch the *Release*
 run finish (~10–15 min), then check **Releases** — everything is there. That's it.
@@ -110,6 +121,18 @@ gh release create v2.3.0 installers/native/dist/* --title "Namma Agent v2.3.0" -
 Open an already-installed app (one still on the old version). Within a few seconds
 the **Update available** banner should appear → **Update now** pulls, reinstalls,
 and relaunches.
+
+For the **desktop app**, the banner's **Update now** (or Settings → About) downloads
+`NammaAgentSetup-<new>.exe` with a progress bar, closes the app, runs the installer
+with its progress window showing (no questions) and reopens it on the new version. The tray's **Check for updates…** asks on demand. To rehearse this
+without publishing, see *Developing the desktop app* in the README (a local feed via
+`NAMMA_DESKTOP_UPDATE_URL`).
+
+Manual desktop build (Windows), if CI is unavailable:
+```bash
+cd desktop && npm ci && npm run dist     # → desktop/out/NammaAgentSetup-<ver>.exe, .blockmap, latest.yml
+gh release upload v2.3.0 desktop/out/NammaAgentSetup-*.exe desktop/out/NammaAgentSetup-*.exe.blockmap desktop/out/latest.yml
+```
 
 ---
 

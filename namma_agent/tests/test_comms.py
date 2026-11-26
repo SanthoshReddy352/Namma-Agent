@@ -3,19 +3,23 @@ from __future__ import annotations
 
 import pytest
 
+from namma_agent.comms import signal as signal_mod
+from namma_agent.comms import slack as slack_mod
+from namma_agent.comms import whatsapp as whatsapp_mod
+from namma_agent.comms import whatsapp_qr as whatsapp_qr_mod
 from namma_agent.comms._util import chunk_text, markdown_to_whatsapp
 from namma_agent.comms.console import ConsoleInbound
 from namma_agent.comms.discord import DiscordChannel, DiscordInbound
 from namma_agent.comms.manager import CommsManager
 from namma_agent.comms.signal import SignalChannel, SignalInbound
-from namma_agent.comms import slack as slack_mod
 from namma_agent.comms.slack import SlackChannel, SlackSocketInbound
 from namma_agent.comms.telegram import (
-    TelegramChannel, TelegramInbound, _chunk, _markdown_to_telegram_html, _split_media,
+    TelegramChannel,
+    TelegramInbound,
+    _chunk,
+    _markdown_to_telegram_html,
+    _split_media,
 )
-from namma_agent.comms import signal as signal_mod
-from namma_agent.comms import whatsapp as whatsapp_mod
-from namma_agent.comms import whatsapp_qr as whatsapp_qr_mod
 from namma_agent.comms.whatsapp import WhatsAppChannel, WhatsAppInbound
 from namma_agent.comms.whatsapp_qr import WhatsAppQRChannel, whatsapp_mode
 from namma_agent.core.tools import ToolRegistry
@@ -166,7 +170,10 @@ def test_deliver_falls_back_to_plain_on_parse_error():
 
 def test_resolve_media_maps_api_url_and_paths():
     from pathlib import Path
-    assert TelegramChannel._resolve_media("/api/media/diagrams/x.png") == Path("data/media/diagrams/x.png")
+
+    from namma_agent.config import data_dir
+    # Follows the data dir (the suite runs on a throwaway one).
+    assert TelegramChannel._resolve_media("/api/media/diagrams/x.png").resolve() ==         (data_dir() / "media" / "diagrams" / "x.png").resolve()
     assert TelegramChannel._resolve_media("/tmp/y.pdf") == Path("/tmp/y.pdf")
     assert TelegramChannel._resolve_media("") is None
 

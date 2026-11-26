@@ -49,9 +49,13 @@ MISSING from the known facts (identity, preferences, people, projects, decisions
 Return ONLY a JSON array (max 3 elements, [] when nothing qualifies):
 [{"text": "<one self-contained sentence, third person>",
   "kind": "fact|preference|event",
-  "subject": "<entity>", "predicate": "<snake_case relation>", "object": "<entity>",
+  "subject": "<entity>", "subject_type": "<type>",
+  "predicate": "<snake_case relation>",
+  "object": "<entity or value>", "object_type": "<type or null>",
   "importance": <0.0-1.0>}]
-Be conservative — when unsure, leave it out."""
+Names are short and canonical ("Python", "Priya"); call the user exactly "user".
+Types: person, organization, place, project, technology, animal, event, concept,
+product. Be conservative — when unsure, leave it out."""
 
 _REFLECT_SYSTEM = """You maintain the long-term memory of a personal AI assistant.
 From the RECENT FACTS and CONVERSATION SUMMARIES below, write up to 3 higher-level
