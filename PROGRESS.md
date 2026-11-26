@@ -1027,7 +1027,7 @@ Slice 1 landed 2026-11-25. Everything marked `[x]` is verified live.
   - The laurel isn't in the brand mark: that's the owner's logo art.
   - `npm audit` reports 20 pre-existing advisories (not introduced here).
 
-#### W2 — Provider & setup parity (backend) — `[~]` (backend done and verified; UI group names and a real OpenRouter sign-in are open)
+#### W2 — Provider & setup parity (backend) — `[~]` (backend done and verified; a real OpenRouter sign-in is open)
 Its own session, branch `claude/phase9-w2-providers-051bcf`. Single catalogue, Hermes' provider list, OpenRouter PKCE, explicit `active_model`.
 - `[x]` **One catalogue:** `core/providers/catalog.py` `CATALOG`, 52 providers from Hermes Agent's registry (same env-var names and base URLs).
   - Groups: Popular / Subscriptions / Gateways / China / Cloud / Local.
@@ -1055,7 +1055,7 @@ Its own session, branch `claude/phase9-w2-providers-051bcf`. Single catalogue, H
   - in Settings → Model → Add a model, the OpenRouter "Sign in" button calls `/oauth/start` and opens a real `openrouter.ai/auth?…code_challenge_method=S256` URL. OpenRouter accepts it and shows its sign-in page;
   - forged callbacks and cross-origin starts are refused;
   - Default model changes `POST /api/active_model`, persist in the user config and survive a reload.
-- `[!]` **UI group names (W1 owns the UI):** `providerContract.js` hard-codes `PROVIDER_GROUPS = ["Popular","Aggregators","Cloud","Local"]`, so the wizard hides Subscriptions, Gateways and China (34 providers). Fix: read `groups` from `/api/providers` and add icons for the three new groups. The UI doesn't read `?connected=` / `?oauth_error=` yet either.
+- `[x]` **UI group names:** settled as option A (2026-11-26). W2 keeps the spec's groups and the `groups` order list. W1 made `providerContract.js` / `ModelWizard.jsx` follow the server's `groups`, with icons for Subscriptions, Gateways and China, and nothing hidden. That change is on `phase9-w1`, uncommitted as of this note, and joins this branch at merge. The UI doesn't read `?connected=` / `?oauth_error=` yet.
 - `[!]` **Not verified:** a completed OpenRouter sign-in (needs the owner's account); a real `verify_provider` call per provider (owner's keys); Ramp Router and Meta Model API use the Responses API in Hermes and may need a Responses adapter.
 
 #### W3 — Electron desktop app — `[ ]`
