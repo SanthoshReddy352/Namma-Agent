@@ -2449,13 +2449,13 @@ class NammaAgentService(SetupMixin):
 
     def provider_for(self, model_id: Optional[str]):
         """The Provider for a model profile id. With no/unknown id, prefer the
-        user's FIRST configured model (their real setup) over the legacy config
+        user's default model (``active_model:``, else the FIRST configured one) (their real setup) over the legacy config
         `provider:` chain — so a chat default turn AND internal features
         (auto-title, summaries) all run on a working brain, not a stale fallback.
         Providers are built once and cached per profile."""
         if not model_id or model_id not in self._model_profiles:
             if self._model_profiles:
-                model_id = next(iter(self._model_profiles))
+                model_id = self.active_model_id()   # explicit active_model, else first
             else:
                 return self.provider  # nothing configured → legacy default chain
         cached = self._model_providers.get(model_id)

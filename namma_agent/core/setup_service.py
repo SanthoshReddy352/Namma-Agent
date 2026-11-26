@@ -102,8 +102,48 @@ class SetupMixin:
         entry = {"id": mid, "label": label or model, "provider": provider_id, "model": model}
         models = [entry, *models] if make_default else [*models, entry]
         applied = self._persist_models(models)
-        return {"ok": True, "model": entry, "default": applied[0]["id"] if applied else "",
+        if make_default:
+            self._store_active_model(mid)
+        return {"ok": True, "model": entry, "default": self.active_model_id(),
                 "models": applied}
+
+    # -- the default model (Phase 9 W2: explicit `active_model:`) ----------
+
+    def active_model_id(self) -> str:
+        """The default model profile id: the explicit ``active_model:`` when it
+        names a configured model, else the first entry of ``models:`` (the old
+        rule), else "" (nothing configured)."""
+        profiles = getattr(self, "_model_profiles", None)
+        if profiles is None:
+            profiles = {m["id"]: m for m in self.configured_models()}
+        chosen = str((self.config or {}).get("active_model") or "").strip()
+        if chosen and chosen in profiles:
+            return chosen
+        return next(iter(profiles), "")
+
+    def _store_active_model(self, model_id: str) -> None:
+        from namma_agent.config import update_config
+        update_config({"active_model": model_id})
+        self.config["active_model"] = model_id
+
+    def set_active_model(self, model_id: str) -> dict:
+        """Make ``model_id`` the default brain. Persists ``active_model:`` and
+        also moves that profile to the top of ``models:`` so every older reader
+        of "first in the list" (setup status, Telegram, the UI fallback) agrees.
+        An empty id clears the explicit choice (back to first-in-list)."""
+        model_id = (model_id or "").strip()
+        if not model_id:
+            self._store_active_model("")
+            return {"ok": True, "model_id": self.active_model_id()}
+        models = self.configured_models()
+        hit = next((m for m in models if m["id"] == model_id), None)
+        if hit is None:
+            return {"ok": False, "error": f"no configured model {model_id!r}",
+                    "model_id": self.active_model_id()}
+        if models and models[0]["id"] != model_id:
+            self._persist_models([hit, *[m for m in models if m["id"] != model_id]])
+        self._store_active_model(model_id)
+        return {"ok": True, "model_id": model_id}
 
     def setup_verify_provider(self, provider: str, model: str = "") -> dict:
         """Verify a configured provider id (or a bare catalogue type)."""
@@ -228,7 +268,7 @@ class SetupMixin:
             "providers": providers,
             "models": [{"id": m["id"], "provider": m.get("provider"), "model": m.get("model")}
                        for m in models],
-            "default_model": models[0]["id"] if models else "",
+            "default_model": self.active_model_id(),
             "mcp_servers": [{"name": s["name"], "state": s.get("state"),
                              "error": s.get("error", ""), "tools": len(s.get("tools") or [])}
                             for s in mcp.get("servers", [])],

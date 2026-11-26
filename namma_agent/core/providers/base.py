@@ -143,6 +143,7 @@ class Provider(ABC):
         timeout_s: float = 60.0,
         max_retries: int = 3,
         extra: Optional[dict] = None,
+        key_fallback: bool = True,
         **_ignored: Any,
     ):
         self.model = model
@@ -153,11 +154,15 @@ class Provider(ABC):
         self.max_retries = int(max_retries)
         self.extra = dict(extra or {})
         # Resolve the API key: explicit value wins, else read the named env var,
-        # else fall back to the provider's conventional env var.
+        # else fall back to the provider's conventional env var. ``key_fallback``
+        # is False for catalogue types that borrow another provider's adapter
+        # (MiniMax on the Anthropic adapter, every OpenAI-compatible gateway): they
+        # read ONLY their own key var, so another provider's key never leaks to them.
         self._api_key_env = api_key_env
         self._api_key = api_key or (os.environ.get(api_key_env) if api_key_env else None)
-        if not self._api_key:
+        if not self._api_key and key_fallback:
             self._api_key = os.environ.get(self._default_key_env(), "")
+        self._api_key = self._api_key or ""
 
     # -- to override -------------------------------------------------------
 
