@@ -328,3 +328,66 @@ def test_shipped_default_provider_is_not_ready(monkeypatch):
     svc = _svc()
     assert svc.configured_models() == []
     assert svc.provider_ready() is False
+
+
+# ── live-session fixes (2026-11-26): "Configure GitHub" with gpt-4o ─────────
+# The model answered from general knowledge (SSH keys, config snippets) and,
+# once it knew the preset, still ended with "let me know when you have the
+# token" — no secure field. The prompt now carries a live setup snapshot, and
+# the agent opens the field itself when the model skips request_secret.
+
+def test_setup_prompt_carries_the_live_snapshot(monkeypatch):
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
+    prov = _Script([LLMResponse(content="hello")])
+    svc = _svc(prov)
+    svc.run_turn("help me set up", mode="setup")
+    system = prov.seen[0]["messages"][0]["content"]
+    assert "CURRENT SETUP (live" in system and "WHAT YOU CAN SET UP" in system
+    assert 'MCP preset id "github"' in system and "GITHUB_PERSONAL_ACCESS_TOKEN" in system
+    assert "Never answer" in system and "config/JSON snippet" in system
+
+
+def test_missing_secret_matches_the_named_preset(monkeypatch):
+    from namma_agent.core.setup_tools import missing_secret_for
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
+    svc = _svc()
+    card = missing_secret_for(svc, "Configure GitHub for me")
+    assert card["name"] == "GITHUB_PERSONAL_ACCESS_TOKEN"
+    assert card["url"].startswith("https://github.com/settings/")
+    assert "GitHub (hosted)" in card["why"]
+    assert missing_secret_for(svc, "set up github with docker")["name"] == "GITHUB_PERSONAL_ACCESS_TOKEN"
+    assert missing_secret_for(svc, "add the time server") is None        # no secret needed
+    assert missing_secret_for(svc, "make me a sandwich") is None
+    monkeypatch.setenv("GITHUB_PERSONAL_ACCESS_TOKEN", "x")
+    assert missing_secret_for(svc, "Configure GitHub for me") is None
+
+
+def test_agent_opens_the_secure_field_when_the_model_skips_it(monkeypatch):
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
+    prov = _Script([LLMResponse(content=(
+        "I'll connect GitHub's hosted server in read-only mode. Once you have the "
+        "token, let me know!"))])
+    svc = _svc(prov)
+    res = svc.run_turn("Configure GitHub for me", mode="setup")
+    assert "```secret" in res.content and "GITHUB_PERSONAL_ACCESS_TOKEN" in res.content
+    assert "request_secret" in res.tools_used
+
+
+def test_guard_stays_quiet_when_the_model_did_request_it(monkeypatch):
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
+    prov = _Script([
+        LLMResponse(content="", tool_calls=[ToolCall(id="1", name="request_secret", args={
+            "name": "GITHUB_PERSONAL_ACCESS_TOKEN", "label": "GitHub token"})]),
+        LLMResponse(content="Paste it in the secure field."),
+    ])
+    svc = _svc(prov)
+    res = svc.run_turn("Configure GitHub for me", mode="setup")
+    assert res.content.count("```secret") == 1
+
+
+def test_guard_never_fires_outside_setup_mode(monkeypatch):
+    monkeypatch.delenv("GITHUB_PERSONAL_ACCESS_TOKEN", raising=False)
+    prov = _Script([LLMResponse(content="Sure, GitHub is a code host.")])
+    svc = _svc(prov)
+    res = svc.run_turn("Configure GitHub for me", mode="agent")
+    assert "```secret" not in res.content

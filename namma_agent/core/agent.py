@@ -1142,6 +1142,32 @@ class Agent:
                     messages, decision_text, provider, tool_defs, emit, session_id,
                     tools_used, usage=usage)
 
+        # Setup guard: the user asked to set up something that needs a secret (a
+        # preset whose required token isn't stored yet) and the model didn't put
+        # the secure field in the chat. It typically ends with "once you have the
+        # token, let me know", which leaves nowhere safe to paste it. Open the
+        # field ourselves, exactly as request_secret would.
+        if setup_mode and "request_secret" not in tools_used:
+            finder = getattr(self.registry, "setup_missing_secret", None)
+            card = None
+            if callable(finder):
+                try:
+                    card = finder(user_input)
+                except Exception:  # noqa: BLE001
+                    card = None
+            if card:
+                emit("tool_started", {"session_id": session_id, "tool": "request_secret", "args": card})
+                result = self.registry.execute("request_secret", card)
+                emit("tool_finished", {"session_id": session_id, "tool": "request_secret",
+                                       "ok": result.ok, "summary": result.as_message_content()[:200]})
+                fence = ((getattr(result, "data", None) or {}).get("inline") or "").strip()
+                if result.ok and fence:
+                    logger.info("[turn] setup guard: opened the secure field for %s", card["name"])
+                    tools_used.append("request_secret")
+                    segments.append(fence)
+                    if live_on_token is not None:
+                        live_on_token("\n\n" + fence + "\n\n")
+
         assembled = "\n\n".join(s for s in segments if s).strip()
         final_content = _place_media(assembled, forced_media) or final_content
         # Deferred teaching turns: the answer is fully built and every visual already
@@ -1553,6 +1579,18 @@ class Agent:
             skills_catalog=catalog, chat_mode=chat_mode, memory_block=memory_block,
             about_block=self.about_block, tools_block=tools_index, setup_mode=setup_mode,
         )
+        if setup_mode:
+            # Live setup snapshot (what's configured + every preset and the secret
+            # it needs), so the model maps "configure GitHub" to the github preset
+            # instead of answering from general knowledge.
+            ctx_fn = getattr(self.registry, "setup_context", None)
+            if callable(ctx_fn):
+                try:
+                    ctx = ctx_fn()
+                except Exception:  # noqa: BLE001
+                    ctx = ""
+                if ctx:
+                    system = f"{system}\n\n{ctx}"
         scope = self._scope_block(session_id)
         if scope:
             system = f"{system}\n\n{scope}"

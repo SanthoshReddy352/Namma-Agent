@@ -33,7 +33,61 @@ def _j(obj) -> str:
     return json.dumps(obj, ensure_ascii=False, indent=1, default=str)
 
 
+def setup_context(service) -> str:
+    """A compact, live snapshot for setup mode's system prompt: what is already
+    configured, and every preset that can be set up (with the secret each one
+    needs). Without it the model must remember to call ``setup_status`` /
+    ``setup_catalog`` first, and in a live session gpt-4o didn't: asked to
+    "configure GitHub" it answered with generic advice and config snippets
+    instead of using the GitHub preset and a secure secret field. Never raises.
+    """
+    lines: list[str] = []
+    try:
+        st = service.setup_status(check_gws=False) or {}
+    except Exception:  # noqa: BLE001
+        st = {}
+    try:
+        presets = (service.mcp_catalog() or {}).get("presets") or []
+    except Exception:  # noqa: BLE001
+        presets = []
+    lines.append("CURRENT SETUP (live, refreshed every turn):")
+    lines.append(f"- AI: default model {st.get('default_model') or 'none'}; "
+                 f"ready: {'yes' if st.get('provider_ready') else 'NO'}; providers: "
+                 + (", ".join(f"{p.get('label') or p.get('id')} (key {'set' if p.get('key_set') or not p.get('needs_key') else 'MISSING'})"
+                              for p in st.get("providers") or []) or "none"))
+    servers = st.get("mcp_servers") or []
+    lines.append("- MCP servers: " + (", ".join(
+        f"{s.get('name') or s.get('id')} ({s.get('status') or s.get('state') or 'configured'})" for s in servers)
+        if servers else "none"))
+    for it in st.get("integrations") or []:
+        state = it.get("state") or "?"
+        extra = f"; needs {', '.join(it['needs'])}" if it.get("needs") and state != "ok" else ""
+        lines.append(f"- {it.get('label') or it.get('id')}: {state}{extra}")
+    if presets:
+        lines.append("")
+        lines.append("WHAT YOU CAN SET UP. Match what the user names to one of these and follow it:")
+        for p in presets:
+            secrets = [x.get("env") for x in p.get("secrets") or [] if x.get("env")]
+            params = [q.get("key") for q in p.get("params") or []]
+            lines.append(
+                f"- MCP preset id \"{p.get('id')}\": {p.get('title')} ({p.get('runtime')})"
+                + (f"; secret: {', '.join(secrets)}" if secrets else "; no secret")
+                + (f"; params: {', '.join(params)}" if params else ""))
+    try:
+        from namma_agent.tools.mail import MAIL_PRESETS
+        lines.append("- Email (IMAP/SMTP) presets: " + ", ".join(MAIL_PRESETS) + " (mail_add_account; app password via request_secret)")
+    except Exception:  # noqa: BLE001
+        pass
+    lines.append("- AI providers: setup_catalog kind \"providers\" lists them all.")
+    return "\n".join(lines)
+
+
 def register_setup_tools(registry: ToolRegistry, service) -> None:
+    # The live snapshot the agent adds to setup-mode prompts (not a model tool).
+    registry.setup_context = lambda: setup_context(service)
+    # Setup mode's safety net for a skipped request_secret (see the agent).
+    registry.setup_missing_secret = lambda text: missing_secret_for(service, text)
+
     def status(_args: dict) -> ToolResult:
         st = service.setup_status(check_gws=bool(_args.get("check_google", True)))
         return ToolResult(ok=True, content=_j(st))
@@ -265,3 +319,40 @@ def register_setup_tools(registry: ToolRegistry, service) -> None:
     reg("mail_test_account", "Sign in to an email account's IMAP and SMTP (reads and sends "
         "nothing).", {"type": "object", "properties": {"account": {"type": "string"}}},
         mail_test, category="setup")
+
+
+def missing_secret_for(service, text: str) -> dict | None:
+    """The first required, not-yet-stored secret of the MCP preset that ``text``
+    (the user's setup request) names, as ``request_secret`` arguments, or None.
+
+    Matching is by the preset's id words ("github", "context7", ...); when both
+    a hosted and a Docker variant match, the hosted one wins unless the text
+    says "docker". Used as setup mode's safety net: models often say "once you
+    have the token, let me know" instead of calling ``request_secret``, which
+    leaves the user with nowhere safe to put it.
+    """
+    low = (text or "").lower()
+    if not low.strip():
+        return None
+    try:
+        presets = (service.mcp_catalog() or {}).get("presets") or []
+    except Exception:  # noqa: BLE001
+        return None
+    hits = []
+    for p in presets:
+        pid = str(p.get("id") or "").lower()
+        words = [w for w in re.split(r"[^a-z0-9]+", pid) if w and w != "docker"]
+        if words and all(re.search(rf"\b{re.escape(w)}\b", low) for w in words):
+            hits.append(p)
+    if not hits:
+        return None
+    wants_docker = "docker" in low
+    hits.sort(key=lambda p: (("docker" in str(p.get("id"))) != wants_docker, len(str(p.get("id")))))
+    for sec in hits[0].get("secrets") or []:
+        env = sec.get("env")
+        if env and sec.get("required", True) and not sec.get("set") and not os.environ.get(env):
+            return {"name": env, "label": sec.get("label") or env,
+                    "why": f"Connects {hits[0].get('title') or hits[0].get('id')}. "
+                           + (sec.get("help") or ""),
+                    "url": sec.get("url") or ""}
+    return None
