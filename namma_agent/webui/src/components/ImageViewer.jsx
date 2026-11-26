@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { IconDownload, IconRefresh, IconX, IconZoomIn, IconZoomOut } from "@tabler/icons-react";
 
 // Open the full-screen image viewer from anywhere (e.g. an inline diagram in a
 // chat) without prop-drilling — InlineImage just fires this event.
@@ -75,21 +76,21 @@ export default function ImageViewer() {
       <div className="absolute top-3 right-3 flex items-center gap-1.5 z-[101]"
            onClick={(e) => e.stopPropagation()}>
         <Ctrl title="Zoom out (-)" onClick={() => zoom(-STEP)} disabled={scale <= MIN}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M8 11h6M21 21l-4.3-4.3" /></svg>
+          <IconZoomOut size={18} stroke={2} aria-hidden="true" />
         </Ctrl>
-        <span className="px-2 text-[12.5px] tabular-nums text-white/80 select-none w-12 text-center">{Math.round(scale * 100)}%</span>
+        <span className="px-2 text-sm tabular-nums text-white/80 select-none w-12 text-center">{Math.round(scale * 100)}%</span>
         <Ctrl title="Zoom in (+)" onClick={() => zoom(STEP)} disabled={scale >= MAX}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="7" /><path d="M11 8v6M8 11h6M21 21l-4.3-4.3" /></svg>
+          <IconZoomIn size={18} stroke={2} aria-hidden="true" />
         </Ctrl>
         <Ctrl title="Reset (0)" onClick={reset} disabled={scale === 1 && pos.x === 0 && pos.y === 0}>
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8" /><path d="M3 3v5h5" /></svg>
+          <IconRefresh size={18} stroke={2} aria-hidden="true" />
         </Ctrl>
         <a href={img.src} download title="Download" onClick={(e) => e.stopPropagation()}
            className="h-9 w-9 grid place-items-center rounded-lg text-white/90 bg-white/10 hover:bg-white/20 transition">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="M7 10l5 5 5-5M12 15V3" /></svg>
+          <IconDownload size={18} stroke={2} aria-hidden="true" />
         </a>
         <Ctrl title="Close (Esc)" onClick={close}>
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6 6 18M6 6l12 12" /></svg>
+          <IconX size={20} stroke={2.2} aria-hidden="true" />
         </Ctrl>
       </div>
 
@@ -112,7 +113,7 @@ export default function ImageViewer() {
 
 function Ctrl({ onClick, title, disabled, children }) {
   return (
-    <button title={title} onClick={onClick} disabled={disabled}
+    <button aria-label={title} title={title} onClick={onClick} disabled={disabled}
             className="h-9 w-9 grid place-items-center rounded-lg text-white/90 bg-white/10 hover:bg-white/20 disabled:opacity-30 disabled:hover:bg-white/10 transition">
       {children}
     </button>

@@ -13,6 +13,8 @@ Engine strategy (graceful degradation, the project pattern):
       - ``txt``  : strip Markdown to plain text          (stdlib)
       - ``html`` : Markdown → standalone HTML            (stdlib mini-renderer)
       - ``docx`` : Markdown → Word                       (python-docx, already a dep)
+      - ``xlsx`` : Markdown tables → Excel, one sheet each (stdlib SpreadsheetML)
+      - ``csv``  : Markdown tables → CSV                 (stdlib)
   * Anything else without pandoc returns a clear "install pandoc" message rather
     than crashing.
 
@@ -43,10 +45,11 @@ _ALIASES = {
     "text": "txt", "plain": "txt", "plaintext": "txt",
     "latex": "tex", "openoffice": "odt", "libreoffice": "odt",
     "ebook": "epub", "restructuredtext": "rst",
+    "excel": "xlsx", "xls": "xlsx", "spreadsheet": "xlsx", "sheet": "xlsx",
 }
 
 # Formats the self-contained fallbacks can produce with no external binary.
-_BUILTIN = {"md", "txt", "html", "docx"}
+_BUILTIN = {"md", "txt", "html", "docx", "xlsx", "csv"}
 
 # ext → pandoc writer name (when it differs from the extension).
 _PANDOC_WRITER = {"tex": "latex", "txt": "plain", "adoc": "asciidoc"}
@@ -366,6 +369,152 @@ def _md_to_docx(md: str, out_path: Path, title: str) -> None:
     doc.save(str(out_path))
 
 
+# ── spreadsheets (stdlib: csv + a minimal SpreadsheetML writer) ──────────────
+
+_NUM_RE = re.compile(r"^[-+]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?$")
+_SHEET_BAD = re.compile(r"[\[\]:*?/\\]")
+_X_MAIN = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+_X_REL = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+_X_PKG = "http://schemas.openxmlformats.org/package/2006/relationships"
+_X_CT = "application/vnd.openxmlformats-officedocument.spreadsheetml"
+_XML_HEAD = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+
+
+def _md_tables(md: str) -> list[tuple[str, list[str], list[list[str]]]]:
+    """Every Markdown table as (nearest heading above it, header, rows), with
+    inline Markdown stripped from the cells."""
+    tables, heading = [], ""
+    for block in _parse_blocks(md):
+        if block[0] == "heading":
+            heading = block[2]
+        elif block[0] == "table" and block[1]:
+            plain = [[_md_to_txt(c).strip() for c in row] for row in [block[1], *block[2]]]
+            tables.append((heading, plain[0], plain[1:]))
+    return tables
+
+
+def _cell_value(text: str):
+    """'1,234.5' → 1234.5. Anything else ('31C', '$5', '12%') stays text, so no
+    value is silently reinterpreted."""
+    t = text.strip()
+    if _NUM_RE.match(t):
+        n = float(t.replace(",", ""))
+        return int(n) if "." not in t else n
+    return t
+
+
+def _col_letter(i: int) -> str:
+    out, i = "", i + 1
+    while i:
+        i, r = divmod(i - 1, 26)
+        out = chr(65 + r) + out
+    return out
+
+
+def _sheet_xml(header: list[str], rows: list[list[str]]) -> str:
+    from xml.sax.saxutils import escape  # noqa: PLC0415
+
+    lines = []
+    for r, row in enumerate([header, *rows], 1):
+        cells = []
+        for c, text in enumerate(row):
+            ref = f"{_col_letter(c)}{r}"
+            val = text if r == 1 else _cell_value(text)
+            style = ' s="1"' if r == 1 else ""
+            if isinstance(val, (int, float)):
+                cells.append(f'<c r="{ref}"{style}><v>{val}</v></c>')
+            else:
+                cells.append(f'<c r="{ref}"{style} t="inlineStr"><is>'
+                             f'<t xml:space="preserve">{escape(val)}</t></is></c>')
+        lines.append(f'<row r="{r}">{"".join(cells)}</row>')
+    widths = []
+    for i, h in enumerate(header):
+        longest = max([len(h)] + [len(row[i]) for row in rows if i < len(row)])
+        widths.append(f'<col min="{i + 1}" max="{i + 1}" '
+                      f'width="{min(60, max(10, longest + 2))}" customWidth="1"/>')
+    return (f'{_XML_HEAD}<worksheet xmlns="{_X_MAIN}"><sheetViews>'
+            '<sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" '
+            'activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>'
+            f'<cols>{"".join(widths)}</cols><sheetData>{"".join(lines)}</sheetData>'
+            '</worksheet>')
+
+
+def _sheet_names(tables) -> list[str]:
+    names, seen = [], set()
+    for i, (heading, _h, _r) in enumerate(tables, 1):
+        base = _SHEET_BAD.sub(" ", heading).strip()[:28] or f"Sheet{i}"
+        name, n = base, 2
+        while name.lower() in seen:
+            name, n = f"{base[:24]} ({n})", n + 1
+        seen.add(name.lower())
+        names.append(name)
+    return names
+
+
+def _md_to_xlsx(md: str, out_path: Path) -> None:
+    import zipfile  # noqa: PLC0415
+    from xml.sax.saxutils import quoteattr  # noqa: PLC0415
+
+    tables = _md_tables(md)
+    if not tables:
+        raise ValueError("no Markdown table found — put the data in a table "
+                         "(| col | col |) to make a spreadsheet")
+    names = _sheet_names(tables)
+    count = len(names)
+    sheets = "".join(f'<sheet name={quoteattr(n)} sheetId="{i}" r:id="rId{i}"/>'
+                     for i, n in enumerate(names, 1))
+    rels = "".join(f'<Relationship Id="rId{i}" Type="{_X_REL}/worksheet" '
+                   f'Target="worksheets/sheet{i}.xml"/>' for i in range(1, count + 1))
+    rels += f'<Relationship Id="rId{count + 1}" Type="{_X_REL}/styles" Target="styles.xml"/>'
+    overrides = "".join(f'<Override PartName="/xl/worksheets/sheet{i}.xml" '
+                        f'ContentType="{_X_CT}.worksheet+xml"/>' for i in range(1, count + 1))
+    with zipfile.ZipFile(out_path, "w", zipfile.ZIP_DEFLATED) as z:
+        z.writestr("[Content_Types].xml", (
+            f'{_XML_HEAD}<Types xmlns="http://schemas.openxmlformats.org/package/2006/'
+            'content-types"><Default Extension="rels" ContentType="application/'
+            'vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" '
+            'ContentType="application/xml"/><Override PartName="/xl/workbook.xml" '
+            f'ContentType="{_X_CT}.sheet.main+xml"/><Override PartName="/xl/styles.xml" '
+            f'ContentType="{_X_CT}.styles+xml"/>{overrides}</Types>'))
+        z.writestr("_rels/.rels", (
+            f'{_XML_HEAD}<Relationships xmlns="{_X_PKG}"><Relationship Id="rId1" '
+            f'Type="{_X_REL}/officeDocument" Target="xl/workbook.xml"/></Relationships>'))
+        z.writestr("xl/workbook.xml", (
+            f'{_XML_HEAD}<workbook xmlns="{_X_MAIN}" xmlns:r="{_X_REL}">'
+            f'<sheets>{sheets}</sheets></workbook>'))
+        z.writestr("xl/_rels/workbook.xml.rels",
+                   f'{_XML_HEAD}<Relationships xmlns="{_X_PKG}">{rels}</Relationships>')
+        z.writestr("xl/styles.xml", (
+            f'{_XML_HEAD}<styleSheet xmlns="{_X_MAIN}">'
+            '<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>'
+            '<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>'
+            '<fills count="2"><fill><patternFill patternType="none"/></fill>'
+            '<fill><patternFill patternType="gray125"/></fill></fills>'
+            '<borders count="1"><border/></borders>'
+            '<cellStyleXfs count="1"><xf/></cellStyleXfs>'
+            '<cellXfs count="2"><xf fontId="0"/><xf fontId="1" applyFont="1"/></cellXfs>'
+            '</styleSheet>'))
+        for i, (_n, header, rows) in enumerate(tables, 1):
+            z.writestr(f"xl/worksheets/sheet{i}.xml", _sheet_xml(header, rows))
+
+
+def _md_to_csv(md: str, out_path: Path) -> None:
+    import csv  # noqa: PLC0415
+
+    tables = _md_tables(md)
+    if not tables:
+        raise ValueError("no Markdown table found — put the data in a table "
+                         "(| col | col |) to make a CSV")
+    # utf-8-sig: Excel opens it with the right encoding on double-click.
+    with out_path.open("w", newline="", encoding="utf-8-sig") as f:
+        w = csv.writer(f)
+        for i, (_n, header, rows) in enumerate(tables):
+            if i:
+                w.writerow([])
+            w.writerow(header)
+            w.writerows(rows)
+
+
 # ── pandoc (universal, high fidelity) ────────────────────────────────────────
 
 def _pandoc(md: str, out_path: Path, fmt: str, title: str) -> None:
@@ -412,6 +561,10 @@ def _convert(args: dict) -> ToolResult:
     try:
         if fmt == "md":
             out_path.write_text(md, encoding="utf-8")
+        elif fmt == "xlsx":          # pandoc has no spreadsheet writer
+            _md_to_xlsx(md, out_path)
+        elif fmt == "csv":
+            _md_to_csv(md, out_path)
         elif have_pandoc and fmt not in {"md"}:
             # Pandoc wins on fidelity whenever it's available.
             _pandoc(md, out_path, fmt, title)
@@ -425,7 +578,7 @@ def _convert(args: dict) -> ToolResult:
             return ToolResult(
                 ok=False, content="",
                 error=f"converting to .{fmt} needs 'pandoc' on PATH (https://pandoc.org/install). "
-                      f"Without it I can produce: md, txt, html, docx.")
+                      f"Without it I can produce: md, txt, html, docx, xlsx, csv.")
     except Exception as exc:  # noqa: BLE001
         logger.warning("[convert] %s → %s failed: %s", base_name or "markdown", fmt, exc)
         return ToolResult(ok=False, content="", error=f"conversion to .{fmt} failed: {exc}")
@@ -451,9 +604,11 @@ def register(registry: ToolRegistry) -> None:
     registry.register(
         "convert_document",
         "Convert Markdown into a downloadable file in the format the user asked for "
-        "(docx/Word, pdf, pptx/PowerPoint, html, txt, odt, rtf, epub, rst, tex, …). "
-        "Use this when the user explicitly wants a non-Markdown file. Pass the Markdown "
-        "as 'content' (or a .md file 'path') and the target as 'to'.",
+        "(docx/Word, pdf, pptx/PowerPoint, xlsx/Excel, csv, html, txt, odt, rtf, epub, "
+        "rst, tex, …). Use this when the user explicitly wants a non-Markdown file. Pass "
+        "the Markdown as 'content' (or a .md file 'path') and the target as 'to'. For "
+        "xlsx/csv put the data in Markdown tables: each table becomes a sheet named "
+        "after the heading above it.",
         {
             "type": "object",
             "properties": {
@@ -462,8 +617,8 @@ def register(registry: ToolRegistry) -> None:
                 "path": {"type": "string",
                          "description": "path to an existing .md file (alternative to 'content')"},
                 "to": {"type": "string",
-                       "description": "target format: docx, pdf, pptx, html, txt, odt, rtf, "
-                                      "epub, rst, tex, md"},
+                       "description": "target format: docx, pdf, pptx, xlsx, csv, html, txt, "
+                                      "odt, rtf, epub, rst, tex, md"},
                 "title": {"type": "string",
                           "description": "document title (defaults to the first heading)"},
                 "filename": {"type": "string",

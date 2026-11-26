@@ -67,6 +67,13 @@ def _enabled(cfg: dict) -> bool:
     return bool(cfg.get("lab_mode", False))
 
 
+def _lab_reason() -> str:
+    """Availability check: the scanners are hidden from the model unless
+    ``security.lab_mode`` is on (Phase 2 — no prompt tokens for tools that
+    would only refuse)."""
+    return "" if _enabled(_cfg()) else "needs security.lab_mode: true"
+
+
 def _is_loopback(target: str) -> bool:
     try:
         return ipaddress.ip_network(target, strict=False).is_loopback
@@ -204,21 +211,21 @@ def register(registry: ToolRegistry) -> None:
                 "ports": {"type": "string", "description": "optional port spec e.g. '22,80,443' or '1-1024'"},
             },
             "required": ["target"],
-        }, _port_scan, destructive=True)
+        }, _port_scan, destructive=True, requires=_lab_reason)
 
     registry.register("ping_sweep",
         "Discover live hosts on an authorized subnet (nmap -sn). Requires lab_mode.", {
             "type": "object",
             "properties": {"subnet": {"type": "string", "description": "CIDR inside authorized_scopes, e.g. 192.168.1.0/24"}},
             "required": ["subnet"],
-        }, _ping_sweep, destructive=True)
+        }, _ping_sweep, destructive=True, requires=_lab_reason)
 
     registry.register("dir_enum",
         "Brute-force web directories on an authorized host (gobuster). Requires lab_mode.", {
             "type": "object",
             "properties": {"url": {"type": "string", "description": "http(s) URL whose host is in authorized_scopes"}},
             "required": ["url"],
-        }, _dir_enum, destructive=True)
+        }, _dir_enum, destructive=True, requires=_lab_reason)
 
     registry.register("dns_enum",
         "Enumerate DNS records for an authorized domain (dig). Requires lab_mode.", {
@@ -229,4 +236,4 @@ def register(registry: ToolRegistry) -> None:
                                 "enum": ["A", "AAAA", "MX", "NS", "TXT", "SOA", "CNAME", "ANY"]},
             },
             "required": ["domain"],
-        }, _dns_enum, destructive=True)
+        }, _dns_enum, destructive=True, requires=_lab_reason)

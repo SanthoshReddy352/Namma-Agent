@@ -18,6 +18,7 @@ the backend WebSocket (Phase 4), and TTS can all subscribe to the same stream.
 """
 from __future__ import annotations
 
+import contextvars
 import re
 import threading
 import time
@@ -26,9 +27,12 @@ from typing import Callable, Optional
 
 from namma_agent.core.logger import logger
 from namma_agent.core.memory import Database
-from namma_agent.core.persona import Persona, load_persona
+from namma_agent.core.persona import Persona, date_line, load_persona
 from namma_agent.core.providers.base import ProviderError, USAGE_KEYS, Provider, usage_tokens
 from namma_agent.core.tools import ToolRegistry
+
+#: OpenAI / Gemini reject requests with more than 128 tool definitions.
+DEFAULT_MAX_TOOLS_PER_REQUEST = 128
 
 
 def _clip_tool_result(text: str, limit: int) -> str:
@@ -40,10 +44,37 @@ def _clip_tool_result(text: str, limit: int) -> str:
     narrower instead of assuming it read everything."""
     if limit <= 0 or len(text) <= limit:
         return text
+    spill = _spill_tool_output(text)
+    where = (f" The full output was saved to {spill} — read_file it with offset/max_chars "
+             "to page through the rest." if spill else
+             " Re-run the tool with a narrower query/path/range if you need the rest.")
     return (text[:limit].rstrip()
             + f"\n\n[tool result truncated: showing the first {limit} of {len(text)} "
-              "characters. Re-run the tool with a narrower query/path/range if you "
-              "need the rest.]")
+              f"characters.{where}]")
+
+
+#: How many spilled tool outputs to keep on disk (oldest pruned first).
+_SPILL_KEEP = 200
+
+
+def _spill_tool_output(text: str) -> str:
+    """Save an over-long tool result to ``<data>/tool_outputs/`` and return the
+    path ('' when the disk write fails — the caller then just truncates)."""
+    try:
+        import uuid
+
+        from namma_agent.config import data_dir
+        out_dir = data_dir() / "tool_outputs"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"{uuid.uuid4().hex[:12]}.txt"
+        path.write_text(text, encoding="utf-8")
+        old = sorted(out_dir.glob("*.txt"), key=lambda p: p.stat().st_mtime)
+        for stale in old[:-_SPILL_KEEP]:
+            stale.unlink(missing_ok=True)
+        return str(path)
+    except Exception as exc:  # noqa: BLE001 — never fail a turn over a spill
+        logger.debug("[tools] could not spill tool output: %s", exc)
+        return ""
 
 
 def _generate_timeout(provider: Provider) -> float:
@@ -54,7 +85,15 @@ def _generate_timeout(provider: Provider) -> float:
     return max(120.0, base * (retries + 1) + 30.0)
 
 
-def _generate_bounded(provider: Provider, timeout: float, **kwargs):
+class TurnCancelled(Exception):
+    """The user pressed Stop while a model call was in flight."""
+
+
+#: How often an in-flight model call checks the Stop button.
+_CANCEL_POLL_S = 0.2
+
+
+def _generate_bounded(provider: Provider, timeout: float, should_cancel=None, **kwargs):
     """Run ``provider.generate`` with a hard wall-clock ceiling.
 
     Some endpoints (notably local reasoning models served over an OpenAI-compatible
@@ -72,9 +111,25 @@ def _generate_bounded(provider: Provider, timeout: float, **kwargs):
         except BaseException as exc:  # noqa: BLE001 — re-raised on the caller thread
             box["error"] = exc
 
-    t = threading.Thread(target=_work, name="provider-generate", daemon=True)
+    # Run in a copy of the caller's context so turn-scoped contextvars (current
+    # chat → OpenAI prompt_cache_key; usage attribution → the usage log) reach
+    # the provider call on the worker thread.
+    ctx = contextvars.copy_context()
+    t = threading.Thread(target=ctx.run, args=(_work,), name="provider-generate",
+                         daemon=True)
     t.start()
-    t.join(timeout)
+    # Wait in short slices so Stop takes effect within ~0.2 s instead of after
+    # the whole generation (reasoning models can take minutes). The abandoned
+    # worker finishes in the background; its late stream callbacks are dropped
+    # by the cancel-aware token sink in process_turn.
+    deadline = time.monotonic() + timeout
+    while t.is_alive():
+        if should_cancel is not None and should_cancel():
+            raise TurnCancelled()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        t.join(min(_CANCEL_POLL_S, remaining))
     if t.is_alive():
         raise ProviderError(
             f"The model didn't respond within {int(timeout)}s — it may be stuck "
@@ -112,6 +167,24 @@ _VERIFY_NUDGE = (
     "would fail if the change is wrong. If verification isn't possible with your "
     "tools, say so explicitly. Then give the final answer."
 )
+
+# Parallel tool execution (Phase 4): when ONE model step asks for several of
+# these, they run concurrently. An explicit allowlist, not "non-destructive":
+# plenty of non-destructive tools still change things (open_app, memory_save,
+# update_todos, render_diagram writes media) and must keep their order.
+PARALLEL_SAFE_TOOLS = frozenset({
+    "read_file", "list_dir", "find_files", "read_document",
+    "web_search", "web_extract", "web_crawl", "search_google",
+    "get_weather", "get_news", "system_info", "about_namma",
+    "memory_search", "recall_facts", "search_conversations", "recall_sessions",
+    "search_project_documents", "search_project_history",
+    "dns_lookup", "ping_host", "check_port", "public_ip",
+    "list_tasks", "list_reminders", "list_goals", "focus_status", "list_open_apps",
+    "calendar_agenda", "gmail_list", "gmail_read", "list_skills",
+    "check_background_task",
+})
+#: Most read-only tools run at once in one step.
+_PARALLEL_WORKERS = 4
 
 _EMPTY_NUDGE = (
     "[system] Your previous response was empty — no text and no tool calls, as "
@@ -360,7 +433,27 @@ def _record_step(steps: list[dict], event_type: str, payload: dict) -> None:
                 st["summary"] = payload.get("summary") or ""
                 if payload.get("output"):
                     st["output"] = payload["output"]
+                if payload.get("ms") is not None:
+                    st["ms"] = payload["ms"]
                 break
+    elif event_type == "plan_updated":
+        # The plan card: the latest update_todos snapshot replaces the previous one.
+        steps[:] = [s for s in steps if s.get("kind") != "plan"]
+        steps.append({"kind": "plan", "plan": payload.get("plan") or []})
+    elif event_type in _NOTICE_TEXT:
+        steps.append({"kind": "notice", "text": _NOTICE_TEXT[event_type](payload)})
+
+
+#: Turn notices worth showing in the activity timeline (Phase 4).
+_NOTICE_TEXT = {
+    "tools_trimmed": lambda p: (f"{len(p.get('dropped') or [])} tools weren't sent this turn "
+                                f"(the provider allows {p.get('limit')})"),
+    "context_compacted": lambda p: ("Cleared old tool outputs to fit the context window"
+                                    if p.get("phase") == 1 else
+                                    "Summarized earlier messages to fit the context window"),
+    "turn_budget_exceeded": lambda p: (f"Stopped at the turn token budget "
+                                       f"({p.get('tokens', 0):,} of {p.get('budget', 0):,})"),
+}
 
 
 def _accumulate_usage(usage: dict, delta: Optional[dict]) -> None:
@@ -398,6 +491,13 @@ class AgentResult:
     # {kind: thinking|preamble|tool, ...} mirroring the live events, persisted so a
     # reload restores the tool steps + thinking shown under the reply.
     steps: list[dict] = field(default_factory=list)
+    # Why the loop ended: "completed" (final answer), "step_limit", "token_budget"
+    # or "cancelled". The delegation runtime reports it in a child's result.
+    exit_reason: str = "completed"
+    # Row ids of the turns this call persisted (the UI's message actions —
+    # regenerate, edit, branch, delete — address messages by them).
+    user_turn_id: Optional[int] = None
+    assistant_turn_id: Optional[int] = None
 
 
 class Agent:
@@ -435,6 +535,32 @@ class Agent:
         # Cap on each tool result fed back into the model's context (0 = unlimited);
         # per-model override: ``provider.tool_result_max_chars``.
         self.tool_result_max_chars = int(tool_result_max_chars or 0)
+        # Hard cap on tools sent in ONE request (OpenAI/Gemini reject > 128);
+        # 0 disables. Set from config tools.max_per_request by the service.
+        self.max_tools_per_request = DEFAULT_MAX_TOOLS_PER_REQUEST
+        # Per-turn token budget (conversation.turn_token_budget; 0 = off): the
+        # loop stops before another tool round once the turn's billable tokens
+        # (fresh input + cache writes + output) reach it.
+        self.turn_token_budget = 0
+        # Usage-log attribution for this agent's model calls (core/usage.py).
+        self.usage_kind = "turn"
+        # Tool search (core/tool_search.py): which tools are always sent and when
+        # the rest are deferred behind tool_search/tool_call. The service sets it
+        # from config ``tools.search``; bare agents get the defaults (auto, 40).
+        from namma_agent.core.tool_search import search_settings
+        self.tool_search_settings = search_settings(None)
+        # Short static "about you" block (install/source/config paths), built by
+        # the service from the live config (core/self_knowledge.py).
+        self.about_block = ""
+        # Toolset profile preset (tools.profile; "general" = everything).
+        self.tool_profile = "general"
+        # Callable(session_id) → render errors the UI reported for that chat's
+        # last reply (mermaid/chart/visual/A2UI); set by the service.
+        self.render_notes = None
+        # In-turn context budget: compact once the prompt passes this fraction of
+        # the model's context window (conversation.context_fraction; 0 = off).
+        from namma_agent.core.context_budget import DEFAULT_FRACTION
+        self.context_fraction = DEFAULT_FRACTION
         self._emit = emit or (lambda _e, _p: None)
         self.skills = skills  # optional SkillStore; injects a catalog into the prompt
         # Engram is THE memory (docs/MEMORY_SYSTEM_DESIGN.md): core memory + host
@@ -479,6 +605,33 @@ class Agent:
         emit: Optional[EmitFn] = None,
         provider: Optional[Provider] = None,
     ) -> AgentResult:
+        """Run one turn. The turn binds its Stop check as a thread-local contextvar
+        (for tools such as run_shell and delegate_task); it is restored on exit so a
+        finished — possibly cancelled — turn never leaks a stale "stopped" signal
+        into later work on the same thread."""
+        from namma_agent.core.interactive import get_current_cancel, set_current_cancel
+        from namma_agent.core.usage import usage_scope
+        previous_cancel = get_current_cancel()
+        try:
+            # Every model call of this turn is logged as ``self.usage_kind``
+            # ("turn"; sub-agents run as "delegate") — see core/usage.py.
+            with usage_scope(self.usage_kind):
+                return self._process_turn(user_input, session_id, on_token, approval,
+                                          mode, should_cancel, emit, provider)
+        finally:
+            set_current_cancel(previous_cancel)
+
+    def _process_turn(
+        self,
+        user_input: str,
+        session_id: Optional[str],
+        on_token: Optional[TokenFn],
+        approval: Optional[ApprovalFn],
+        mode: str,
+        should_cancel: Optional[Callable[[], bool]],
+        emit: Optional[EmitFn],
+        provider: Optional[Provider],
+    ) -> AgentResult:
         # Per-turn event sink. Concurrent turns each pass their own ``emit`` so
         # structured events never cross-talk between sessions; fall back to the
         # instance-level emitter for callers that don't (Telegram, tests).
@@ -513,15 +666,27 @@ class Agent:
             _raw_on_token = on_token
 
             def on_token(text: str, _raw=_raw_on_token) -> None:  # noqa: A001
+                # After Stop, drop tokens immediately — the abandoned generation
+                # may keep streaming for a while and must not keep painting the
+                # chat (the user saw "stopped" while text kept arriving).
+                if should_cancel is not None and should_cancel():
+                    return
                 _stamp_ttft(text)
                 _raw(text)
 
         # Expose the session to scope-aware tools (project / learning memory).
-        from namma_agent.core.interactive import set_current_session
+        from namma_agent.core.interactive import set_current_cancel, set_current_session
         set_current_session(session_id)
+        set_current_cancel(should_cancel)
 
+        # Phase 5: an API key / token pasted into ANY chat is removed here — before
+        # the log line, the model, the transcript and the turn_started echo.
+        from namma_agent.core.setup import redact_secrets
+        user_input, pasted_secrets = redact_secrets(user_input)
         # chat mode = pure conversation: no tools, no skills, no memory writes via tools.
         chat_mode = (mode or "agent").lower() == "chat"
+        # setup mode = the configuration guide: its own prompt and small toolset.
+        setup_mode = (mode or "agent").lower() == "setup"
         # True in a Learning-Room MODULE thread, where teaching guards apply (e.g. a
         # promised diagram that the model didn't actually draw gets rendered).
         teaching_session = (not chat_mode) and self._is_teaching_session(session_id)
@@ -533,14 +698,21 @@ class Agent:
         trust = get_message_trust()
         untrusted = trust == "untrusted"
         logger.info("[turn] mode=%s trust=%s session=%s :: %s",
-                    "chat" if chat_mode else "agent", trust,
+                    "chat" if chat_mode else ("setup" if setup_mode else "agent"), trust,
                     session_id[:8], user_input[:120].replace("\n", " "))
         emit("turn_started", {"session_id": session_id, "text": user_input, "mode": mode,
                               "trust": trust})
+        if pasted_secrets:
+            emit("secret_redacted", {"session_id": session_id, "text": user_input,
+                                     "labels": [f["label"] for f in pasted_secrets]})
 
-        # Tool defs first: the system prompt's steering blocks (Cognee / TODO) key
+        # Tool defs first: the system prompt's steering blocks (memory / TODO) key
         # off what THIS turn actually exposes, which an allow-list may have scoped.
-        tool_defs = [] if chat_mode else self._tool_defs_for(session_id, provider)
+        if setup_mode:
+            from namma_agent.core.setup_tools import SETUP_TOOLS
+            tool_defs = self.registry.definitions(only=set(SETUP_TOOLS))
+        else:
+            tool_defs = [] if chat_mode else self._tool_defs_for(session_id, provider)
         if untrusted:
             # Same rule as sub-agents: no destructive tools without an owner to
             # approve them. Stripped from the model's view here, and declined at
@@ -551,13 +723,46 @@ class Agent:
             def approval(_name: str, _args: dict) -> bool:  # noqa: F811
                 logger.info("[turn] declined destructive tool %r for untrusted sender", _name)
                 return False
-        exposed = {d["name"] for d in tool_defs}
+        # Tool search (core/tool_search.py): past the threshold only the core
+        # tools + tool_search/tool_describe/tool_call are sent; the rest stay
+        # callable through tool_call. The sent list depends only on config and
+        # scope, so it is identical on every request (prompt-cache friendly).
+        from namma_agent.core import tool_search as _ts
+        tool_defs, deferred_defs = _ts.split_tools(
+            tool_defs, {"mode": "off"} if setup_mode else self.tool_search_settings)
+        tool_defs, trimmed = self.registry.cap_definitions(
+            tool_defs, int(self.max_tools_per_request or 0))
+        if trimmed:
+            logger.warning("[tools] %d tools exceed the per-request cap of %d — not sent "
+                           "this turn: %s", len(trimmed), self.max_tools_per_request,
+                           ", ".join(trimmed[:20]) + (" …" if len(trimmed) > 20 else ""))
+            emit("tools_trimmed", {"session_id": session_id, "limit": self.max_tools_per_request,
+                                   "dropped": trimmed})
+        deferred_names = {d["name"] for d in deferred_defs}
+        # Every tool the model may run this turn (sent directly or via tool_call)
+        # — the steering blocks and the tool_call gate key off this set.
+        exposed = ({d["name"] for d in tool_defs} - set(_ts.META_TOOLS)) | deferred_names
+        tools_index = _ts.tools_block(
+            deferred_defs, {d["name"]: getattr(self.registry.get(d["name"]), "category", "")
+                            for d in deferred_defs})
         # The guarded wrapper exists only in the prompt — the transcript keeps the
         # sender's raw text (add_turn below).
         prompt_input = guard_untrusted(user_input) if untrusted else user_input
+        if pasted_secrets:
+            labels = ", ".join(sorted({f["label"] for f in pasted_secrets}))
+            envs = ", ".join(sorted({f["env"] for f in pasted_secrets if f["env"]}))
+            prompt_input += (f"\n\n[system note: the user pasted what looked like a {labels}; "
+                             "it was removed before reaching you and was not stored. Tell them "
+                             "briefly, and if they're setting it up, offer the secure field"
+                             + (f" (request_secret for {envs})" if envs else "") + ".]")
         messages = self._build_messages(prompt_input, session_id, chat_mode=chat_mode,
-                                        exposed=exposed, provider=provider)
-        self.db.add_turn(session_id, "user", user_input)
+                                        exposed=exposed, provider=provider,
+                                        tools_index=tools_index, setup_mode=setup_mode)
+        user_turn_id = self.db.add_turn(session_id, "user", user_input)
+        # Index of this turn's first message (the new user message): everything
+        # before it (after the system prompt) is earlier history, which phase 2
+        # of the context budget may fold into a summary.
+        history_end = len(messages) - 1
 
         # Per-turn cap on tool results entering the context (the turn's model may
         # carry its own small-context override).
@@ -624,29 +829,68 @@ class Agent:
         empty_nudged = False
 
         step = 0
+        exit_reason = "completed"
         while True:
             if not unlimited and step >= self.tool_loop_limit:
                 logger.warning("[agent] tool loop limit (%d) reached", self.tool_loop_limit)
+                exit_reason = "step_limit"
                 if not segments:
                     segments.append("I hit the tool-step limit before finishing.")
                 break
             if should_cancel is not None and should_cancel():
                 logger.info("[turn] cancelled by user at step %d", step)
+                exit_reason = "cancelled"
                 if not segments:
                     segments.append("Stopped.")
                 emit("turn_cancelled", {"session_id": session_id})
                 break
             step += 1
-            resp = _generate_bounded(
-                provider, _generate_timeout(provider),
-                messages=messages, tools=tool_defs, stream=want_stream,
-                on_token=_provider_sink if want_stream else None,
-                on_thinking=_provider_thinking if want_stream else None)
+            from namma_agent.core.usage import reset_step, set_step
+            # Two-phase context budget (core/context_budget.py): past ~60% of the
+            # model's window, clear old tool outputs, then fold earlier history
+            # into a template summary. A no-op on almost every step.
+            messages, history_end = self._fit_context(
+                messages, history_end, provider, tool_defs, emit, session_id)
+            step_token = set_step(step)
+            try:
+                resp = _generate_bounded(
+                    provider, _generate_timeout(provider), should_cancel=should_cancel,
+                    messages=messages, tools=tool_defs, stream=want_stream,
+                    on_token=_provider_sink if want_stream else None,
+                    on_thinking=_provider_thinking if want_stream else None)
+            except TurnCancelled:
+                logger.info("[turn] cancelled by user mid-generation at step %d", step)
+                exit_reason = "cancelled"
+                if not segments:
+                    segments.append("Stopped.")
+                emit("turn_cancelled", {"session_id": session_id})
+                break
+            finally:
+                reset_step(step_token)
             # Emit any link fragment the filter held back before we inject anything,
             # so streamed text stays in order.
             if stream_filter is not None:
                 stream_filter.flush()
             _accumulate_usage(usage, resp.usage)
+
+            # Per-turn token budget: the model wants another tool round but the
+            # turn has already spent its budget — stop here with a clear note
+            # instead of letting a runaway loop keep billing.
+            budget = int(self.turn_token_budget or 0)
+            if budget > 0 and resp.has_tool_calls and usage_tokens(usage) >= budget:
+                spent = usage_tokens(usage)
+                logger.warning("[turn] token budget reached (%d ≥ %d) at step %d",
+                               spent, budget, step)
+                emit("turn_budget_exceeded", {"session_id": session_id,
+                                              "tokens": spent, "budget": budget})
+                exit_reason = "token_budget"
+                if resp.content.strip():
+                    segments.append(_mark_phantom_media(resp.content.strip()))
+                segments.append(
+                    f"I stopped before finishing: this turn used {spent:,} tokens, "
+                    f"over its budget of {budget:,} (Settings → Behavior → turn token "
+                    "budget). Say \"continue\" to carry on.")
+                break
 
             if not resp.has_tool_calls:
                 # The model answered with NOTHING — no text and no tool calls.
@@ -730,41 +974,90 @@ class Agent:
             # Record the assistant's tool-call turn in the working message list.
             messages.append(_assistant_turn(resp, tool_calls=resp.tool_calls))
 
+            # Read-only batch → run those calls concurrently up front; the loop
+            # below then just consumes their results in the model's order, so
+            # events, audit and the transcript stay exactly as before.
+            prefetched = self._run_parallel(resp.tool_calls, exposed, emit,
+                                            session_id, should_cancel)
             for tc in resp.tool_calls:
-                tools_used.append(tc.name)
-                tool = self.registry.get(tc.name)
+                # Stop pressed while earlier tools in this batch ran: skip the rest.
+                # Each skipped call still gets a tool result so the transcript
+                # stays well-formed; the cancel check at the top of the next step
+                # then ends the turn.
+                if should_cancel is not None and should_cancel():
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.name,
+                                     "content": "Not run: the user stopped this turn."})
+                    continue
+                name, args = tc.name, tc.args
+                # Tool search meta-tools (core/tool_search.py). tool_search /
+                # tool_describe answer from this turn's deferred set; tool_call is
+                # unwrapped so the inner tool runs through the normal path below
+                # (approval, checkpoint, audit, media) under its own name.
+                if name in ("tool_search", "tool_describe"):
+                    tools_used.append(name)
+                    cats = {d["name"]: getattr(self.registry.get(d["name"]), "category", "")
+                            for d in deferred_defs}
+                    meta_out = (_ts.search(str(args.get("query") or ""), deferred_defs, cats)
+                                if name == "tool_search"
+                                else _ts.describe(args.get("names") or [], deferred_defs))
+                    emit("tool_started", {"session_id": session_id, "tool": name, "args": args})
+                    emit("tool_finished", {"session_id": session_id, "tool": name,
+                                           "ok": not meta_out.startswith("ERROR"),
+                                           "summary": meta_out[:200],
+                                           "output": meta_out[:_STEP_OUTPUT_CAP]})
+                    messages.append({"role": "tool", "tool_call_id": tc.id, "name": tc.name,
+                                     "content": _clip_tool_result(meta_out, result_limit)})
+                    continue
+                if name == "tool_call":
+                    name, args, unwrap_err = _ts.unwrap_call(args)
+                    if not unwrap_err and name not in exposed:
+                        unwrap_err = (f"'{name}' is not a tool you can call this turn. Use "
+                                      "tool_search to find the right one.")
+                    if unwrap_err:
+                        tools_used.append("tool_call")
+                        messages.append({"role": "tool", "tool_call_id": tc.id,
+                                         "name": tc.name, "content": f"ERROR: {unwrap_err}"})
+                        continue
+                tools_used.append(name)
+                tool = self.registry.get(name)
                 # Gate destructive tools behind the per-turn approval callback.
                 # The approval callback owns any user-facing prompt/round-trip
                 # (e.g. the server emits its own id'd approval_request), so the
                 # agent does not emit a separate approval event here.
                 if tool is not None and tool.destructive and approval is not None:
-                    if not approval(tc.name, tc.args):
+                    if not approval(name, args):
                         from namma_agent.core.tools import ToolResult
                         declined = ToolResult(ok=False, content="", error="User declined the action.")
                         # Emit the start too: tool_finished alone matches no running
                         # step, so the declined confirmation would otherwise vanish
                         # from the live timeline and the persisted activity.
-                        emit("tool_started", {"session_id": session_id, "tool": tc.name,
-                                              "args": tc.args})
+                        emit("tool_started", {"session_id": session_id, "tool": name,
+                                              "args": args})
                         emit("tool_finished", {
-                            "session_id": session_id, "tool": tc.name,
+                            "session_id": session_id, "tool": name,
                             "ok": False, "summary": "declined",
                         })
                         # Declined attempts belong in the audit trail too — the
                         # Security tab shows what was ASKED, not just what ran.
-                        self.db.log_audit(session_id, tc.name, tc.args,
+                        self.db.log_audit(session_id, name, args,
                                           "User declined the action.", False)
                         messages.append({"role": "tool", "tool_call_id": tc.id,
                                          "name": tc.name, "content": declined.as_message_content()})
                         continue
-                logger.info("[tool] → %s %s", tc.name, _short_args(tc.args))
-                emit("tool_started", {"session_id": session_id, "tool": tc.name, "args": tc.args})
-                # Phase 7b: snapshot the files this call may change BEFORE it
-                # runs, so the user can undo an approval they regret. Never
-                # blocks the tool — a failed snapshot returns None.
-                checkpoint_id = self._checkpoint_before(session_id, tool, tc.args)
-                result = self.registry.execute(tc.name, tc.args)
-                logger.info("[tool] ← %s %s%s", tc.name, "ok" if result.ok else "FAIL",
+                if tc.id in prefetched:
+                    result = prefetched.pop(tc.id)     # ran in parallel (started above)
+                    checkpoint_id = ""
+                else:
+                    logger.info("[tool] → %s %s", name, _short_args(args))
+                    emit("tool_started", {"session_id": session_id, "tool": name, "args": args})
+                    # Phase 7b: snapshot the files this call may change BEFORE it
+                    # runs, so the user can undo an approval they regret. Never
+                    # blocks the tool — a failed snapshot returns None.
+                    checkpoint_id = self._checkpoint_before(session_id, tool, args)
+                    t_tool = time.monotonic()
+                    result = self.registry.execute(name, args)
+                    result.__dict__["_ms"] = int((time.monotonic() - t_tool) * 1000)
+                logger.info("[tool] ← %s %s%s", name, "ok" if result.ok else "FAIL",
                             "" if result.ok else f": {result.error[:120]}")
                 # Self-verification bookkeeping: a successful write-ish destructive
                 # tool arms the nudge; any successful tool call AFTER it (a re-read,
@@ -774,18 +1067,22 @@ class Agent:
                         needs_verify = True
                     elif not tool.destructive and needs_verify:
                         needs_verify = False
-                self.db.log_audit(session_id, tc.name, tc.args, result.as_message_content(), result.ok)
+                self.db.log_audit(session_id, name, args, result.as_message_content(), result.ok)
                 # A checkpoint taken for a call that then FAILED protects nothing
                 # — drop it so the Undo list only offers real changes.
                 if checkpoint_id and not result.ok:
                     self._discard_checkpoint(checkpoint_id)
                     checkpoint_id = ""
                 emit("tool_finished", {
-                    "session_id": session_id, "tool": tc.name,
+                    "session_id": session_id, "tool": name,
                     "ok": result.ok, "summary": result.as_message_content()[:200],
                     "output": result.as_message_content()[:_STEP_OUTPUT_CAP],
                     "checkpoint": checkpoint_id,
+                    "ms": result.__dict__.get("_ms"),
                 })
+                if name == "update_todos" and result.ok:
+                    emit("plan_updated", {"session_id": session_id,
+                                          "plan": (args or {}).get("todos") or []})
                 # Surface generated media (diagram/image/simulation) inline in the
                 # visible answer — these tools return ready-to-render markdown +
                 # download link in their result content and tag data.url.
@@ -866,9 +1163,10 @@ class Agent:
         # A turn that produced no content is never persisted — an empty
         # assistant row would poison this session's message history on reload
         # (providers reject content-less assistant turns).
+        assistant_turn_id = None
         if final_content.strip():
-            self.db.add_turn(session_id, "assistant", final_content, tools_used,
-                             meta=turn_meta)
+            assistant_turn_id = self.db.add_turn(session_id, "assistant", final_content,
+                                                 tools_used, meta=turn_meta)
         # Always-on learning: the turn enters Engram's write pipeline (background,
         # salience-gated — most turns extract nothing and cost nothing durable).
         # Untrusted senders never write memory — their salient turns are
@@ -895,7 +1193,63 @@ class Agent:
         _hooks().post_turn(session_id, user_input, final_content)
         return AgentResult(content=final_content, session_id=session_id,
                            tools_used=tools_used, usage=usage, ttft=ttft["t"],
-                           steps=steps)
+                           steps=steps, exit_reason=exit_reason,
+                           user_turn_id=user_turn_id, assistant_turn_id=assistant_turn_id)
+
+    # -- parallel read-only tools (Phase 4) ------------------------------------
+
+    def _run_parallel(self, calls, exposed: set, emit: EmitFn, session_id: str,
+                      should_cancel) -> dict:
+        """Run a step's calls concurrently when there are several and EVERY one is
+        in :data:`PARALLEL_SAFE_TOOLS` (and callable this turn). Returns
+        ``{call_id: ToolResult}`` — empty when the batch must run in order."""
+        if len(calls) < 2:
+            return {}
+        if any(tc.name not in PARALLEL_SAFE_TOOLS or tc.name not in exposed
+               for tc in calls):
+            return {}
+        if should_cancel is not None and should_cancel():
+            return {}
+        from concurrent.futures import ThreadPoolExecutor
+
+        for tc in calls:
+            logger.info("[tool] → %s %s (parallel)", tc.name, _short_args(tc.args))
+            emit("tool_started", {"session_id": session_id, "tool": tc.name,
+                                  "args": tc.args, "parallel": True})
+        with ThreadPoolExecutor(max_workers=min(_PARALLEL_WORKERS, len(calls)),
+                                thread_name_prefix="tool") as pool:
+            def timed(name, args):
+                t0 = time.monotonic()
+                res = self.registry.execute(name, args)
+                res.__dict__["_ms"] = int((time.monotonic() - t0) * 1000)
+                return res
+
+            futures = {tc.id: pool.submit(contextvars.copy_context().run, timed,
+                                          tc.name, tc.args)
+                       for tc in calls}
+            return {cid: f.result() for cid, f in futures.items()}
+
+    # -- in-turn context budget (Phase 2) ------------------------------------
+
+    def _fit_context(self, messages: list[dict], history_end: int, provider: Provider,
+                     tool_defs: list, emit: EmitFn, session_id: str):
+        from namma_agent.core import context_budget
+        from namma_agent.core.usage import usage_scope
+
+        def _summarize(prompt: list[dict]) -> str:
+            with usage_scope("compaction"):
+                resp = provider.generate(prompt, tools=None, stream=False)
+            return getattr(resp, "content", "") or ""
+
+        try:
+            return context_budget.fit(
+                messages, history_end, provider, tool_defs, _summarize,
+                fraction=float(self.context_fraction or 0),
+                emit=lambda info: emit("context_compacted",
+                                       {"session_id": session_id, **info}))
+        except Exception as exc:  # noqa: BLE001 — never break a turn over this
+            logger.warning("[context] budget check failed: %s", exc)
+            return messages, history_end
 
     # -- rolling context compaction ------------------------------------------
 
@@ -928,7 +1282,9 @@ class Agent:
                 with self._compact_lock:
                     self._compacting.discard(session_id)
 
-        t = threading.Thread(target=_work, name="context-compactor", daemon=True)
+        # Copied context: the usage log attributes the summary call to this chat.
+        t = threading.Thread(target=contextvars.copy_context().run, args=(_work,),
+                             name="context-compactor", daemon=True)
         t.start()
         return t
 
@@ -941,10 +1297,12 @@ class Agent:
         if comp.get("summary"):
             user += f"PREVIOUS SUMMARY:\n{comp['summary']}\n\n"
         user += f"NEWLY EVICTED MESSAGES:\n{convo[:12000]}"
-        resp = provider.generate(
-            [{"role": "system", "content": _COMPACT_SYSTEM},
-             {"role": "user", "content": user}],
-            tools=None, stream=False)
+        from namma_agent.core.usage import usage_scope
+        with usage_scope("compaction"):
+            resp = provider.generate(
+                [{"role": "system", "content": _COMPACT_SYSTEM},
+                 {"role": "user", "content": user}],
+                tools=None, stream=False)
         summary = (getattr(resp, "content", "") or "").strip()
         if summary:
             self.db.set_compaction(session_id, summary[:4000], pending[-1]["id"])
@@ -993,6 +1351,10 @@ class Agent:
             return self.registry.definitions(only=set(LEARNING_TOOLS))
         allow = ([str(a).strip() for a in (getattr(provider, "tool_allow", None) or [])
                   if str(a).strip()] or self.tool_allow)
+        if not allow and self.tool_profile:
+            # Toolset profile preset (tools.profile): a list of toolsets.
+            from namma_agent.core.tool_search import profile_categories
+            allow = profile_categories(self.tool_profile) or []
         if allow:
             return self.registry.definitions(only=self._expand_tool_allow(allow))
         return self.registry.definitions()
@@ -1012,10 +1374,16 @@ class Agent:
             if category in wanted:
                 names.add(t.name)
                 matched.add(category)
-        if wanted - matched:
+        # Profiles name toolsets that may legitimately be absent (no MCP servers,
+        # no checkpoints) — only warn about typos in an explicit allow-list.
+        if wanted - matched and not self._allow_from_profile(allow):
             logger.warning("[tools] allow-list entries match no tool or toolset: %s",
                            ", ".join(sorted(wanted - matched)))
         return names
+
+    def _allow_from_profile(self, allow: list[str]) -> bool:
+        from namma_agent.core.tool_search import profile_categories
+        return bool(self.tool_profile) and allow == (profile_categories(self.tool_profile) or [])
 
     def _is_teaching_session(self, session_id: str) -> bool:
         """True for a Learning-Room MODULE thread (where the pedagogy contract and the
@@ -1163,7 +1531,8 @@ class Agent:
 
     def _build_messages(self, user_input: str, session_id: str, chat_mode: bool = False,
                         exposed: Optional[set] = None,
-                        provider: Optional[Provider] = None) -> list[dict]:
+                        provider: Optional[Provider] = None,
+                        tools_index: str = "", setup_mode: bool = False) -> list[dict]:
         # Chat mode is pure conversation: no skills catalog (no use_skill tool) and
         # no tool-routing/learning preamble noise. Engram's core memory + host block
         # still ride along (identity never needs a tool call).
@@ -1174,13 +1543,15 @@ class Agent:
         # caller doesn't pass it.
         def _has_tool(name: str) -> bool:
             return name in exposed if exposed is not None else name in self.registry
-        catalog = "" if chat_mode else (self.skills.catalog_text() if self.skills is not None else "")
+        catalog = "" if (chat_mode or setup_mode) else (
+            self.skills.catalog_text() if self.skills is not None else "")
         # Engram L1 + L5: core memory (who the user is) and the host model (what
         # machine this is) ride along on EVERY turn — chat mode included. That is
         # the whole point: identity can never require a tool call.
         memory_block = self.engram.memory_block() if self.engram is not None else ""
         system = self.persona.system_prompt(
             skills_catalog=catalog, chat_mode=chat_mode, memory_block=memory_block,
+            about_block=self.about_block, tools_block=tools_index, setup_mode=setup_mode,
         )
         scope = self._scope_block(session_id)
         if scope:
@@ -1201,31 +1572,6 @@ class Agent:
                     "- When the user corrects a remembered fact, save the correction — "
                     "the old value is kept as history automatically."
                 )
-            if not chat_mode:
-                # Automatic prefetch: fused, in-process, milliseconds — replaces the
-                # old regex-gated 12s Cognee thread. The score floor is the gate.
-                try:
-                    system += self.engram.prefetch_block(user_input)
-                except Exception:  # noqa: BLE001 — memory must never break a turn
-                    pass
-        # External-plugin steering only matters when a memory MCP server (e.g. a
-        # Cognee plugin) is attached WITHOUT the native engine (bare/legacy setups).
-        elif not chat_mode and _has_tool("mcp_cognee_recall"):
-            system = (
-                f"{system}\n\nCOGNEE MEMORY — you have a persistent Cognee semantic + "
-                "knowledge-graph memory of THIS user that spans every past session.\n"
-                "- BEFORE answering ANY question about the user — their life, work, "
-                "projects, preferences, people, or anything they've told you before "
-                "(even in another chat, even reworded) — you MUST first call "
-                "`mcp_cognee_recall` with the question. It matches by meaning + entity "
-                "relationships, so it finds things keyword search misses. Treat its "
-                "result as the source of truth and answer from it.\n"
-                "- Never say you don't know or don't have something about the user "
-                "without calling `mcp_cognee_recall` first.\n"
-                "- When the user shares a durable fact worth keeping, call "
-                "`mcp_cognee_remember`. Prefer Cognee for recalling stored knowledge and "
-                "the connections between people, projects, and concepts."
-            )
         # Steer the model to drive the live TODO panel for multi-step work.
         if not chat_mode and _has_tool("update_todos"):
             system = (
@@ -1267,14 +1613,64 @@ class Agent:
         # (small-context local models) — 0/unset inherits the agent default.
         history_turns = (int(getattr(provider, "max_history_turns", 0) or 0)
                          or self.max_history_turns)
-        messages.extend(self.db.recent_turns(session_id, history_turns))
-        messages.append({"role": "user", "content": user_input})
+        messages.extend(self.db.recent_turns(session_id, history_turns, with_actions=True))
+        messages.append({"role": "user",
+                         "content": self._with_turn_context(user_input, chat_mode, session_id)})
         return messages
 
+    def _slash_skill(self, user_input: str):
+        """``/<skill-name> rest`` at the start of a message invokes that skill:
+        returns ``(name, rendered procedure)``, or None (not a skill / disabled)."""
+        if self.skills is None:
+            return None
+        m = re.match(r"\s*/([A-Za-z0-9][\w.-]{1,63})\b", user_input or "")
+        if not m:
+            return None
+        skill = self.skills.get(m.group(1))
+        if skill is None or not getattr(skill, "enabled", True):
+            return None
+        try:
+            body = self.skills.render(skill.name)
+        except Exception:  # noqa: BLE001
+            body = None
+        return (skill.name, body) if body else None
+
+    def _with_turn_context(self, user_input: str, chat_mode: bool,
+                           session_id: str = "") -> str:
+        """Prefix the latest user message with the per-turn context: the date (day
+        resolution) and Engram's automatic memory prefetch. Both used to live in
+        the system prompt, where a minute-stamped date and a query-dependent
+        recall block changed the prompt on every turn and defeated prompt caching
+        for everything after them. Here they ride the one message that is new
+        anyway, so the system prompt and tool list stay byte-identical."""
+        lines = [date_line()]
+        skill = None if chat_mode else self._slash_skill(user_input)
+        if skill:
+            lines.append(f"SKILL INVOKED — the user typed /{skill[0]}. Follow this "
+                         f"procedure for this request:\n{skill[1]}")
+        if self.engram is not None and not chat_mode:
+            # Automatic prefetch: fused, in-process, milliseconds. The score
+            # floor is the gate — most turns add nothing.
+            try:
+                recalled = (self.engram.prefetch_block(user_input) or "").strip()
+            except Exception:  # noqa: BLE001 — memory must never break a turn
+                recalled = ""
+            if recalled:
+                lines.append(recalled)
+        if self.render_notes is not None and session_id:
+            try:
+                problems = self.render_notes(session_id) or []
+            except Exception:  # noqa: BLE001
+                problems = []
+            if problems:
+                lines.append("RENDER ERRORS in your previous reply (the user saw the raw "
+                             "source instead): " + "; ".join(
+                                 f"{p['kind']}: {p['error']}" for p in problems)
+                             + ". If it still matters, send a corrected version.")
+        return "<context>\n" + "\n\n".join(lines) + "\n</context>\n\n" + user_input
+
     def _scope_block(self, session_id: str) -> str:
-        """Project / Learning-Room context appended to the system prompt for a
-        scoped session. Project memory is *layered* on top of the global facts
-        (the user's identity stays available); casual chat history does not."""
+        """Project / Learning-Room context appended to the system prompt for a\n        scoped session. Project memory is *layered* on top of the global facts\n        (the user's identity stays available); casual chat history does not."""
         try:
             sess = self.db.get_session(session_id)
         except Exception:  # noqa: BLE001

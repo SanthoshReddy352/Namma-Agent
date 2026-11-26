@@ -221,6 +221,105 @@ def test_delegate_inherits_main_tool_loop_limit(wired):
     assert prov.calls == 3
 
 
+def test_delegate_caps_steps_when_parent_is_unlimited(wired):
+    """Parent tool_loop_limit <= 0 (unlimited) must NOT give an unbounded child —
+    a runaway sub-agent blocked the parent turn indefinitely."""
+    reg, db, agent = wired
+
+    class _Looping(Provider):
+        name = "loop"
+        def __init__(self):
+            super().__init__(model="loop")
+            self.calls = 0
+        def is_available(self):
+            return True
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
+            self.calls += 1
+            return LLMResponse(content="", tool_calls=[
+                ToolCall(id=str(self.calls), name="system_info", args={})])
+
+    prov = _Looping()
+    agent.provider = prov
+    agent.tool_loop_limit = 0
+    register_agent_tools(reg, agent, prov, db)
+    reg.execute("delegate_task", {"task": "x"})
+    assert prov.calls == 25
+
+
+def test_delegate_restores_parent_session_and_cancel(wired):
+    """process_turn binds the session/cancel contextvars; the sub-agent must not
+    leave them pointing at its hidden session (todos, shell cwd, notes and
+    checkpoints of the rest of the parent turn went to the child)."""
+    from namma_agent.core.interactive import (
+        get_current_cancel, get_current_session, set_current_cancel, set_current_session,
+    )
+    reg, _, agent = wired
+    agent.provider._responses = [LLMResponse(content="ok")]
+
+    def parent_cancel():
+        return False
+
+    set_current_session("parent-session")
+    set_current_cancel(parent_cancel)
+    try:
+        assert reg.execute("delegate_task", {"task": "x"}).ok
+        assert get_current_session() == "parent-session"
+        assert get_current_cancel() is parent_cancel
+    finally:
+        set_current_session(None)
+        set_current_cancel(None)
+
+
+def test_delegate_hands_parent_stop_to_child(wired):
+    """Pressing Stop on the parent turn must cancel the sub-agent too."""
+    from namma_agent.core.interactive import set_current_cancel
+    reg, db, agent = wired
+    calls = {"n": 0}
+
+    class _Count(Provider):
+        name = "count"
+        def __init__(self): super().__init__(model="count")
+        def is_available(self): return True
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
+            calls["n"] += 1
+            return LLMResponse(content="should not get here")
+
+    agent.provider = _Count()
+    register_agent_tools(reg, agent, agent.provider, db)
+    set_current_cancel(lambda: True)
+    try:
+        reg.execute("delegate_task", {"task": "x"})
+    finally:
+        set_current_cancel(None)
+    assert calls["n"] == 0
+
+
+def test_delegate_unknown_toolset_is_an_error_not_a_silent_fallback(wired):
+    reg, _, agent = wired
+    agent.provider._responses = [LLMResponse(content="ok")]
+    r = reg.execute("delegate_task", {"task": "x", "toolsets": ["no_such_toolset"]})
+    assert not r.ok
+    assert "no_such_toolset" in r.error and "Valid toolsets" in r.error
+
+
+def test_delegate_accepts_tool_names_as_toolsets(wired):
+    reg, db, agent = wired
+    captured = {}
+
+    class _Capture(Provider):
+        name = "cap"
+        def __init__(self): super().__init__(model="cap")
+        def is_available(self): return True
+        def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
+            captured["tools"] = [t["name"] for t in (tools or [])]
+            return LLMResponse(content="done")
+
+    agent.provider = _Capture()
+    register_agent_tools(reg, agent, agent.provider, db)
+    assert reg.execute("delegate_task", {"task": "x", "toolsets": ["system_info"]}).ok
+    assert captured["tools"] == ["system_info"]
+
+
 # ── persona ───────────────────────────────────────────────────────────────────
 
 def test_list_personas(wired):

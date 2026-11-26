@@ -178,16 +178,21 @@ def test_finalize_png_flattens_and_trims():
     assert max(res.size) < 200                      # trimmed down from 400 to ~box+pad
 
 
-def test_render_diagram_errors_when_render_unavailable(reg, monkeypatch):
-    # When NO renderer is reachable (hosted API down AND no local renderer), the tool
-    # returns an actionable error (not a crash, not client-side mermaid) so the model
-    # can fix its syntax and retry. The browser NEVER renders mermaid source.
+def test_render_diagram_falls_back_to_client_mermaid_when_no_renderer(reg, monkeypatch):
+    """No image renderer reachable (offline / mermaid.ink down / no local browser):\n    the chat renders Mermaid itself (Phase 4), so the tool hands back a ```mermaid\n    fence to slot inline instead of dead-ending the turn (live-run finding)."""
     import namma_agent.tools.learning_media as lm
-    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (None, "offline"))
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (None, "mermaid.ink request failed: offline"))
     monkeypatch.setattr(lm, "_render_via_local", lambda code, out: (None, "no renderer"))
     res = reg.execute("render_diagram", {
         "title": "Breakdown",
         "code": "flowchart TD\n    Animal --> Dog\n    Animal --> Cat"})
-    assert not res.ok
-    assert "offline" in res.error and "no renderer" in res.error
-    assert "```mermaid" not in res.content
+    assert res.ok and res.data["fallback"] == "client"
+    assert res.data["inline"].startswith("```mermaid\nflowchart TD")
+
+
+def test_render_diagram_still_errors_on_invalid_mermaid(reg, monkeypatch):
+    import namma_agent.tools.learning_media as lm
+    monkeypatch.setattr(lm, "_render_via_ink", lambda code: (None, "mermaid.ink returned 400"))
+    monkeypatch.setattr(lm, "_render_via_local", lambda code, out: (None, "no renderer"))
+    res = reg.execute("render_diagram", {"code": "flowchart TD\n    A -->"})
+    assert not res.ok and "invalid" in res.error

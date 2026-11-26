@@ -5,7 +5,7 @@ import os
 
 import pytest
 
-from namma_agent.core.safety import check_path, is_destructive
+from namma_agent.core.safety import check_path
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.tools import load_tools
 
@@ -35,9 +35,29 @@ def test_list_dir(tmp_path, reg):
     assert "f a.txt" in out.content and "d sub" in out.content
 
 
-def test_path_security_blocks_traversal(reg):
-    r = reg.execute("read_file", {"path": "../../etc/passwd"})
-    assert not r.ok and "traversal" in r.error
+def test_dotdot_paths_are_checked_after_resolution(tmp_path):
+    """Phase 2: a literal ``..`` is no longer rejected outright — the policy runs
+    on the RESOLVED path, so ``..`` can't smuggle a write into a protected tree
+    or a read into a secret dir, while ``../notes.md`` just works."""
+    (tmp_path / "sub").mkdir()
+    ok, _ = check_path(str(tmp_path / "sub" / ".." / "notes.md"), write=True)
+    assert ok
+    home = os.path.expanduser("~")
+    ok, reason = check_path(os.path.join(home, "Documents", "..", ".ssh", "id_rsa"))
+    assert not ok and "secret" in reason
+    sneaky = (r"C:\Users\..\Windows\namma_probe.txt" if os.name == "nt"
+              else "/home/../usr/namma_probe.txt")
+    ok, reason = check_path(sneaky, write=True)
+    assert not ok and "read-only" in reason
+
+
+def test_app_install_dir_is_writable_even_under_a_protected_root(tmp_path):
+    from namma_agent.core.safety import PathSecurity
+
+    app = tmp_path / "Program Files" / "Namma"
+    policy = PathSecurity(write_roots=[str(tmp_path / "Program Files")], app_roots=[str(app)])
+    assert policy.validate(str(app / "namma_agent" / "config.yaml"), write=True)[0]
+    assert not policy.validate(str(tmp_path / "Program Files" / "Other" / "x"), write=True)[0]
 
 
 def test_path_security_blocks_sensitive():
@@ -84,4 +104,3 @@ def test_destructive_classification(reg):
     assert reg.get("write_file").destructive is True
     assert reg.get("run_shell").destructive is True
     assert reg.get("read_file").destructive is False
-    assert is_destructive("run_shell")

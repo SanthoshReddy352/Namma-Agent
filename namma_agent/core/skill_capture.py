@@ -189,7 +189,7 @@ class SkillCapture:
         skill = self.skills.create(draft["name"], draft["description"], body,
                                    category="draft", tags=["draft", "capture"])
         # Disabled = a proposal, not a self-granted capability. The disable hook
-        # persists it to config.local.yaml so it survives a restart as a draft.
+        # persists it to user_config.yaml so it survives a restart as a draft.
         if self._disable is not None:
             self._disable(skill.name)
         else:

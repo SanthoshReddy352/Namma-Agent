@@ -116,8 +116,8 @@ def test_memory_settings_roundtrip(svc, monkeypatch, tmp_path):
     assert svc.engram.prefetch_enabled is False and svc.engram.prefetch_k == 3
     assert svc.engram.writer.min_chars == 40
     assert svc.engram.writer.budget_per_hour == 10
-    # persisted to config.local.yaml under memory.*
-    local = (tmp_path / "config.local.yaml").read_text(encoding="utf-8")
+    # persisted to the user config (data dir) under memory.*
+    local = cfg.user_config_file().read_text(encoding="utf-8")
     assert "prefetch: false" in local and "salience_min_chars: 40" in local
 
 

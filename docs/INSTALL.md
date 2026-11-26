@@ -132,7 +132,7 @@ it any time with `.venv/bin/python -m namma_agent`).
 
 ### What "configure the first provider" does
 The installer runs `python -m namma_agent --setup`, which writes your choice to
-`namma_agent/config.local.yaml` (provider + model) and your API key to `.env`
+`data/user_config.yaml` (provider + model) and your API key to `.env`
 (never committed). You can change all of it later in the app's **Settings**, or
 re-run `python -m namma_agent --setup`.
 
@@ -194,7 +194,7 @@ git pull
 ```
 
 Your data and settings are preserved across updates: the SQLite database
-(`data/namma_agent.db`), your `.env`, `config.local.yaml`, and `~/.namma_agent/`
+(`data/namma_agent.db`), your settings (`data/user_config.yaml`), `.env`, and `~/.namma_agent/`
 (skills, tools, personas) are untouched by an update.
 
 ---

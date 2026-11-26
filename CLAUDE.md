@@ -10,7 +10,7 @@ git history holds it if you ever need it.)
 
 ```
 namma_agent/
-├── config.py / config.yaml      — config loader (+ config.local.yaml overlay) + .env
+├── config.py / config.yaml      — config loader (base defaults + data/user_config.yaml) + .env
 ├── service.py                   — NammaAgentService: wires provider + tools + memory + agent
 ├── app.py / __main__.py         — launcher (uvicorn + pywebview window; --server for headless)
 ├── core/
@@ -55,10 +55,18 @@ The Python package/dir is `namma_agent` and stays that way regardless of the dis
 1. Create `namma_agent/tools/<name>.py` with a `register(registry)` function that calls
    `registry.register(name, description, json_schema, handler)`. It's auto-discovered.
 2. Params are **JSON Schema** (no intent regex — the model calls tools natively).
-3. Destructive/sensitive actions: add the tool name to the safety classification so
-   it's approval-gated; degrade gracefully when an external binary is missing
-   (return a clear "install X" error, don't crash).
+3. Destructive/sensitive actions: register with `destructive=True` — that flag is what
+   approval-gates the tool (and strips it for untrusted senders and sub-agents);
+   degrade gracefully when an external binary is missing (return a clear
+   "install X" error, don't crash).
 4. Add a focused test under `namma_agent/tests/test_<area>.py`.
+
+## Project tracking — PROGRESS.md
+
+[`PROGRESS.md`](PROGRESS.md) is the single source of truth for status, roadmap, known
+issues and decisions. Read it at the start of a session. Update it **in the same
+change** as any meaningful code change (files, tests, full-suite count, a dated
+change-log line). Record only verified work as done; record blockers as `[!]`.
 
 ## Platform notes
 
@@ -76,3 +84,13 @@ After every query response, save the exchange to `responses/` in the project roo
 
 In plan mode, also save the plan to `plan/YYYY-MM-DD_HH-MM-SS_plan.md`. Both folders
 are append-only logs — never modify a saved file after writing it.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).

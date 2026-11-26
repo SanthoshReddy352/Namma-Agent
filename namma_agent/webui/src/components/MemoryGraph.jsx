@@ -10,13 +10,16 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // Interactions: hover-highlight neighbours, click → inspector panel, drag nodes,
 // pan, wheel-zoom. Every panel setting persists across reloads via localStorage.
 
-const PALETTE = [
-  "#7cc4ff", "#c9a0ff", "#7ee787", "#ffa657", "#ff7b9c",
-  "#79e0d8", "#f2cc60", "#a0b3ff", "#ff9bd2", "#9be37d",
-];
+// Colours come from the theme tokens (--graph-N, --canvas-*) in index.css; a
+// canvas can't resolve var(), so read the computed value.
+function cssColor(name, fallback = "gray") {
+  const v = getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim();
+  return v ? `rgb(${v})` : fallback;
+}
+const PALETTE_SIZE = 10;
 function colorFor(type, cache) {
   if (!cache.map) { cache.map = {}; cache.i = 0; }
-  if (!cache.map[type]) cache.map[type] = PALETTE[cache.i++ % PALETTE.length];
+  if (!cache.map[type]) cache.map[type] = cssColor(`graph-${(cache.i++ % PALETTE_SIZE) + 1}`);
   return cache.map[type];
 }
 
@@ -259,7 +262,9 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
     const draw = () => {
       const S = sim.current, { cam } = S; const { W, H } = size.current;
       const vw = viewRef.current;
-      ctx.fillStyle = dark ? "#070a10" : "#fbfcfe"; ctx.fillRect(0, 0, W, H);
+      const C = { bg: cssColor("canvas-bg"), ring: cssColor("canvas-ring"), label: cssColor("canvas-label"),
+                  edge: cssColor("canvas-edge"), hover: cssColor("canvas-hover") };
+      ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
       ctx.save(); ctx.translate(W / 2, H / 2); ctx.scale(cam.k, cam.k); ctx.translate(cam.x, cam.y);
       const hv = hover.current; const sel = selRef.current; const neigh = new Set();
       const focus = hv || sel;
@@ -302,7 +307,7 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
           ctx.globalAlpha = on ? 0.85 : 0.25;
           ctx.font = `${vw === "schema" ? 10.5 : 9.5}px ui-sans-serif, system-ui`;
           ctx.textAlign = "center"; ctx.textBaseline = "bottom";
-          ctx.fillStyle = dark ? "#8fa3bd" : "#64748b";
+          ctx.fillStyle = C.edge;
           ctx.fillText(e.rel.slice(0, 28), mx, my - 2);
           ctx.globalAlpha = 1;
         }
@@ -313,9 +318,9 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
         ctx.globalAlpha = on ? 1 : 0.15;
         ctx.shadowColor = n.col; ctx.shadowBlur = (n.id === hv || n.id === sel) ? 24 : 9;
         ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2); ctx.fillStyle = n.col; ctx.fill(); ctx.shadowBlur = 0;
-        ctx.lineWidth = 1.4; ctx.strokeStyle = dark ? "#070a10" : "#ffffff"; ctx.stroke();
+        ctx.lineWidth = 1.4; ctx.strokeStyle = C.ring; ctx.stroke();
         if (n.id === sel) {                              // selection ring
-          ctx.lineWidth = 2; ctx.strokeStyle = dark ? "#e2e8f0" : "#334155";
+          ctx.lineWidth = 2; ctx.strokeStyle = C.hover;
           ctx.beginPath(); ctx.arc(n.x, n.y, n.r + 4, 0, Math.PI * 2); ctx.stroke();
         }
         const always = vw !== "graph";                    // schema/ranked labels always on
@@ -324,7 +329,7 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
           if (label) {
             ctx.globalAlpha = on ? 0.95 : 0.2;
             ctx.font = vw === "schema" ? "600 12px ui-sans-serif, system-ui" : "11px ui-sans-serif, system-ui";
-            ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = dark ? "#c7d2e0" : "#334155";
+            ctx.textAlign = "center"; ctx.textBaseline = "top"; ctx.fillStyle = C.label;
             ctx.fillText(label, n.x, n.y + n.r + 3);
             if (vw === "schema") {
               ctx.globalAlpha = on ? 0.6 : 0.15; ctx.font = "10px ui-sans-serif, system-ui";
@@ -435,11 +440,11 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
   const ovLbl = dark ? "text-white/70" : "text-ink-soft";
 
   return (
-    <div ref={wrapRef} className="relative rounded-2xl overflow-hidden border border-line dark:border-night-line" style={{ height }}>
+    <div ref={wrapRef} className="relative rounded-2xl overflow-hidden border border-border" style={{ height }}>
       <canvas ref={canvasRef} className="block w-full h-full" />
 
       {nodes.length === 0 && (
-        <div className="absolute inset-0 grid place-items-center text-[13px] text-ink-faint dark:text-night-faint">
+        <div className="absolute inset-0 grid place-items-center text-sm text-fg-subtle">
           No memories yet — add something below, then refresh.
         </div>
       )}
@@ -448,7 +453,7 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
       <div className={`absolute top-3 left-3 flex rounded-lg backdrop-blur border overflow-hidden ${ovPanel}`}>
         {VIEWS.map(([id, label]) => (
           <button key={id} onClick={() => setView(id)}
-                  className={`px-3 h-8 text-[12px] ${view === id ? ovBtnOn : `${ovHover} ${ovLbl}`}`}>
+                  className={`px-3 h-8 text-xs ${view === id ? ovBtnOn : `${ovHover} ${ovLbl}`}`}>
             {label}
           </button>
         ))}
@@ -456,17 +461,17 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
 
       {/* zoom controls (bottom-left) */}
       <div className="absolute bottom-3 left-3 flex gap-1.5">
-        {[["+", () => zoom(1.2)], ["−", () => zoom(0.83)], ["⤢", () => fitView()]].map(([t, fn]) => (
-          <button key={t} onClick={fn}
-                  className={`h-8 w-8 grid place-items-center rounded-lg backdrop-blur border text-[15px] ${ovBtn}`}>{t}</button>
+        {[["+", "Zoom in", () => zoom(1.2)], ["−", "Zoom out", () => zoom(0.83)], ["⤢", "Fit to view", () => fitView()]].map(([t, label, fn]) => (
+          <button key={t} onClick={fn} aria-label={label} title={label}
+                  className={`h-8 w-8 grid place-items-center rounded-lg backdrop-blur border text-prose ${ovBtn}`}>{t}</button>
         ))}
       </div>
 
       {/* hovered-node HUD (bottom-center) */}
       {hud?.label && !selected && (
         <div className={`absolute bottom-3 left-1/2 -translate-x-1/2 max-w-[50%] rounded-lg backdrop-blur border px-3 py-1.5 ${ovPanel}`}>
-          <div className="text-[13px] font-medium truncate">{hud.label}</div>
-          <div className={`text-[11px] ${ovSub}`}>{hud.type}{hud.count != null ? ` · ${hud.count} instances` : ""}</div>
+          <div className="text-sm font-medium truncate">{hud.label}</div>
+          <div className={`text-2xs ${ovSub}`}>{hud.type}{hud.count != null ? ` · ${hud.count} instances` : ""}</div>
         </div>
       )}
 
@@ -475,17 +480,17 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
         <div className={`absolute bottom-3 left-1/2 -translate-x-1/2 w-[340px] max-w-[80%] max-h-[45%] overflow-y-auto rounded-xl backdrop-blur border p-3 ${ovPanel}`}>
           <div className="flex items-start justify-between gap-2">
             <div>
-              <div className="text-[13.5px] font-medium">{selected.label}</div>
-              <div className={`text-[11px] ${ovSub}`}>
+              <div className="text-base font-medium">{selected.label}</div>
+              <div className={`text-2xs ${ovSub}`}>
                 {selected.type}{selected.count != null ? ` · ${selected.count} instances` : ""} · {selected.total} connection{selected.total === 1 ? "" : "s"}
               </div>
             </div>
-            <button onClick={() => setSelected(null)} className={`text-[13px] leading-none px-1 ${ovDim} hover:opacity-80`}>✕</button>
+            <button onClick={() => setSelected(null)} className={`text-sm leading-none px-1 ${ovDim} hover:opacity-80`}>✕</button>
           </div>
           {selected.links.length > 0 && (
             <ul className="mt-2 space-y-1">
               {selected.links.map((l, i) => (
-                <li key={i} className="text-[12px] flex items-baseline gap-1.5">
+                <li key={i} className="text-xs flex items-baseline gap-1.5">
                   <span className={ovDim}>{l.dir}</span>
                   {l.rel && <span className="text-brand-deep dark:text-brand">{l.rel}</span>}
                   <span className="truncate">{l.other}</span>
@@ -493,7 +498,7 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
                 </li>
               ))}
               {selected.total > selected.links.length && (
-                <li className={`text-[11.5px] ${ovDim}`}>…and {selected.total - selected.links.length} more</li>
+                <li className={`text-xs ${ovDim}`}>…and {selected.total - selected.links.length} more</li>
               )}
             </ul>
           )}
@@ -508,11 +513,11 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
 
       {/* Obsidian-style control panel */}
       {panel && (
-        <div className={`absolute top-3 right-12 w-56 max-h-[calc(100%-24px)] overflow-y-auto rounded-xl backdrop-blur border p-3 text-[12px] space-y-3 ${ovPanel}`}>
+        <div className={`absolute top-3 right-12 w-56 max-h-[calc(100%-24px)] overflow-y-auto rounded-xl backdrop-blur border p-3 text-xs space-y-3 ${ovPanel}`}>
           <div>
             <div className="flex items-center justify-between mb-1.5">
-              <span className={`uppercase tracking-wider text-[10.5px] ${ovSub}`}>Groups</span>
-              <span className={`text-[10.5px] ${ovDim}`}>{groups.length}</span>
+              <span className={`uppercase tracking-wider text-2xs ${ovSub}`}>Groups</span>
+              <span className={`text-2xs ${ovDim}`}>{groups.length}</span>
             </div>
             <div className="space-y-1">
               {groups.map((g) => (
@@ -528,7 +533,7 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
           </div>
 
           <div className={`border-t pt-2 ${ovDiv}`}>
-            <div className={`uppercase tracking-wider text-[10.5px] mb-1.5 ${ovSub}`}>Display</div>
+            <div className={`uppercase tracking-wider text-2xs mb-1.5 ${ovSub}`}>Display</div>
             <label className="flex items-center gap-2 px-1.5 cursor-pointer">
               <input type="checkbox" checked={showLabels} onChange={(e) => setShowLabels(e.target.checked)} />
               Node labels
@@ -541,7 +546,7 @@ export default function MemoryGraph({ nodes = [], edges = [], dark = true, heigh
 
           {view !== "ranked" && (
             <div className={`border-t pt-2 space-y-2.5 ${ovDiv}`}>
-              <div className={`uppercase tracking-wider text-[10.5px] ${ovSub}`}>Forces</div>
+              <div className={`uppercase tracking-wider text-2xs ${ovSub}`}>Forces</div>
               {[["Center force", "center"], ["Repel force", "repel"], ["Link force", "link"], ["Link distance", "distance"]].map(([label, key]) => (
                 <div key={key}>
                   <div className={`mb-0.5 ${ovLbl}`}>{label}</div>

@@ -43,6 +43,11 @@ def _client() -> tuple[str, str, dict, str]:
     return url, token, aliases, ""
 
 
+def _ha_reason() -> str:
+    """Availability check: hidden from the model until Home Assistant is set up."""
+    return _client()[3] and "needs smart_home.url and a token (Home Assistant)"
+
+
 def _resolve(entity: str, aliases: dict) -> str:
     entity = (entity or "").strip()
     return aliases.get(entity.lower(), entity)
@@ -134,18 +139,18 @@ _ENTITY_PROP = {"entity": {"type": "string", "description": "friendly alias or d
 def register(registry: ToolRegistry) -> None:
     registry.register("ha_turn_on", "Turn on a Home Assistant device/scene.", {
         "type": "object", "properties": _ENTITY_PROP, "required": ["entity"],
-    }, _turn_on, destructive=True)
+    }, _turn_on, destructive=True, requires=_ha_reason)
 
     registry.register("ha_turn_off", "Turn off a Home Assistant device.", {
         "type": "object", "properties": _ENTITY_PROP, "required": ["entity"],
-    }, _turn_off, destructive=True)
+    }, _turn_off, destructive=True, requires=_ha_reason)
 
     registry.register("ha_get_state", "Read the current state of a Home Assistant entity.", {
         "type": "object", "properties": _ENTITY_PROP, "required": ["entity"],
-    }, _get_state)
+    }, _get_state, requires=_ha_reason)
 
     registry.register("ha_set_temperature", "Set a Home Assistant climate device's target temperature.", {
         "type": "object",
         "properties": {**_ENTITY_PROP, "temperature": {"type": "number", "description": "target temperature"}},
         "required": ["entity", "temperature"],
-    }, _set_temperature, destructive=True)
+    }, _set_temperature, destructive=True, requires=_ha_reason)

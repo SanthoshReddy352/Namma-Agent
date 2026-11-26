@@ -357,8 +357,9 @@ text.
 ## Configuration
 
 - **Base config** (documented, commented): [`namma_agent/config.yaml`](namma_agent/config.yaml)
-- **UI / runtime overrides**: `namma_agent/config.local.yaml` (written by the Settings
-  panel; the base file is never rewritten)
+- **Your settings**: `data/user_config.yaml` — one user config, written by the Settings
+  panel, setup wizard and `namma config set`, merged over the base (which is never
+  rewritten). An old `config.local.yaml` is migrated into it automatically.
 - **Secrets**: the built-in vault (Settings → Security) or `.env` at the project
   root (never commit it; the vault can migrate your `.env` in one click)
 - **Provider override**: `NAMMA_CONFIG=/path/to/config.yaml` to use a different file

@@ -42,13 +42,12 @@ export default function NotifyToasts() {
         <div key={n.id}
              onClick={() => setItems((list) => list.filter((x) => x.id !== n.id))}
              className={`cursor-pointer rounded-xl border shadow-pop px-4 py-3 animate-rise
-                         bg-paper-panel dark:bg-night-panel
-                         ${n.tone === "error"
+                         bg-surface-raised                         ${n.tone === "error"
                            ? "border-red-400/60 dark:border-red-500/50"
-                           : "border-line dark:border-night-line"}`}>
-          <div className="text-sm font-medium text-ink dark:text-night-ink">{n.title}</div>
+                           : "border-border"}`}>
+          <div className="text-sm font-medium text-fg">{n.title}</div>
           {n.body && (
-            <div className="mt-0.5 text-[12px] leading-snug text-ink-soft dark:text-night-faint line-clamp-3">
+            <div className="mt-0.5 text-xs leading-snug text-fg-muted line-clamp-3">
               {n.body}
             </div>
           )}

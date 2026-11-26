@@ -48,23 +48,25 @@ def test_save_list_load_and_delete_user_persona(monkeypatch, tmp_path):
     assert "sage" not in {r["id"] for r in persona.list_personas("Heaven")}
 
 
-def test_system_prompt_anchors_to_the_present():
-    """The prompt must carry today's real date so the agent doesn't default to its
-    training-cutoff year (which made it search for stale "...2025" news)."""
+def test_system_prompt_carries_the_date_policy_but_no_clock():
+    """The policy (anchor to the real date, not the training cutoff) stays in the
+    system prompt; the date itself rides the latest user message so the system
+    prompt is cache-stable (Phase 2). See test_usage_log.py for the user side."""
     from datetime import datetime
 
     p = persona.load_persona("core", display_name="Heaven")
     prompt = p.system_prompt()
     assert "CURRENT DATE & TIME" in prompt
-    assert str(datetime.now().year) in prompt  # the actual current year, not the cutoff
     assert "knowledge cutoff" in prompt.lower()
+    assert "<context>" in prompt                       # tells the model where the date is
+    assert datetime.now().strftime("%d %B %Y") not in prompt
 
 
-def test_temporal_block_uses_supplied_now():
+def test_date_line_uses_supplied_now():
     from datetime import datetime
 
-    block = persona._temporal_block(datetime(2026, 6, 20, 14, 30))
-    assert "2026" in block and "June" in block and "14:30" in block
+    line = persona.date_line(datetime(2026, 6, 20, 14, 30))
+    assert "2026" in line and "June" in line and "14:30" not in line
 
 
 def test_save_persona_requires_name_and_identity(monkeypatch, tmp_path):

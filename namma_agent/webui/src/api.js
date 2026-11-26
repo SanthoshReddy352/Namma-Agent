@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { playSound } from "./sounds.js";
 import { notify } from "./notify.js";
 import { createHandsFree, handsFreeSupported } from "./handsfree.js";
+import { createTokenBatcher } from "./tokenBatcher.js";
+import { speak, stopSpeaking } from "./voice.js";
 
 // ── Access token (Phase 6a — self-hosted servers) ────────────────────────────
 // When the backend has server.auth_token / NAMMA_AUTH_TOKEN set, every /api/*
@@ -235,11 +237,53 @@ export const deleteSkill = (name) => jpost("/api/skills/delete", { name });
 export const listTools = () => j("/api/tools");
 export const toggleTool = (name, enabled) => jpost("/api/tools/toggle", { name, enabled });
 export const toggleToolset = (category, enabled) => jpost("/api/toolset/toggle", { category, enabled });
+export const setToolProfile = (profile) => jpost("/api/tools/profile", { profile });
+// ── Sub-agent runs (Phase 3 delegation runtime) ──────────────────────────────
+export const listRuns = (sessionId = "", limit = 30) =>
+  j(`/api/runs?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`);
+export const cancelRun = (id) => jpost(`/api/runs/${encodeURIComponent(id)}/cancel`, {});
+// A visual (mermaid / chart / sandboxed HTML / A2UI) failed to render: the server
+// tells the model on its next turn so it can fix it.
+export const reportRenderError = (body) => jpost("/api/render_error", body);
+// Message actions (Phase 4).
+export const deleteTurn = (sid, turnId) =>
+  j(`/api/sessions/${encodeURIComponent(sid)}/turns/${turnId}`, { method: "DELETE" });
+export const truncateFrom = (sid, turnId) =>
+  jpost(`/api/sessions/${encodeURIComponent(sid)}/truncate`, { from_turn_id: turnId });
+export const branchFrom = (sid, turnId) =>
+  jpost(`/api/sessions/${encodeURIComponent(sid)}/branch`, { upto_turn_id: turnId });
+export const setToolSearchMode = (mode) => jpost("/api/tools/search", { mode });
 
-// ── MCP servers (Settings → MCP tab: Config + Servers) ───────────────────────
+// ── MCP servers (Settings → MCP) ───────────────────────
 export const fetchMcp = () => j("/api/mcp");
 export const reloadMcp = () => jpost("/api/mcp/reload");
 export const toggleMcpServer = (name, enabled) => jpost("/api/mcp/server/toggle", { name, enabled });
+// Phase 5 — MCP setup: validation, the add-server wizard, import, detection.
+export const validateMcp = (servers) => jpost("/api/mcp/validate", { servers });
+export const saveMcpServers = (servers) => jpost("/api/mcp/servers", { servers });
+export const addMcpServer = (server, replace = false) => jpost("/api/mcp/server/add", { server, replace });
+export const removeMcpServer = (name) => jpost("/api/mcp/server/remove", { name });
+export const importMcp = (config, url = "") => jpost("/api/mcp/import", { config, url });
+export const detectMcp = () => j("/api/mcp/detect");
+export const mcpCatalog = () => j("/api/mcp/catalog");
+export const buildMcpPreset = (preset, params = {}, name = "") => jpost("/api/mcp/preset", { preset, params, name });
+
+// Phase 5 — setup: secrets go ONLY through saveSecret (straight to the vault).
+export const saveSecret = (name, value) => jpost("/api/setup/secret", { name, value });
+export const setupStatus = (google = true) => j(`/api/setup/status?google=${google}`);
+export const setupIntegrations = (google = true) => j(`/api/setup/integrations?google=${google}`);
+export const verifyProvider = (provider, model = "") => jpost("/api/setup/verify", { provider, model });
+export const onboardProvider = (type, model, key = "", base_url = "") =>
+  jpost("/api/setup/onboard", { type, model, key, base_url });
+export const fetchOnboarding = () => j("/api/onboarding");
+export const fetchProviderCatalog = () => j("/api/providers");
+export const listProviderModels = (type, base_url = "") =>
+  j(`/api/models?type=${encodeURIComponent(type)}&base_url=${encodeURIComponent(base_url)}`);
+
+// Phase 5 — skills marketplace.
+export const skillsMarket = () => j("/api/skills/market");
+export const previewSkill = (url) => jpost("/api/skills/market/preview", { url });
+export const installSkill = (url, overwrite = false) => jpost("/api/skills/market/install", { url, overwrite });
 
 // ── Engram memory (Memory tab — native engine, always on) ────────────────────
 export const memoryStatus = () => j("/api/memory/status");
@@ -286,15 +330,10 @@ function toPlainText(md) {
 }
 
 // Speak via the browser's built-in TTS (Web Speech API). No server, no deps.
-function browserSpeak(text) {
-  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
-  const clean = toPlainText(text);
-  if (!clean) return;
-  const u = new SpeechSynthesisUtterance(clean);
-  u.rate = 1.02;
-  window.speechSynthesis.speak(u);
-}
-const browserHush = () => { if (typeof window !== "undefined" && "speechSynthesis" in window) window.speechSynthesis.cancel(); };
+// Narration / auto-read uses the OS voice (falls back to the browser's) —
+// see voice.js (Phase 9).
+function browserSpeak(text) { speak(text); }
+const browserHush = () => stopSpeaking();
 
 const EMPTY = { messages: [], timeline: [], status: "idle", streamId: null };
 const blank = () => ({ messages: [], timeline: [], status: "idle", streamId: null });
@@ -352,6 +391,11 @@ export function useNammaAgent() {
   currentRef.current = currentSid;
   const wsRef = useRef(null);
   const stopReconnectRef = useRef(false);
+  // Event protocol v2: the last event seq we applied and the server boot it
+  // belongs to — sent back as `resume` on reconnect so nothing is lost or doubled.
+  const seqRef = useRef(0);
+  const bootRef = useRef(null);
+  const backoffRef = useRef(1500);
   const modeRef = useRef(mode);
   modeRef.current = mode;
 
@@ -374,11 +418,31 @@ export function useNammaAgent() {
     if (r?.sessions) setSessions(r.sessions);
   }, []);
 
+  // State we can't replay any more (server restart, or the gap fell out of the
+  // server's event ring): clear stuck spinners and reload the open chat.
+  const resync = useCallback(() => {
+    setData((all) => {
+      let changed = false;
+      const out = {};
+      for (const [k, v] of Object.entries(all)) {
+        if (["thinking", "stopping", "queued"].includes(v.status)) {
+          out[k] = { ...v, status: "idle", streamId: null }; changed = true;
+        } else out[k] = v;
+      }
+      if (changed) dataRef.current = out;
+      return changed ? out : all;
+    });
+    refreshSessions();
+    const cur = currentRef.current;
+    if (cur && !isProvisional(cur)) openSessionRef.current?.(cur);
+  }, [refreshSessions]);
+
   const connect = useCallback(() => {
     const ws = new WebSocket(wsURL());
     wsRef.current = ws;
     ws.onopen = () => {
       setConnected(true);
+      backoffRef.current = 1500;
       refreshSessions(); // the server may have restarted while we were away
     };
     ws.onclose = (ev) => {
@@ -389,22 +453,58 @@ export function useNammaAgent() {
         window.dispatchEvent(new CustomEvent("namma-auth-required"));
         return;
       }
-      // A dropped socket loses any in-flight turn's events — the reply can never
-      // arrive, so clear stuck "thinking" spinners instead of spinning forever.
-      setData((all) => {
-        let changed = false;
-        const out = {};
-        for (const [k, v] of Object.entries(all)) {
-          if (v.status === "thinking") { out[k] = { ...v, status: "idle", streamId: null }; changed = true; }
-          else out[k] = v;
-        }
-        if (changed) dataRef.current = out;
-        return changed ? out : all;
-      });
-      if (!stopReconnectRef.current) setTimeout(connect, 1500);
+      // In-flight turns keep running on the server; on reconnect we `resume`
+      // from the last seq and their events (tokens included) are replayed. Back
+      // off exponentially (1.5 s → 15 s) instead of hammering a dead server.
+      if (!stopReconnectRef.current) {
+        setTimeout(connect, backoffRef.current);
+        backoffRef.current = Math.min(backoffRef.current * 2, 15000);
+      }
     };
-    ws.onmessage = (e) => handle(JSON.parse(e.data));
+    ws.onmessage = (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch { return; }   // BUG-14: never crash on a bad frame
+      receive(ws, msg);
+    };
   }, [refreshSessions]);
+
+  // Streamed tokens are coalesced (~50 ms) into one update per session; every
+  // other event flushes them first, so ordering is unchanged (Phase 6).
+  const tokenBatchRef = useRef(null);
+  if (!tokenBatchRef.current) {
+    tokenBatchRef.current = createTokenBatcher((key, text) => handle({ type: "token", session_id: key, text }));
+  }
+
+  // Protocol layer: hello/resume handshake, seq de-duplication, resync.
+  function receive(ws, msg) {
+    if (msg.type !== "token") tokenBatchRef.current.flush();
+    if (msg.type === "hello") {
+      const sameServer = bootRef.current && bootRef.current === msg.boot;
+      const from = sameServer ? seqRef.current : msg.seq;
+      if (!sameServer) {
+        if (bootRef.current) resync();          // the server restarted while we were away
+        bootRef.current = msg.boot;
+        seqRef.current = msg.seq;
+      }
+      ws.send(JSON.stringify({ type: "resume", from_seq: from, boot: msg.boot }));
+      return;
+    }
+    if (msg.type === "resync_required") {
+      bootRef.current = msg.boot;
+      seqRef.current = msg.seq;
+      resync();
+      return;
+    }
+    if (typeof msg.seq === "number") {
+      if (msg.seq <= seqRef.current) return;    // already applied (replay overlap)
+      seqRef.current = msg.seq;
+    }
+    if (msg.type === "token" && msg.session_id) {
+      tokenBatchRef.current.push(msg.session_id, msg.text);
+      return;
+    }
+    handle(msg);
+  }
 
   // Append a streamed assistant chunk, opening a fresh assistant bubble if needed.
   // `meta` (on finalize) carries per-turn stats — { ttft, tokens } — for the footer.
@@ -437,7 +537,61 @@ export function useNammaAgent() {
   function handle(msg) {
     const key = msg.session_id;
     switch (msg.type) {
+      case "turn_queued":
+        // This prompt waits behind a turn still running (or stopping) in the chat.
+        patch(msg.client_ref && dataRef.current[msg.client_ref] ? msg.client_ref : key,
+              () => ({ status: "queued" }));
+        break;
+      case "tools_trimmed":
+      case "context_compacted":
+      case "turn_budget_exceeded": {
+        // Turn notices show in the live activity timeline (the persisted steps
+        // carry the same text, built server-side).
+        const text = msg.type === "tools_trimmed"
+          ? `${(msg.dropped || []).length} tools weren't sent this turn (the provider allows ${msg.limit})`
+          : msg.type === "context_compacted"
+            ? (msg.phase === 1 ? "Cleared old tool outputs to fit the context window"
+                               : "Summarized earlier messages to fit the context window")
+            : `Stopped at the turn token budget (${(msg.tokens || 0).toLocaleString()} of ${(msg.budget || 0).toLocaleString()})`;
+        patch(key, (cur) => ({ timeline: [...cur.timeline, { kind: "notice", text }] }));
+        break;
+      }
+      case "secret_redacted": {
+        // A key pasted into the chat was removed server-side before the model or
+        // transcript saw it — scrub it from this tab's copy of the message too.
+        const labels = (msg.labels || []).join(", ") || "secret";
+        patch(key, (cur) => {
+          const msgs = [...cur.messages];
+          for (let i = msgs.length - 1; i >= 0; i--) {
+            if (msgs[i].role === "user") { msgs[i] = { ...msgs[i], content: msg.text || "(removed)" }; break; }
+          }
+          return { messages: msgs, timeline: [...cur.timeline, { kind: "notice",
+            text: `Removed a pasted ${labels} before it reached the model — use setup mode's secure field` }] };
+        });
+        break;
+      }
+      case "mcp_status":
+        // Background MCP connects: Settings → MCP listens for these.
+        window.dispatchEvent(new CustomEvent("namma-mcp-status", { detail: msg }));
+        break;
+      case "plan_updated":
+        patch(key, (cur) => ({ timeline: [...cur.timeline.filter((t) => t.kind !== "plan"),
+                                          { kind: "plan", plan: msg.plan || [] }] }));
+        break;
+      case "history_changed":
+        // A message was deleted / the chat rewound (maybe in another tab): reload
+        // the open chat unless a turn is streaming into it right now.
+        if (key && key === currentRef.current && !localEditRef.current.has(key)
+            && (dataRef.current[key]?.status || "idle") === "idle") {
+          openSessionRef.current?.(key);
+        }
+        break;
+      case "approval_resolved":
+        // Answered (here or in another tab/window) or expired: drop the card.
+        if (key) patch(key, (cur) => ({ timeline: cur.timeline.filter((t) => !(t.kind === "approval" && t.id === msg.id)) }));
+        break;
       case "session_started": {
+        if (msg.session_id) patch(msg.session_id, (cur) => (cur.status === "queued" ? { status: "thinking" } : {}));
         // Promote the provisional `ref…` slice to the real session id.
         const ref = msg.client_ref, sid = msg.session_id;
         if (ref && sid) {
@@ -501,7 +655,7 @@ export function useNammaAgent() {
               // The finished event carries the authoritative output (it replaces the
               // streamed chunks — same text, plus anything held back mid-stream).
               copy[i] = { ...copy[i], state: msg.ok ? "ok" : "fail", summary: msg.summary,
-                          output: msg.output || copy[i].output };
+                          output: msg.output || copy[i].output, ms: msg.ms };
               break;
             }
           }
@@ -544,12 +698,22 @@ export function useNammaAgent() {
           // Pin the activity timeline (thinking + tool steps) under the reply. Prefer
           // the server's structured steps; fall back to what we accumulated live.
           const steps = (msg.steps && msg.steps.length) ? msg.steps : cur.timeline;
-          return {
-            ...appendToken(cur, msg.content, msg.tools_used || [],
-                           { ttft: msg.ttft, tokens: msg.tokens, cached: msg.cached },
-                           steps),
-            timeline: [], streamId: null, status: "idle",
-          };
+          const done = appendToken(cur, msg.content, msg.tools_used || [],
+                                   { ttft: msg.ttft, tokens: msg.tokens, cached: msg.cached },
+                                   steps);
+          // Stamp the persisted turn ids so message actions can address them.
+          let messages = done.messages;
+          const ai = messages.findIndex((m) => m.id === done.streamId);
+          if (ai >= 0 && msg.assistant_turn_id) messages[ai] = { ...messages[ai], dbId: msg.assistant_turn_id };
+          if (msg.user_turn_id) {
+            for (let i = (ai >= 0 ? ai : messages.length) - 1; i >= 0; i--) {
+              if (messages[i].role === "user") {
+                if (!messages[i].dbId) messages[i] = { ...messages[i], dbId: msg.user_turn_id };
+                break;
+              }
+            }
+          }
+          return { ...done, messages, timeline: [], streamId: null, status: "idle" };
         });
         hfRef.current?.setBusy(false);
         if (handsfreeRef.current && msg.content && key === currentRef.current) {
@@ -583,6 +747,25 @@ export function useNammaAgent() {
         patch(qsid, (cur) => ({ messages: [...cur.messages, { id: nextId(), role: "quiz", quiz, at: now() }] }));
         break;
       }
+      case "subagent": {
+        // A sub-agent run changed state (queued → running → finished). Upsert it
+        // into its chat's run list; a finished background task also brings its
+        // report, which the server already saved into that chat's history.
+        const run = msg.run;
+        if (!key || !run) break;
+        patch(key, (cur) => {
+          const runs = [...(cur.runs || [])];
+          const i = runs.findIndex((r) => r.id === run.id);
+          if (i >= 0) runs[i] = { ...runs[i], ...run }; else runs.unshift(run);
+          const next = { runs };
+          if (msg.report) {
+            next.messages = [...cur.messages,
+              { id: nextId(), role: "assistant", content: msg.report, at: now() }];
+          }
+          return next;
+        });
+        break;
+      }
       case "todo_updated":
         // The agent's live TODO plan (update_todos tool) — full-list replace, so
         // the panel above the message bar always mirrors the latest call.
@@ -608,7 +791,11 @@ export function useNammaAgent() {
         setLearningSignal({ topic_id: msg.topic_id, at: Date.now() });
         break;
       case "stopped":
-        if (key) patch(key, () => ({ status: "idle", streamId: null }));
+        // A running turn takes a moment to wind down: show "Stopping…" until its
+        // turn_result arrives. Nothing was running → idle at once.
+        if (key) patch(key, (cur) => (msg.running
+          ? (cur.status === "idle" ? {} : { status: "stopping" })
+          : { status: "idle", streamId: null }));
         hfRef.current?.setBusy(false);
         break;
       case "error":
@@ -653,7 +840,10 @@ export function useNammaAgent() {
     if (currentSid && !isProvisional(currentSid)) localStorage.setItem(LAST_SESSION_KEY, currentSid);
   }, [currentSid]);
 
-  const send = useCallback((text, attachments = []) => {
+  // opts.keepUpTo (regenerate / edit-and-resend): drop every message from that
+  // index on and append the new prompt in ONE update — never an empty thread
+  // (which would flash the home screen) or a prompt-less one.
+  const send = useCallback((text, attachments = [], opts = {}) => {
     const clean = (text || "").trim();
     if ((!clean && attachments.length === 0) || !wsRef.current || wsRef.current.readyState !== 1) return;
     let payloadText = clean;
@@ -673,7 +863,9 @@ export function useNammaAgent() {
     const model = dataRef.current[key]?.model || activeModelRef.current
       || configuredModelsRef.current[0]?.id || null;
     const userMsg = { id: nextId(), role: "user", content: clean || "(sent attachment)", attachments, at: now() };
-    patch(key, (cur) => ({ messages: [...cur.messages, userMsg], timeline: [], streamId: null, status: "thinking", suggestion: null }));
+    patch(key, (cur) => ({
+      messages: [...(typeof opts.keepUpTo === "number" ? cur.messages.slice(0, opts.keepUpTo) : cur.messages), userMsg],
+      timeline: [], streamId: null, status: "thinking", suggestion: null }));
     hfRef.current?.setBusy(true); // hands-free ignores chatter while the turn runs
     playSound("sent");
     wsRef.current.send(JSON.stringify({
@@ -721,9 +913,11 @@ export function useNammaAgent() {
   const stop = useCallback(() => {
     const key = currentRef.current;
     const sid = key && !isProvisional(key) ? key : null;
-    if (sid && wsRef.current?.readyState === 1) wsRef.current.send(JSON.stringify({ type: "stop", session_id: sid }));
+    const live = sid && wsRef.current?.readyState === 1;
+    if (live) wsRef.current.send(JSON.stringify({ type: "stop", session_id: sid }));
     browserHush();
-    if (key) patch(key, () => ({ status: "idle", streamId: null }));
+    // "Stopping…" until the server's turn_result lands (it ends the turn for real).
+    if (key) patch(key, () => (live ? { status: "stopping" } : { status: "idle", streamId: null }));
   }, [patch]);
 
   // Answer an inline approval card. `scope` is "once" (allow this time) or "session"
@@ -775,6 +969,7 @@ export function useNammaAgent() {
             at: t.created_at ? Date.parse(t.created_at) : undefined,
             // Restore the assistant footer (tools used + stats) and the activity
             // timeline (thinking + tool steps, from turn meta) so both persist on reload.
+            dbId: t.id,
             ...(t.role === "assistant"
               ? { tools: t.tools_used || [], meta: t.meta || null,
                   steps: (t.meta && t.meta.steps) || [] } : {}) }));
@@ -791,6 +986,8 @@ export function useNammaAgent() {
       todos: r.todos || [],
       context: { project: r.project || null, topic: r.topic || null, title: r.title || "" },
     }));
+    // This chat's sub-agent runs (live updates arrive as `subagent` events).
+    listRuns(id).then((rr) => { if (rr?.runs) patch(id, () => ({ runs: rr.runs })); }).catch(() => {});
   }, [patch]);
   const openSessionRef = useRef(openSession);
   openSessionRef.current = openSession;
@@ -834,26 +1031,66 @@ export function useNammaAgent() {
     setActive(modelId); // remember it as the default for future new chats
   }, [patch, setActive]);
 
-  // Switch the brain MID-CHAT: starts a NEW session (fresh context) but keeps the
-  // same on-screen thread — the prior messages stay visible above a divider, and
-  // subsequent turns run on the new model in the new session. Caller confirms first.
-  const switchModelNewSession = useCallback((modelId) => {
+  // A thin labelled divider in the open thread (e.g. "Switched to X").
+  const showDivider = useCallback((text) => {
     const key = currentRef.current;
-    const st = dataRef.current[key];
-    if (!st) { selectModel(modelId); return; }
-    const label = configuredModels.find((m) => m.id === modelId)?.label || modelId;
-    const divider = { id: nextId(), role: "divider", content: `Switched to ${label} · new session`, at: now() };
-    const newKey = "ref" + nextId();
-    setData((all) => {
-      const o = { ...all };
-      o[newKey] = { ...EMPTY, messages: [...(st.messages || []), divider], model: modelId,
-                    context: st.context || null };
-      dataRef.current = o; return o;
-    });
-    setCurrentSid(newKey);
-    setActive(modelId); // remember it as the default for future new chats
-    localStorage.removeItem(LAST_SESSION_KEY); // the new session has no id until its first turn
-  }, [configuredModels, selectModel, setActive, patch]);
+    if (!key) return;
+    patch(key, (cur) => ({ messages: [...cur.messages, { id: nextId(), role: "divider", content: text, at: now() }] }));
+  }, [patch]);
+
+  // ── message actions (Phase 4) ────────────────────────────────────────────────
+  const sendRef = useRef(send);
+  sendRef.current = send;
+  // Chats this tab is rewinding right now: their own history_changed echo must
+  // not reload the thread over the turn that is just starting.
+  const localEditRef = useRef(new Set());
+  const rewindAndSend = async (sid, turnId, keepUpTo, text) => {
+    localEditRef.current.add(sid);
+    try {
+      await truncateFrom(sid, turnId);
+      sendRef.current?.(text, [], { keepUpTo });
+    } finally {
+      setTimeout(() => localEditRef.current.delete(sid), 1500);
+    }
+  };
+  const currentRealSid = () => {
+    const k = currentRef.current;
+    return k && !isProvisional(k) ? k : null;
+  };
+  const regenerate = useCallback(async (aiMsg) => {
+    const sid = currentRealSid();
+    const cur = sid && dataRef.current[sid];
+    if (!cur) return;
+    const idx = cur.messages.findIndex((m) => m.id === aiMsg.id);
+    let u = idx - 1;
+    while (u >= 0 && cur.messages[u].role !== "user") u--;
+    if (u < 0 || !cur.messages[u].dbId) return;
+    const userMsg = cur.messages[u];
+    await rewindAndSend(sid, userMsg.dbId, u, userMsg.content);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const editResend = useCallback(async (userMsg, text) => {
+    const sid = currentRealSid();
+    const cur = sid && dataRef.current[sid];
+    if (!cur || !userMsg.dbId || !text.trim()) return;
+    const idx = cur.messages.findIndex((m) => m.id === userMsg.id);
+    await rewindAndSend(sid, userMsg.dbId, Math.max(0, idx), text);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  const branch = useCallback(async (msg) => {
+    const sid = currentRealSid();
+    if (!sid || !msg.dbId) return;
+    const r = await branchFrom(sid, msg.dbId);
+    if (r?.session_id) {
+      await refreshSessions();
+      setCurrentSid(r.session_id);
+      openSessionRef.current?.(r.session_id);
+    }
+  }, [refreshSessions]);
+  const removeMessage = useCallback(async (msg) => {
+    const sid = currentRealSid();
+    if (!sid || !msg.dbId) return;
+    const r = await deleteTurn(sid, msg.dbId);
+    if (r?.ok) patch(sid, (c) => ({ messages: c.messages.filter((m) => m.id !== msg.id) }));
+  }, [patch]);
 
   // Show a local (client-only) assistant message — used by /help and /clear.
   const showLocal = useCallback((content) => {
@@ -866,14 +1103,16 @@ export function useNammaAgent() {
   return {
     connected, messages: cur.messages, timeline: cur.timeline, status: cur.status,
     todos: cur.todos || [],
+    runs: cur.runs || [],
     chatContext: cur.context || null, suggestion: cur.suggestion || null, learningSignal,
     passwordReq, mode, setMode, sessions, shuttingDown,
     voiceOn, setVoiceOn,
     handsfree, setHandsfree, handsfreeStatus,
     configuredModels, currentModel: cur.model || activeModel || configuredModels[0]?.id || "",
-    activeModel, setActiveModel: setActive, selectModel, switchModelNewSession, reloadConfiguredModels,
+    activeModel, setActiveModel: setActive, selectModel, showDivider, reloadConfiguredModels,
     chatHasTurns: (cur.messages || []).some((m) => m.role === "user"),
-    send, sendToSession, stop, respondApproval, respondPassword, openSession, newChat, refreshSessions, removeSession, showLocal,
+    send, sendToSession, stop, respondApproval,
+    regenerate, editResend, branch, removeMessage, respondPassword, openSession, newChat, refreshSessions, removeSession, showLocal,
     currentSessionId: () => (currentRef.current && !isProvisional(currentRef.current) ? currentRef.current : null),
   };
 }

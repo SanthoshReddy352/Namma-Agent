@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { StepList, StatusIcon } from "./Activity.jsx";
+import { IconClock } from "@tabler/icons-react";
 
 // Live "what the assistant is doing" panel during a turn: streamed thinking,
 // spoken preambles, tool steps (running/ok/fail), and inline approval prompts.
@@ -28,13 +29,10 @@ export default function Timeline({ items, onApprove }) {
   return (
     <div className="flex gap-3 animate-rise">
       <div className="h-7 w-7 shrink-0" />
-      <div className="flex-1 min-w-0 rounded-2xl border border-line dark:border-night-line bg-paper-panel dark:bg-night-panel shadow-soft overflow-hidden">
-        <div className="flex items-center gap-2 px-3.5 py-2 text-[12.5px] font-medium text-ink-soft dark:text-night-ink border-b border-line/70 dark:border-night-line/70">
+      <div className="flex-1 min-w-0 rounded-2xl border border-border bg-surface-raised shadow-soft overflow-hidden">
+        <div className="flex items-center gap-2 px-3.5 py-2 text-sm font-medium text-fg-soft border-b border-border/70">
           {awaitingApproval ? (
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
-                 strokeLinecap="round" strokeLinejoin="round" className="text-amber-500">
-              <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 3" />
-            </svg>
+            <IconClock size={14} stroke={2} className="text-amber-500" aria-hidden="true" />
           ) : (
             <StatusIcon state="running" />
           )}

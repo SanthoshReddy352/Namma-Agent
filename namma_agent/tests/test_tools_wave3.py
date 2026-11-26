@@ -8,7 +8,6 @@ import json
 
 import pytest
 
-from namma_agent.core.safety import is_destructive
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.tools import load_tools
 from namma_agent.tools import news as newsmod
@@ -77,7 +76,7 @@ def test_ha_get_state(monkeypatch):
 
 def test_ha_mutators_destructive(reg):
     for name in ("ha_turn_on", "ha_turn_off", "ha_set_temperature"):
-        assert reg.get(name).destructive is True and is_destructive(name)
+        assert reg.get(name).destructive is True
     assert reg.get("ha_get_state").destructive is False
 
 

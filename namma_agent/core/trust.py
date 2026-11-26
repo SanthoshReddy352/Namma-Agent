@@ -83,6 +83,51 @@ def get_message_trust() -> str:
     return _TRUST.get()
 
 
+# -- approval policies for turns with nobody to ask -------------------------
+
+def decline_all(_name: str, _args: dict) -> bool:
+    """Approval callback for unattended turns (routines, watchers, the HTTP
+    ``/v1`` API, untrusted channels): every destructive tool is declined.
+
+    Marked with ``declines_all`` so ``NammaAgentService.run_turn`` can tell it
+    apart from an interactive callback — Auto mode replaces an interactive
+    prompt, but it must NEVER turn an explicit "always decline" into "allow"."""
+    return False
+
+
+decline_all.declines_all = True  # type: ignore[attr-defined]
+
+
+def allow_all(_name: str, _args: dict) -> bool:
+    """Approval callback that allows every destructive tool (owner channels,
+    Auto mode). Passing it explicitly keeps the agent's gate (and its audit
+    trail) in the loop, unlike ``approval=None`` which skips the gate."""
+    return True
+
+
+def is_decline_all(approval) -> bool:
+    return bool(getattr(approval, "declines_all", False))
+
+
+def channel_approval(level: str, config: dict | None = None):
+    """The approval policy for a remote-channel turn at trust ``level``.
+
+    Remote channels have no approval round-trip, so the policy is fixed:
+      * ``owner``     — allowed (the pinned owner account; full capability).
+      * ``trusted``   — declined, unless ``comms.trusted_can_run_destructive``
+                        is true in config (an explicit opt-in).
+      * ``untrusted`` — declined (destructive tools are also stripped from the
+                        model's view upstream).
+    """
+    level = normalize_trust(level) or "untrusted"
+    if level == "owner":
+        return allow_all
+    if level == "trusted" and bool(
+            ((config or {}).get("comms") or {}).get("trusted_can_run_destructive", False)):
+        return allow_all
+    return decline_all
+
+
 # -- the guarded delimiter --------------------------------------------------
 
 UNTRUSTED_BEGIN = "<<<UNTRUSTED CONTENT BEGIN>>>"

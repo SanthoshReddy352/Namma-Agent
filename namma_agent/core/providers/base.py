@@ -117,6 +117,21 @@ class Provider(ABC):
     #: Short stable identifier used in logs and :class:`LLMResponse.provider`.
     name: str = "base"
 
+    #: Record each ``generate`` call's usage in the usage log (core/usage.py).
+    #: Wrappers that delegate to other providers (the fallback chain) set this
+    #: False so a call is counted once, by the provider that actually ran it.
+    _metered: bool = True
+
+    def __init_subclass__(cls, **kwargs: Any) -> None:
+        super().__init_subclass__(**kwargs)
+        gen = cls.__dict__.get("generate")
+        if (gen is not None and cls.__dict__.get("_metered", True)
+                and not getattr(gen, "__namma_metered__", False)
+                and not getattr(gen, "__isabstractmethod__", False)):
+            from namma_agent.core.usage import metered
+
+            cls.generate = metered(gen)
+
     def __init__(
         self,
         model: str,

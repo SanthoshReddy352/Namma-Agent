@@ -47,7 +47,10 @@ def _run(cmd: str, timeout: int, password: str | None = None) -> subprocess.Comp
     if res.timed_out:
         raise subprocess.TimeoutExpired(cmd, timeout, output=res.output)
     out = res.output
-    if res.died:
+    if res.cancelled:
+        out += ("\n[stopped by the user — the command was killed; a fresh shell starts "
+                "on the next call]")
+    elif res.died:
         out += ("\n[the shell process exited during this command — a fresh shell "
                 "(home directory, clean environment) starts on the next call]")
     return subprocess.CompletedProcess(args=cmd, returncode=res.exit_code,

@@ -30,6 +30,20 @@ class Tool:
     destructive: bool = False  # gated behind approval when True
     category: str = "general"  # toolset grouping (the Toolsets tab)
     enabled: bool = True  # set from the persisted disabled-set (Toolsets tab)
+    # Optional availability check: returns "" when the tool can work, else the
+    # reason it can't (lab mode off, Home Assistant not configured, …). An
+    # unavailable tool stays registered (and listed in the Toolsets tab) but is
+    # never shown to the model, so it costs no prompt tokens. Re-checked per
+    # turn, so enabling the feature in config makes it appear live.
+    requires: Optional[Callable[[], str]] = None
+
+    def unavailable_reason(self) -> str:
+        if self.requires is None:
+            return ""
+        try:
+            return str(self.requires() or "")
+        except Exception as exc:  # noqa: BLE001 — a broken check hides the tool
+            return f"availability check failed: {exc}"
 
     def one_line(self, width: int = 200) -> str:
         desc = " ".join((self.description or "").split())
@@ -81,7 +95,7 @@ class ToolRegistry:
         # Tools the user turned off in the Toolsets tab — excluded from the
         # definitions the agent sees and refused by execute(), but still listed
         # in the UI so they can be re-enabled. Persisted by the caller
-        # (config.local.yaml: tools.disabled).
+        # (user_config.yaml: tools.disabled).
         self._disabled: set[str] = {str(n).strip() for n in (disabled or []) if str(n).strip()}
         # Toolset assigned to tools registered while no explicit category is given;
         # load_tools() flips this per module so each tool inherits its module name.
@@ -109,13 +123,14 @@ class ToolRegistry:
         handler: Handler,
         destructive: bool = False,
         category: str = "",
+        requires: Optional[Callable[[], str]] = None,
     ) -> Tool:
         if not name:
             raise ValueError("tool name is required")
         tool = Tool(name=name, description=description, parameters=parameters,
                     handler=handler, destructive=destructive,
                     category=category or self._default_category,
-                    enabled=name not in self._disabled)
+                    enabled=name not in self._disabled, requires=requires)
         self._tools[name] = tool
         logger.debug("[tools] registered %s", name)
         return tool
@@ -158,11 +173,44 @@ class ToolRegistry:
         tool names) to expose just a scoped subset — fewer, more relevant tools sharpen
         the model's tool selection and shrink the prompt. Unknown names in ``only`` are
         ignored; the registration order is preserved. Tools the user disabled in the
-        Toolsets tab are always excluded — the model never sees them."""
-        tools = [t for t in self._tools.values() if t.enabled]
+        Toolsets tab are always excluded — the model never sees them — and so are
+        tools whose ``requires`` check says they can't work right now."""
+        tools = [t for t in self._tools.values() if t.enabled and not t.unavailable_reason()]
         if only is not None:
             tools = [t for t in tools if t.name in only]
         return [t.definition() for t in tools]
+
+    def cap_definitions(self, defs: list[dict], limit: int) -> tuple[list[dict], list[str]]:
+        """Trim ``defs`` to at most ``limit`` tools for ONE provider request.
+
+        OpenAI (and Gemini/Vertex) reject a request with more than 128 tools
+        ("array too long … maximum length 128") — a large MCP server such as
+        GitHub's pushes Namma's ~110 native tools over that line and every call
+        fails. Trimming keeps the native tools and drops MCP tools first (the
+        most recently registered first), then anything else from the end.
+        Returns ``(kept, dropped_names)``; ``limit <= 0`` disables the cap.
+        Stopgap until tool search lands (PROGRESS.md, Phase 2)."""
+        if limit <= 0 or len(defs) <= limit:
+            return defs, []
+        excess = len(defs) - limit
+
+        def _is_mcp(d: dict) -> bool:
+            tool = self._tools.get(d.get("name", ""))
+            return (tool is not None and tool.category == "mcp") or d.get("name", "").startswith("mcp_")
+
+        drop: set[int] = set()
+        for i in range(len(defs) - 1, -1, -1):  # MCP tools first, newest first
+            if len(drop) >= excess:
+                break
+            if _is_mcp(defs[i]):
+                drop.add(i)
+        for i in range(len(defs) - 1, -1, -1):  # then anything, from the end
+            if len(drop) >= excess:
+                break
+            drop.add(i)
+        kept = [d for i, d in enumerate(defs) if i not in drop]
+        dropped = [defs[i]["name"] for i in sorted(drop)]
+        return kept, dropped
 
     # -- enable / disable (the Toolsets tab) -------------------------------
 
@@ -202,6 +250,7 @@ class ToolRegistry:
                 "category": t.category or "general",
                 "destructive": t.destructive,
                 "enabled": t.enabled,
+                "unavailable": t.unavailable_reason(),
             }
             for t in self.all()
         ]

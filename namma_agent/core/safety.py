@@ -9,7 +9,11 @@ Two concerns survive into the cloud-only design (the rest was the model's job):
     ``Program Files``, ``/usr``, ``/etc`` …) so the agent can't corrupt the OS or
     your installed programs — those stay effectively read-only. A short list of
     SECRET files (ssh / gpg / aws keys, ``/etc/shadow`` …) is blocked for reads too.
-  * :func:`is_destructive` — classify tools that should be approval-gated.
+    The app's OWN install directory is the exception: the agent may edit its own
+    files even when installed under ``/opt`` or ``Program Files`` (every write
+    tool is approval-gated), so it can maintain and configure itself.
+
+Approval gating itself is the ``destructive=True`` flag on a registered tool.
 
 Tune it from ``config.yaml`` under ``security.filesystem`` (see
 :func:`configure_path_security`). Prompt-level policy (URL judgment, website
@@ -65,13 +69,21 @@ class PathSecurity:
     """Filesystem access policy. ``validate(path, write=...)`` is the gate."""
 
     def __init__(self, write_roots: Sequence[str] | None = None,
-                 secret_markers: Sequence[str] | None = None):
+                 secret_markers: Sequence[str] | None = None,
+                 app_roots: Sequence[str] | None = None):
         roots = list(write_roots) if write_roots is not None else _default_write_roots()
         self._write_roots: list[str] = []
         for r in roots:
             try:
                 self._write_roots.append(_fold(str(Path(r).expanduser().resolve())).rstrip("/\\"))
             except Exception:  # noqa: BLE001 — skip an unresolvable root
+                continue
+        # The app's own trees: writable even inside a protected root.
+        self._app_roots: list[str] = []
+        for r in (app_roots if app_roots is not None else _default_app_roots()):
+            try:
+                self._app_roots.append(_fold(str(Path(r).expanduser().resolve())).rstrip("/\\"))
+            except Exception:  # noqa: BLE001
                 continue
         markers = secret_markers if secret_markers is not None else _SECRET_MARKERS
         self._secret_markers = [m.lower() for m in markers]
@@ -81,8 +93,10 @@ class PathSecurity:
             return False, "empty path"
         if "\x00" in path:
             return False, "null byte in path"
-        if ".." in Path(path).parts:
-            return False, "path traversal (..)"
+        # ``..`` is fine: the policy below is checked on the RESOLVED path
+        # (symlinks and ``..`` already collapsed), which is what traversal
+        # protection actually needs — rejecting the literal ``..`` only broke
+        # legitimate relative paths like ``../notes.md``.
         try:
             resolved = str(Path(path).expanduser().resolve())
         except Exception as exc:  # noqa: BLE001
@@ -94,12 +108,26 @@ class PathSecurity:
             return False, f"blocked: secret path ({resolved})"
 
         # Reads may go anywhere else. Writes are refused inside system/software trees.
-        if write:
+        if write and not self._inside(folded, self._app_roots):
             for root in self._write_roots:
                 if folded == root or folded.startswith(root + os.sep):
                     return False, (f"read-only system path — writing inside {root!r} "
                                    f"is blocked to protect the OS/installed software: {resolved}")
         return True, ""
+
+
+    @staticmethod
+    def _inside(folded: str, roots: list[str]) -> bool:
+        return any(folded == r or folded.startswith(r + os.sep) for r in roots)
+
+
+def _default_app_roots() -> list[str]:
+    """The app's own install tree (repo root / install dir) and its data dir."""
+    roots = [str(Path(__file__).resolve().parent.parent.parent)]
+    data = os.environ.get("NAMMA_DATA_DIR", "").strip()
+    if data:
+        roots.append(data)
+    return roots
 
 
 _default = PathSecurity()
@@ -134,23 +162,3 @@ def configure_path_security(security_config: dict | None = None) -> None:
 def check_path(path: str, write: bool = False) -> tuple[bool, str]:
     """Validate a path for reading (default) or writing (``write=True``)."""
     return _default.validate(path, write=write)
-
-
-_DESTRUCTIVE = {
-    "delete_file", "write_file", "run_shell", "run_command", "install_package",
-    "kill_process", "modify_system",
-    # active security scanning — approval-gated even inside lab_mode
-    "port_scan", "ping_sweep", "dir_enum", "dns_enum",
-    # smart-home device changes + reminder deletion
-    "ha_turn_on", "ha_turn_off", "ha_set_temperature", "remove_reminder",
-    # memory deletion
-    "forget_fact",
-    # task/goal deletion
-    "remove_task", "remove_goal",
-    # persona deletion
-    "delete_persona",
-}
-
-
-def is_destructive(tool_name: str) -> bool:
-    return tool_name in _DESTRUCTIVE

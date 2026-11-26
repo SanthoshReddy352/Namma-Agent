@@ -465,7 +465,7 @@ def test_service_consolidate_settings_roundtrip(svc, monkeypatch, tmp_path):
     assert out["consolidate_background"] is False
     assert svc.engram.scheduler.idle_minutes == 45.0
     assert svc.engram.scheduler.daily_at == "02:15"
-    local = (tmp_path / "config.local.yaml").read_text(encoding="utf-8")
+    local = cfg.user_config_file().read_text(encoding="utf-8")
     assert "background: false" in local and "daily_at: 02:15" in local
     # malformed time is ignored, valid state untouched
     svc.save_memory_settings({"daily_at": "25:99"})

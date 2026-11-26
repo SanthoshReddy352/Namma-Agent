@@ -148,12 +148,15 @@ else
 fi
 
 say "7/10 Server-lite config profile"
-if [ ! -f "$INSTALL_DIR/namma_agent/config.local.yaml" ]; then
+# Your settings live in ONE user config in the data dir (data/user_config.yaml);
+# an older install's namma_agent/config.local.yaml is migrated into it by the app.
+if [ ! -f "$INSTALL_DIR/data/user_config.yaml" ] && [ ! -f "$INSTALL_DIR/namma_agent/config.local.yaml" ]; then
+  run mkdir -p "$INSTALL_DIR/data"
   run cp "$INSTALL_DIR/deploy/config.server-lite.yaml" \
-        "$INSTALL_DIR/namma_agent/config.local.yaml"
+        "$INSTALL_DIR/data/user_config.yaml"
   echo "applied deploy/config.server-lite.yaml (1 GB-friendly defaults)"
 else
-  echo "config.local.yaml exists — keeping your settings"
+  echo "user config exists — keeping your settings"
 fi
 
 say "8/10 Access token"

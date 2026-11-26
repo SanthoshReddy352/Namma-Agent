@@ -16,7 +16,7 @@ import json
 import sqlite3
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -157,6 +157,53 @@ CREATE TABLE IF NOT EXISTS scope_memory (
 );
 CREATE VIRTUAL TABLE IF NOT EXISTS scope_memory_fts USING fts5(content);
 
+-- One row per model call (core/usage.py): chat-loop steps AND background work
+-- (compaction, memory writer, titles, summaries, watcher gate, ...).
+CREATE TABLE IF NOT EXISTS usage_log (
+    id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at         TEXT NOT NULL,
+    session_id         TEXT,
+    kind               TEXT NOT NULL,
+    step               INTEGER DEFAULT 0,
+    provider           TEXT,
+    model              TEXT,
+    input_tokens       INTEGER DEFAULT 0,
+    output_tokens      INTEGER DEFAULT 0,
+    cache_read_tokens  INTEGER DEFAULT 0,
+    cache_write_tokens INTEGER DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_usage_created ON usage_log(created_at);
+
+-- Delegation runtime (core/delegation.py): one row per sub-agent run —
+-- delegate_task children (incl. fan-out and nested orchestrator children) and
+-- background tasks. ``meta`` holds the spec (toolsets, skills, budget, context).
+CREATE TABLE IF NOT EXISTS subagent_runs (
+    id               TEXT PRIMARY KEY,
+    parent_id        TEXT,
+    root_id          TEXT,
+    kind             TEXT NOT NULL,            -- 'delegate' | 'background'
+    role             TEXT NOT NULL,            -- 'leaf' | 'orchestrator'
+    depth            INTEGER NOT NULL DEFAULT 1,
+    name             TEXT,
+    goal             TEXT NOT NULL,
+    status           TEXT NOT NULL,
+    exit_reason      TEXT,
+    summary          TEXT,
+    truncated        INTEGER DEFAULT 0,
+    error            TEXT,
+    session_id       TEXT,                     -- the parent chat
+    child_session_id TEXT,                     -- the run's own hidden transcript
+    tools_used       TEXT,
+    steps            INTEGER DEFAULT 0,
+    meta             TEXT,
+    created_at       TEXT NOT NULL,
+    started_at       TEXT,
+    finished_at      TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_runs_session ON subagent_runs(session_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_runs_parent ON subagent_runs(parent_id);
+CREATE INDEX IF NOT EXISTS idx_usage_session ON usage_log(session_id, id);
+
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, id);
 CREATE INDEX IF NOT EXISTS idx_audit_tool ON audit(tool_name);
 CREATE INDEX IF NOT EXISTS idx_scope_memory ON scope_memory(scope_type, scope_id);
@@ -188,6 +235,43 @@ _SESSION_MIGRATIONS = [
     # reloads, shown in the message footer. JSON: {"ttft": float, "tokens": int}.
     "ALTER TABLE turns ADD COLUMN meta TEXT",
 ]
+
+
+#: Tools whose calls are bookkeeping, not actions worth recalling next turn.
+_TRACE_SKIP = {"update_todos", "use_skill", "tool_search", "tool_describe", "ui_guide"}
+#: Argument keys that identify WHAT a tool acted on, in priority order.
+_TRACE_KEYS = ("path", "src", "dst", "dest", "name", "title", "query", "url", "command",
+               "text", "to", "id", "when", "goal")
+
+
+def action_record(steps: list) -> str:
+    """One compact line per real tool call: ``tool(key=value) → ok: summary``."""
+    lines = []
+    for st in steps:
+        if not isinstance(st, dict) or st.get("kind") != "tool":
+            continue
+        tool = st.get("tool") or "?"
+        if tool in _TRACE_SKIP:
+            continue
+        args = st.get("args") if isinstance(st.get("args"), dict) else {}
+        shown = []
+        for k in _TRACE_KEYS:
+            v = args.get(k)
+            if v in (None, "", [], {}):
+                continue
+            v = str(v).replace("\n", " ")
+            shown.append(f"{k}={v[:100] + '…' if len(v) > 100 else v}")
+            if len(shown) == 2:
+                break
+        summary = str(st.get("summary") or "").replace("\n", " ")[:120]
+        state = st.get("state") or "?"
+        lines.append(f"- {tool}({', '.join(shown)}) → {state}" + (f": {summary}" if summary else ""))
+        if len(lines) >= 12:
+            lines.append("- …")
+            break
+    if not lines:
+        return ""
+    return "[actions: tools that really ran in this turn]\n" + "\n".join(lines)
 
 
 class Database:
@@ -269,7 +353,8 @@ class Database:
 
     def add_turn(self, session_id: str, role: str, content: str,
                  tools_used: Optional[list[str]] = None,
-                 meta: Optional[dict] = None) -> None:
+                 meta: Optional[dict] = None) -> int:
+        """Append a turn; returns its row id (message actions address turns by it)."""
         with self._lock:
             cur = self.conn.execute(
                 "INSERT INTO turns (session_id, role, content, tools_used, meta, created_at) "
@@ -285,9 +370,74 @@ class Database:
                     (cur.lastrowid, content),
                 )
             self.conn.commit()
+            turn_id = int(cur.lastrowid)
         self.touch_session(session_id)
+        return turn_id
 
-    def recent_turns(self, session_id: str, limit: int = 12) -> list[dict]:
+    # -- message actions (Phase 4: regenerate / edit / branch / delete) ---------
+
+    def delete_turn(self, session_id: str, turn_id: int) -> bool:
+        with self._lock:
+            cur = self.conn.execute("DELETE FROM turns WHERE session_id=? AND id=?",
+                                    (session_id, int(turn_id)))
+            if cur.rowcount:
+                self.conn.execute("DELETE FROM turns_fts WHERE rowid=?", (int(turn_id),))
+            self.conn.commit()
+        return cur.rowcount > 0
+
+    def delete_turns_from(self, session_id: str, turn_id: int) -> int:
+        """Delete ``turn_id`` and every later turn of the session (regenerate /
+        edit-and-resend rewind the chat to that point). A rolling-compaction
+        summary that covered the removed turns is dropped too."""
+        with self._lock:
+            ids = [r["id"] for r in self.conn.execute(
+                "SELECT id FROM turns WHERE session_id=? AND id>=?",
+                (session_id, int(turn_id))).fetchall()]
+            if ids:
+                self.conn.executemany("DELETE FROM turns_fts WHERE rowid=?", [(i,) for i in ids])
+                self.conn.execute("DELETE FROM turns WHERE session_id=? AND id>=?",
+                                  (session_id, int(turn_id)))
+                self.conn.execute(
+                    "UPDATE sessions SET compact_summary=NULL, compact_upto=0 "
+                    "WHERE id=? AND compact_upto>=?", (session_id, int(turn_id)))
+            self.conn.commit()
+        return len(ids)
+
+    def branch_session(self, session_id: str, upto_turn_id: int) -> Optional[str]:
+        """A new chat holding a copy of this one up to (and including)
+        ``upto_turn_id`` — same kind, project, model and persona."""
+        src = self.get_session(session_id)
+        if not src:
+            return None
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT role, content, tools_used, meta, created_at FROM turns "
+                "WHERE session_id=? AND id<=? ORDER BY id",
+                (session_id, int(upto_turn_id))).fetchall()
+        if not rows:
+            return None
+        new_id = self.create_session_in(project_id=src.get("project_id"),
+                                        kind=src.get("kind") or "chat",
+                                        persona=src.get("persona") or "core")
+        if src.get("model"):
+            self.set_session_model(new_id, src["model"])
+        title = (src.get("title") or "").strip()
+        with self._lock:
+            self.conn.execute("UPDATE sessions SET title=? WHERE id=?",
+                              (f"↳ {title}" if title else "↳ Branch", new_id))
+            for r in rows:
+                cur = self.conn.execute(
+                    "INSERT INTO turns (session_id, role, content, tools_used, meta, created_at) "
+                    "VALUES (?,?,?,?,?,?)",
+                    (new_id, r["role"], r["content"], r["tools_used"], r["meta"], r["created_at"]))
+                if r["role"] in ("user", "assistant"):
+                    self.conn.execute("INSERT INTO turns_fts (rowid, content) VALUES (?,?)",
+                                      (cur.lastrowid, r["content"]))
+            self.conn.commit()
+        return new_id
+
+    def recent_turns(self, session_id: str, limit: int = 12,
+                     with_actions: bool = False) -> list[dict]:
         """Return the last ``limit`` turns in chronological order. Only real
         conversation roles — UI-only turns (e.g. persisted 'quiz' cards) never
         enter the model's message history.
@@ -295,10 +445,16 @@ class Database:
         Empty assistant turns are dropped: a row with no content and no tool
         calls (the trace of an interrupted/failed turn) would translate into an
         assistant message the providers reject ("content or tool_calls must be
-        set")."""
+        set").
+
+        ``with_actions`` appends an ``[actions: …]`` record of the tools each
+        assistant turn really ran (from its persisted steps), so a follow-up
+        ("undo that", "delete the folder") knows WHAT was done and WHERE — the
+        final text alone often omits paths, and the honesty rule otherwise makes
+        the model distrust its own earlier claims."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT role, content FROM turns WHERE session_id=? "
+                "SELECT role, content, meta FROM turns WHERE session_id=? "
                 "AND role IN ('user','assistant') ORDER BY id DESC LIMIT ?",
                 (session_id, limit),
             ).fetchall()
@@ -306,7 +462,16 @@ class Database:
         for r in reversed(rows):
             if r["role"] == "assistant" and not (r["content"] or "").strip():
                 continue
-            turns.append({"role": r["role"], "content": r["content"]})
+            content = r["content"]
+            if with_actions and r["role"] == "assistant" and r["meta"]:
+                try:
+                    steps = (json.loads(r["meta"]) or {}).get("steps") or []
+                except (ValueError, TypeError, AttributeError):
+                    steps = []
+                record = action_record(steps)
+                if record:
+                    content = f"{content}\n\n{record}"
+            turns.append({"role": r["role"], "content": content})
         return turns
 
     # -- rolling context compaction -----------------------------------------
@@ -457,7 +622,7 @@ class Database:
         reloaded chat shows the same footer (time-to-first-token, tokens, tools used)."""
         with self._lock:
             rows = self.conn.execute(
-                "SELECT role, content, tools_used, meta, created_at FROM turns "
+                "SELECT id, role, content, tools_used, meta, created_at FROM turns "
                 "WHERE session_id=? ORDER BY id LIMIT ?",
                 (session_id, limit),
             ).fetchall()
@@ -471,7 +636,7 @@ class Database:
                 meta = json.loads(r["meta"]) if r["meta"] else None
             except (ValueError, TypeError):
                 meta = None
-            out.append({"role": r["role"], "content": r["content"], "tools_used": tools,
+            out.append({"id": r["id"], "role": r["role"], "content": r["content"], "tools_used": tools,
                         "meta": meta, "created_at": r["created_at"]})
         return out
 
@@ -1195,6 +1360,146 @@ class Database:
         day_rows = [{"date": d, **v} for d, v in
                     sorted(by_day.items(), reverse=True)[:max(1, int(days))]]
         return {"total": total, "days": day_rows}
+
+    # -- delegation runs (core/delegation.py) --------------------------------
+
+    _RUN_COLUMNS = ("id", "parent_id", "root_id", "kind", "role", "depth", "name", "goal",
+                    "status", "exit_reason", "summary", "truncated", "error", "session_id",
+                    "child_session_id", "tools_used", "steps", "meta", "created_at",
+                    "started_at", "finished_at")
+
+    def save_run(self, run: dict) -> None:
+        """Insert or replace one sub-agent run (``tools_used``/``meta`` as Python
+        objects; serialized here)."""
+        row = {k: run.get(k) for k in self._RUN_COLUMNS}
+        row["tools_used"] = json.dumps(run.get("tools_used") or [])
+        row["meta"] = json.dumps(run.get("meta") or {}, default=str)
+        row["truncated"] = int(bool(run.get("truncated")))
+        row["created_at"] = row["created_at"] or _now()
+        cols = ", ".join(self._RUN_COLUMNS)
+        marks = ", ".join("?" for _ in self._RUN_COLUMNS)
+        with self._lock:
+            self.conn.execute(f"INSERT OR REPLACE INTO subagent_runs ({cols}) VALUES ({marks})",
+                              [row[k] for k in self._RUN_COLUMNS])
+            self.conn.commit()
+
+    @staticmethod
+    def _run_row(r) -> dict:
+        d = dict(r)
+        for key, default in (("tools_used", []), ("meta", {})):
+            try:
+                d[key] = json.loads(d.get(key) or "null") or default
+            except ValueError:
+                d[key] = default
+        d["truncated"] = bool(d.get("truncated"))
+        return d
+
+    def get_run(self, run_id: str) -> Optional[dict]:
+        with self._lock:
+            r = self.conn.execute("SELECT * FROM subagent_runs WHERE id=?",
+                                  (run_id,)).fetchone()
+        return self._run_row(r) if r else None
+
+    def list_runs(self, session_id: str = "", kind: str = "", limit: int = 100) -> list[dict]:
+        """Newest first; optionally one chat's runs and/or one kind."""
+        sql, params = "SELECT * FROM subagent_runs", []
+        where = []
+        if session_id:
+            where.append("session_id = ?")
+            params.append(session_id)
+        if kind:
+            where.append("kind = ?")
+            params.append(kind)
+        if where:
+            sql += " WHERE " + " AND ".join(where)
+        sql += " ORDER BY created_at DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 1000)))
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [self._run_row(r) for r in rows]
+
+    def interrupt_unfinished_runs(self) -> int:
+        """Boot: runs the previous process left queued/running can't resume —
+        their threads died with it. Mark them ``interrupted``."""
+        with self._lock:
+            cur = self.conn.execute(
+                "UPDATE subagent_runs SET status='interrupted', "
+                "exit_reason='interrupted', "
+                "error='the app restarted while this run was in progress', "
+                "finished_at=? WHERE status IN ('queued', 'running')", (_now(),))
+            self.conn.commit()
+        return cur.rowcount or 0
+
+    # -- per-request usage log (core/usage.py) ------------------------------
+
+    #: Rows older than this are pruned when the log is written to.
+    USAGE_RETENTION_DAYS = 90
+
+    def log_usage(self, *, kind: str, session_id: str = "", step: int = 0,
+                  provider: str = "", model: str = "",
+                  usage: Optional[dict] = None) -> None:
+        """Append one model call's normalized usage (see providers.base.USAGE_KEYS)."""
+        u = usage or {}
+        vals = [int(u.get(k, 0) or 0) for k in
+                ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")]
+        if not any(vals):
+            return
+        with self._lock:
+            cur = self.conn.execute(
+                "INSERT INTO usage_log (created_at, session_id, kind, step, provider, "
+                "model, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (_now(), session_id or None, kind or "background", int(step or 0),
+                 provider or "", model or "", *vals))
+            # Cheap periodic retention: every 500th row prunes the old tail.
+            if (cur.lastrowid or 0) % 500 == 0:
+                cutoff = (datetime.now(timezone.utc)
+                          - timedelta(days=self.USAGE_RETENTION_DAYS)).isoformat()
+                self.conn.execute("DELETE FROM usage_log WHERE created_at < ?", (cutoff,))
+            self.conn.commit()
+
+    def usage_requests(self, session_id: str = "", limit: int = 100) -> list[dict]:
+        """The newest model calls (optionally for one chat), newest first."""
+        sql = ("SELECT id, created_at, session_id, kind, step, provider, model, "
+               "input_tokens, output_tokens, cache_read_tokens, cache_write_tokens "
+               "FROM usage_log")
+        params: list = []
+        if session_id:
+            sql += " WHERE session_id = ?"
+            params.append(session_id)
+        sql += " ORDER BY id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 2000)))
+        with self._lock:
+            rows = self.conn.execute(sql, params).fetchall()
+        return [dict(r) for r in rows]
+
+    def usage_breakdown(self, days: int = 7) -> dict:
+        """Usage over the last ``days`` grouped by kind, with the cache-read ratio
+        (cache reads / all input-side tokens) — the Phase 2 efficiency metric."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(days=max(1, int(days)))).isoformat()
+        with self._lock:
+            rows = self.conn.execute(
+                "SELECT kind, count(*) AS calls, sum(input_tokens) AS input_tokens, "
+                "sum(output_tokens) AS output_tokens, "
+                "sum(cache_read_tokens) AS cache_read_tokens, "
+                "sum(cache_write_tokens) AS cache_write_tokens "
+                "FROM usage_log WHERE created_at >= ? GROUP BY kind", (cutoff,)).fetchall()
+        kinds = []
+        total = {"calls": 0, "input_tokens": 0, "output_tokens": 0,
+                 "cache_read_tokens": 0, "cache_write_tokens": 0}
+        for r in rows:
+            item = {k: int(r[k] or 0) for k in total}
+            item["kind"] = r["kind"]
+            kinds.append(item)
+            for k in total:
+                total[k] += item[k]
+        kinds.sort(key=lambda k: -(k["input_tokens"] + k["output_tokens"]
+                                   + k["cache_read_tokens"] + k["cache_write_tokens"]))
+        prompt_side = (total["input_tokens"] + total["cache_read_tokens"]
+                       + total["cache_write_tokens"])
+        total["cache_read_ratio"] = (round(total["cache_read_tokens"] / prompt_side, 3)
+                                     if prompt_side else 0.0)
+        return {"days": int(days), "total": total, "kinds": kinds}
 
     def log_audit(self, session_id: Optional[str], tool_name: str, args: dict,
                   result_summary: str, success: bool = True) -> None:

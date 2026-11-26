@@ -62,7 +62,7 @@ def _wait_done(reg, task_id, timeout=5.0):
     deadline = time.time() + timeout
     while time.time() < deadline:
         r = reg.execute("check_background_task", {"id": task_id})
-        if r.data and r.data.get("status") != "running":
+        if r.data and r.data.get("status") not in ("queued", "running"):
             return r
         time.sleep(0.02)
     raise AssertionError("background task never finished")
@@ -74,7 +74,7 @@ def test_background_task_runs_and_notifies(wired):
     r = reg.execute("background_task", {"task": "compute the answer", "name": "answer"})
     assert r.ok and r.data.get("id")
     done = _wait_done(reg, r.data["id"])
-    assert done.data["status"] == "done" and done.content == "Finding: 42."
+    assert done.data["status"] == "completed" and done.content == "Finding: 42."
     # give the notifier a beat — it fires right after the status flips
     deadline = time.time() + 2
     while not comms.sent and time.time() < deadline:
@@ -114,7 +114,7 @@ def test_check_without_id_lists_tasks(wired):
     r = reg.execute("background_task", {"task": "t", "name": "listed"})
     _wait_done(reg, r.data["id"])
     listing = reg.execute("check_background_task", {})
-    assert "listed" in listing.content and "done" in listing.content
+    assert "listed" in listing.content and "completed" in listing.content
 
 
 def test_background_task_requires_task(wired):
@@ -145,7 +145,7 @@ def test_background_task_uses_the_turns_model(wired, tmp_path):
     finally:
         reset_current_provider(token)
     done = _wait_done(reg, r.data["id"])
-    assert done.data["status"] == "done" and "42" in done.content
+    assert done.data["status"] == "completed" and "42" in done.content
 
 
 def test_subagent_toolsets_scope_excludes_destructive(wired, tmp_path):
@@ -179,38 +179,61 @@ def test_subagent_toolsets_scope_excludes_destructive(wired, tmp_path):
 
 # ── persistence across restarts ──────────────────────────────────────────────
 
-def test_finished_tasks_survive_a_restart(wired, tmp_path):
-    reg, agent, _ = wired
-    agent.provider._responses = [LLMResponse(content="the answer")]
+def test_finished_tasks_survive_a_restart(tmp_path):
+    """Runs live in the database (subagent_runs) since Phase 3, so a "restart"
+    over the same database file finds the finished result."""
+    db_path = str(tmp_path / "runs.db")
+    db = Database(db_path)
+    reg = ToolRegistry()
+    agent = Agent(ScriptedProvider([LLMResponse(content="the answer")]), reg, db,
+                  load_persona())
+    register_agent_tools(reg, agent, agent.provider, db, bg_store_path=tmp_path / "none.json")
     r = reg.execute("background_task", {"task": "t", "name": "persisted"})
     _wait_done(reg, r.data["id"])
 
-    # "Restart": a fresh registry + registration over the same store file.
-    db = Database(":memory:")
+    db2 = Database(db_path)
     reg2 = ToolRegistry()
-    agent2 = Agent(ScriptedProvider([]), reg2, db, load_persona())
-    register_agent_tools(reg2, agent2, agent2.provider, db,
-                         bg_store_path=tmp_path / "bg.json")
+    agent2 = Agent(ScriptedProvider([]), reg2, db2, load_persona())
+    register_agent_tools(reg2, agent2, agent2.provider, db2,
+                         bg_store_path=tmp_path / "none.json")
     revived = reg2.execute("check_background_task", {"id": r.data["id"]})
     assert revived.ok and revived.content == "the answer"
 
 
 def test_running_tasks_marked_interrupted_after_restart(tmp_path):
+    """A run the previous process left running is marked interrupted at boot."""
+    db_path = str(tmp_path / "runs.db")
+    db = Database(db_path)
+    db.save_run({"id": "abc12345", "root_id": "abc12345", "kind": "background",
+                 "role": "leaf", "depth": 1, "name": "orphan", "goal": "t",
+                 "status": "running"})
+    db2 = Database(db_path)
+    reg = ToolRegistry()
+    agent = Agent(ScriptedProvider([]), reg, db2, load_persona())
+    handles = register_agent_tools(reg, agent, agent.provider, db2,
+                                   bg_store_path=tmp_path / "none.json")
+    r = reg.execute("check_background_task", {"id": "abc12345"})
+    assert r.data["status"] == "interrupted" and "restarted" in r.content
+    listing = handles["background_tasks"]()
+    assert listing and listing[0]["id"] == "abc12345"
+    assert not any(k.startswith("_") for k in listing[0])
+
+
+def test_legacy_json_store_is_imported_once(tmp_path):
+    """The pre-Phase-3 JSON store is imported into the runs table: done →
+    completed, a task left running → interrupted."""
     from namma_agent.tools import _jsonstore
     store = tmp_path / "bg.json"
-    _jsonstore.save(store, [{"id": "abc12345", "name": "orphan", "task": "t",
-                             "status": "running", "result": "", "error": "",
-                             "started_at": 1.0, "finished_at": None}])
+    _jsonstore.save(store, [
+        {"id": "old00001", "name": "finished", "task": "t", "status": "done",
+         "result": "legacy answer", "error": "", "started_at": 1.0, "finished_at": 2.0},
+        {"id": "old00002", "name": "orphan", "task": "t", "status": "running",
+         "result": "", "error": "", "started_at": 1.0, "finished_at": None},
+    ])
     db = Database(":memory:")
     reg = ToolRegistry()
     agent = Agent(ScriptedProvider([]), reg, db, load_persona())
-    handles = register_agent_tools(reg, agent, agent.provider, db,
-                                   bg_store_path=store)
-    r = reg.execute("check_background_task", {"id": "abc12345"})
-    assert r.data["status"] == "interrupted" and "restarted" in r.content
-    # the store itself was rewritten with the corrected status
-    assert _jsonstore.load(store)[0]["status"] == "interrupted"
-    # and the handle lists it for the status panel
-    listing = handles["background_tasks"]()
-    assert listing and listing[0]["id"] == "abc12345"
-    assert "_thread" not in listing[0]
+    register_agent_tools(reg, agent, agent.provider, db, bg_store_path=store)
+    assert reg.execute("check_background_task", {"id": "old00001"}).content == "legacy answer"
+    r = reg.execute("check_background_task", {"id": "old00002"})
+    assert r.data["status"] == "interrupted"

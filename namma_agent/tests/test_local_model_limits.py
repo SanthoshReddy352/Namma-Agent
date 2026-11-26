@@ -79,19 +79,21 @@ def test_no_allow_list_exposes_everything():
 
 
 def test_steering_blocks_follow_actual_exposure():
-    """The Cognee / TODO steering blocks are only injected when THIS turn's scoped
+    """The TODO steering block is only injected when THIS turn's scoped
     toolset actually exposes those tools — steering the model toward a tool it
     can't call just burns context and invites hallucinated calls."""
     agent = _agent([LLMResponse(content="ok")], _registry(), tool_allow=["file_ops"])
     agent.process_turn("hi")
     system = agent.provider.seen_messages[0][0]["content"]
-    assert "COGNEE MEMORY" not in system and "TODO PLAN" not in system
+    assert "TODO PLAN" not in system
 
     agent2 = _agent([LLMResponse(content="ok")], _registry(),
                     tool_allow=["memory", "update_todos"])
     agent2.process_turn("hi")
     system2 = agent2.provider.seen_messages[0][0]["content"]
-    assert "COGNEE MEMORY" in system2 and "TODO PLAN" in system2
+    assert "TODO PLAN" in system2
+    # The external-Cognee-plugin steering was removed in Phase 2 (dead code).
+    assert "COGNEE MEMORY" not in system2
 
 
 # ── fix 2: the tool-result cap ────────────────────────────────────────────────

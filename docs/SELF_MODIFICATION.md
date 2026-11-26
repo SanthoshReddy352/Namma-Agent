@@ -104,9 +104,9 @@ in the catalog. This is the preferred path. Full detail in [SKILLS.md](SKILLS.md
 
 Namma Agent can change its own configuration without editing files by hand:
 
-- **`config.update_config(updates)`** writes a deep-merged overlay to
-  `namma_agent/config.local.yaml`. The documented base `config.yaml` is **never** rewritten;
-  the overlay wins at load time. This is how the Settings panel persists changes (e.g.
+- **`config.update_config(updates)`** writes a deep-merged user config to
+  `data/user_config.yaml`. The documented base `config.yaml` is **never** rewritten;
+  the user config wins at load time. This is how the Settings panel persists changes (e.g.
   switch `provider.type` from `anthropic` to `ollama`, change the model, toggle
   `auto_approve`).
 - **`config.set_env_values(updates)`** creates/updates `KEY=value` lines in `.env`

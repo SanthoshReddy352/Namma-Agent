@@ -1,77 +1,92 @@
-# About FRIDAY (self-knowledge)
+# About {name} (self-knowledge)
 
-This is FRIDAY's reference about itself — how it's built and configured. Use it to
-answer the user's questions about settings, capabilities, and setup.
+This is {name}'s reference about itself — how it's built and configured. The
+**live** sections (version, paths, configured models, MCP servers, toolsets) are
+generated from the running configuration by `about_namma`; the sections below
+describe how each subsystem works.
 
-## What FRIDAY is
-A cloud-LLM personal assistant in the `namma_agent/` package: one provider-agnostic
-agent loop, a tool registry, a skill system (procedural memory), cross-session
-memory, browser-native voice (Web Speech API — read-aloud + mic dictation, no
-server audio), a web UI, and messaging bridges. Config
-lives in `namma_agent/config.yaml` (documented base) with UI overrides written to
-`namma_agent/config.local.yaml`; secrets live in `.env`.
+## What {name} is
+A cloud-LLM personal assistant in the `namma_agent/` Python package: one
+provider-agnostic agent loop, a tool registry, a skill system (procedural memory),
+Engram (native long-term memory), browser-native voice (Web Speech API — read-aloud
+and mic dictation, no server audio), a React web UI, a desktop window
+(pywebview), and messaging bridges. The display name comes from `assistant.name`
+in the config.
+
+## Configuration
+- The documented base config is `namma_agent/config.yaml` (defaults, never
+  rewritten). Everything changed in Settings, the setup wizard or
+  `namma config set` goes to ONE user config, `user_config.yaml` in the data
+  folder (path in the live **Paths** section), merged on top of the base. An old
+  `config.local.yaml` is migrated into it once and renamed `*.migrated`.
+- API keys live in the secrets vault (Settings → Security) or `.env`; `.env`
+  values are loaded at startup. Never print a key's value.
+- Provider, model, persona and agent-loop changes made in Settings apply live on
+  the next turn — no restart needed.
 
 ## Modes
-- **Agent mode** — full access to all tools and skills (open apps/files, web,
-  media, files, memory, etc.).
+- **Agent mode** — tools and skills (files, shell, web, apps, memory, …).
 - **Chat mode** — pure conversation: no tools, no skills, no actions.
-The user toggles modes in the UI; each message carries its mode.
 
-## Switching the model / provider
-Set the active provider in `config.yaml` under `provider:` (or via the Settings
-panel, which writes `config.local.yaml`). Supported: `anthropic`, `openai`,
-`google`, and OpenAI-compatible backends (opencode / lmstudio / ollama / custom
-`base_url`). Put API keys in `.env`: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`GOOGLE_API_KEY`. A `ProviderChain` falls back across configured providers.
-Change `provider.model` for the model id. Restart to apply provider/key changes.
-The default cloud model is Anthropic Claude (e.g. `claude-opus-4-8`).
+## Models and providers
+`providers:` lists named connections (type, base_url, api_key_env); `models:`
+lists switchable model profiles that reference a provider. Each chat can pick a
+model. Supported types: `anthropic`, `openai`, `google`, and OpenAI-compatible
+endpoints (`opencode`, `lmstudio`, `ollama`, custom `base_url`). `provider:` is
+the legacy default with an optional `fallback:` chain, which also applies to
+model profiles.
 
-## Tools (agent mode)
-Files (read/write/list/move/copy/delete/mkdir/find/organize), shell (`run_shell`,
-approval-gated), apps (`open_app`), web (`web_search`/`web_extract`/`web_crawl`),
-browser + media (`open_browser_url`, `play_youtube`, `play_youtube_music`,
-`media_control`), documents (`read_document` via MarkItDown), weather, news,
-smart home, vision/OCR, network/security (lab-gated), reminders/tasks/goals,
-Google Workspace (`gws_*`), comms (`send_notification`), memory tools, skills
-tools, and self-authoring (`create_skill`, `create_tool`). Run `list_skills` /
-the tools list to enumerate live capabilities.
+## Tools and tool search
+Tools are grouped into toolsets (Settings → Toolsets). When more tools are enabled
+than `tools.search.threshold`, only the core tools are sent with each request; the
+others are found with `tool_search` and run with `tool_call` (same approval
+rules). `tools.profile` picks a preset (general, productivity, code, research,
+minimal). Destructive tools always ask for approval unless Auto mode is on.
 
-## Skills (procedural memory + learning loop)
-SKILL.md playbooks under `namma_agent/skills/` (bundled) and `~/.namma_agent/skills/`
-(learned). `use_skill` loads one; `create_skill` / `update_skill` author them.
-The user can say "create a <X> skill" and FRIDAY writes it.
+## Delegation (sub-agents)
+`delegate_task` hands self-contained work to sub-agents: a `goal` plus the
+`context` they need (they can't see the chat), or `tasks[]` to fan out — up to
+3 run in parallel. `role: orchestrator` lets a child split its work once more;
+those children are leaves. Each child returns status, summary, exit_reason and
+truncated. `toolsets`, `skills` and `budget` (max_steps, max_tokens) shape a
+child; destructive tools are never available to it. `background_task` runs one
+sub-agent without blocking and posts its report into the chat when done;
+`check_background_task` / `cancel_background_task` manage it. Runs show above
+the message bar, where they can be cancelled (cancelling a run cancels its
+children; Stop on the turn cancels everything it started).
 
-## Memory
-Structured facts (`remember_fact`/`recall_facts`/`forget_fact`), free-form notes
-(`remember_note`, USER.md/MEMORY.md), cross-session recall
-(`search_conversations`, `recall_sessions`, `summarize_session`), and cleanup
-(`clear_memory` with scope facts|conversations|notes|all; also the Settings UI).
+## Skills (procedural memory)
+SKILL.md playbooks under `namma_agent/skills/` (bundled) and
+`~/.namma_agent/skills/` (learned). `use_skill` loads one; `create_skill` /
+`update_skill` author them. Repeated tool workflows are drafted as disabled skills
+for review.
 
-## Browser / media
-A controlled, visible browser (Playwright) uses the user's preferred browser
-(`browser.preferred: auto`) and a persistent profile so accounts stay signed in
-(dedicated `~/.namma_agent/browser-profile`, or `use_system_profile: true` to reuse the
-real profile). Videos play fullscreen; `media_control` does play/pause/seek/next/
-previous/volume on YouTube and YouTube Music.
+## Memory (Engram)
+Core memory (always in the prompt), bi-temporal facts and an entity graph in
+SQLite, fused recall (`memory_search`), `memory_save`, `memory_forget`, a
+salience-gated background writer, and sleep-time consolidation. Chat transcripts
+are searchable with `search_conversations` / `recall_sessions`. Manage it in
+Settings → Memory.
 
-## Messaging (Telegram)
-Set `NAMMA_TELEGRAM_TOKEN` + `NAMMA_TELEGRAM_CHAT_ID` in `.env` and
-`comms.inbound_enabled: true` to chat with FRIDAY from your phone. In Telegram:
-plain text runs a normal turn; `!<cmd>` runs a shell command; `/help`, `/new`,
-`/mode chat|agent`, `/clear` are commands (also shown in the in-app "/" menu);
-sending a document ingests it. Replies quote the message you sent and show a
-"typing…" indicator while I work. **Voice messages** are transcribed and answered
-when `comms.stt` has an OpenAI(-compatible) key (in `.env`); without it I reply
-asking you to set it up, since local STT was removed (the web UI uses the browser).
+## MCP servers
+Configured under `mcp.servers` in the config file (each: `name`, `command`,
+optional `env`, `enabled`). Their tools register as `mcp_<server>_<tool>`.
+Toggle servers in Settings → Toolsets → MCP.
 
-## Google Workspace
-`gws_*` tools wrap the `gws` CLI (https://github.com/googleworkspace/cli). Install
-it and run `gws auth login` once; then Gmail/Calendar tools work.
+## Browser and media
+A visible, Playwright-driven browser with a persistent profile;
+`open_browser_url`, `play_youtube`, `play_youtube_music`, `media_control`.
+
+## Messaging
+Telegram, Discord, Slack, WhatsApp and Signal bridges (`comms:` config, tokens in
+the vault or `.env`). Each channel has a trust level; remote channels can't run
+destructive tools unless the sender is the owner.
+
+## Background work
+Routines (scheduled agent runs), watchers (file/email/web/calendar triggers),
+the weekly self-review, reminders and memory consolidation. Settings → Status
+shows what is running and the token usage of every model call.
 
 ## Logging
-`config.logging.level` (or `NAMMA_LOG_LEVEL`) = debug|info|warning|error. Logs go
-to the terminal and `logs/namma_agent.log` (rotating). Use debug to trace turns/tools.
-
-## Background services
-Off by default ("everything visible"): reminder auto-firing
-(`scheduler.run_in_background`) and Telegram inbound (`comms.inbound_enabled`).
+`logging.level` (or `NAMMA_LOG_LEVEL`) = debug|info|warning|error. Logs go to the
+terminal and `logs/namma_agent.log` (rotating).

@@ -3,6 +3,89 @@
 All notable changes to this project are documented here. The format is loosely
 based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Added
+- **Sub-agents that really run in parallel.** `delegate_task` takes a goal plus
+  the context a sub-agent needs, or `tasks[]` to fan out (up to 3 at once). An
+  "orchestrator" sub-agent may split its own work once more. Each result reports
+  status, exit reason and whether it was cut short.
+- **Sub-agents panel** above the message bar: live status, current tool and a
+  Cancel button. Cancelling a sub-agent cancels the ones it started; Stop cancels
+  everything the turn started.
+- Background tasks run on a bounded pool and post their report into the chat
+  when they finish; new `cancel_background_task`.
+- `scripts/delegation_eval.py`: a 20-task delegation eval (`--mock` for an
+  offline check of the harness; `--openai-model` and a hard `--max-tokens` cap
+  for live runs). First live run: 20/20 on gpt-4.1-mini, using 36K tokens.
+- **Tool search.** Past 40 enabled tools, each request sends only the core tools
+  plus `tool_search` / `tool_describe` / `tool_call`; the model finds the rest on
+  demand (same approval rules). About 70% fewer tool-schema tokens per request.
+- **Toolset profiles** (General, Productivity, Code, Research, Minimal) and a
+  tool-search mode switch in Settings → Toolsets.
+- **Usage log of every model call**, including background work (memory writer,
+  compaction, titles, summaries, watcher checks, sub-agents), with the
+  cache-read ratio in Settings → Status. Optional per-turn token budget
+  (`conversation.turn_token_budget`).
+- **In-turn context budget**: past 60% of the model's context window, old tool
+  outputs are cleared, then earlier history is summarized.
+- The assistant knows its own install, config and data paths, and `about_namma`
+  reports the live setup (models, MCP servers, toolsets).
+
+### Changed
+- The date now rides the latest message at day resolution, so the system prompt
+  stays cache-friendly; OpenAI requests carry a per-chat `prompt_cache_key`.
+- API keys saved in Settings go to the secrets vault instead of `.env`.
+- **Your settings now live in one user config, `data/user_config.yaml`** (or
+  `$NAMMA_DATA_DIR/user_config.yaml`), written by Settings, the setup wizard and
+  `namma config set`. The documented `config.yaml` is never rewritten. An existing
+  `config.local.yaml` is migrated automatically on first start and renamed
+  `config.local.yaml.migrated`. In Docker, the user config and `.env` live in the
+  data volume and survive an image rebuild.
+- Lab (security) and Home Assistant tools are hidden from the model until enabled.
+- Model profiles use the `provider.fallback` chain.
+- Paths with `..` are accepted (the resolved path is checked); the app may edit its
+  own install folder (with approval).
+
+### Removed
+- Leftover Cognee plugin fallbacks and the unused `memory_nudge_every` setting.
+
+### Security
+- Auto mode no longer overrides an explicit "always decline" policy: scheduled
+  routines, watchers and the `/v1` API keep declining destructive tools.
+- Remote-channel turns now get a trust-based approval policy. `owner` channels are
+  allowed; `trusted` channels are declined unless `comms.trusted_can_run_destructive: true`.
+  Previously destructive tools ran with no gate at all.
+- `.env` writes reject line breaks, NUL and invalid key names.
+- `/api/upload` streams to disk with a size cap (`server.max_upload_mb`, default 50)
+  and never overwrites an existing file.
+
+### Fixed
+- **Stop now actually stops a turn.**
+  - An in-flight model call is abandoned within ~0.2 s and no more tokens reach the
+    chat.
+  - The remaining tool calls are skipped, a running shell command is killed, and a
+    pending approval card releases.
+  - A new prompt sent right after Stop now waits for the stopped turn to finish
+    instead of running alongside it in the same chat.
+- `delegate_task` no longer leaves the parent turn writing into the hidden sub-agent
+  session. The parent's Stop button reaches the child, a child step cap applies when
+  the parent is unlimited, and unknown toolsets return an error listing the valid ones.
+- Requests never send more than 128 tools (OpenAI/Gemini limit); MCP tools are trimmed
+  first and MCP tool names are capped at 64 characters.
+- Settings changes to the agent's loop and context knobs apply live; config setters no
+  longer leave background runners on a stale config.
+- A second launch focuses the running window instead of starting a duplicate backend
+  plus a second window and tray icon.
+
+### Changed
+- New defaults: `tool_result_max_chars: 24000` (overflow saved to
+  `<data>/tool_outputs/`), `tool_loop_limit: 40`. `read_file` pages with
+  `offset`/`max_chars`; `find_files` skips dependency and build folders.
+- The assistant is told to use `render_diagram` rather than raw Mermaid blocks.
+- Project tracking moved to `PROGRESS.md`. Hackathon, presentation and Cognee-era
+  documents were removed, and `data/checkpoints/` is no longer tracked.
+
 ## [2.3.2]
 
 ### Added

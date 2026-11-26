@@ -7,7 +7,6 @@ instead of quietly running on the user's own machine.
 """
 from __future__ import annotations
 
-import subprocess
 from types import SimpleNamespace
 
 import pytest

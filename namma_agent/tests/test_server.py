@@ -266,6 +266,9 @@ class EchoProvider(Provider):
 
     def generate(self, messages, tools=None, stream=False, on_token=None, on_thinking=None):
         user = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+        # Echo what the user typed, not the per-turn <context> preface (date /
+        # memory prefetch) the agent prepends to the latest message.
+        user = user.split("</context>\n\n", 1)[-1]
         if stream and on_token:
             on_token(user)
         return LLMResponse(content=user)

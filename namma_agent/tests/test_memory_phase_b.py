@@ -165,16 +165,16 @@ def test_remember_fact_without_memory_engine_errors():
     assert not out.ok and "memory engine" in (out.error or "").lower()
 
 
-def test_recall_facts_falls_back_to_memory_plugin():
+def test_recall_facts_without_engram_is_a_clear_error():
+    """Phase 2 removed the Cognee-plugin fallback (dead code): with no Engram the
+    call fails clearly, even if a tool named mcp_cognee_recall exists."""
     db = Database(":memory:")
     reg = ToolRegistry()
     register_memory_tools(reg, db)
-    # no engine at all → clear error
     out = reg.execute("recall_facts", {"query": "who am I"})
     assert not out.ok and "memory engine" in (out.error or "").lower()
-    # with a memory plugin attached (and no Engram), the call is delegated to it
     from namma_agent.core.tools import ToolResult
     reg.register("mcp_cognee_recall", "recall", {"type": "object", "properties": {}},
                  lambda a: ToolResult(ok=True, content=f"answer to {a.get('query')}"))
     out = reg.execute("recall_facts", {"query": "who am I"})
-    assert out.ok and "who am I" in out.content
+    assert not out.ok

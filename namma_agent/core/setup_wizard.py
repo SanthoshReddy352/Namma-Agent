@@ -6,7 +6,7 @@ talking to a brain. Everything written here is the same config the in-app
 Settings panel edits, so the user can change provider/model/keys later.
 
 - ``configure_provider(...)`` is the pure, testable core: it writes the chosen
-  provider to ``config.local.yaml`` and the API key to ``.env``.
+  provider to ``user_config.yaml`` and the API key to ``.env``.
 - ``run_wizard(...)`` is the interactive terminal front-end.
 
 The assistant's display name is intentionally left untouched: it defaults to
@@ -45,7 +45,7 @@ def configure_provider(provider_type: str, model: Optional[str] = None,
                        env_path: Optional[str] = None) -> dict:
     """Persist the first provider. Returns the provider dict written to config.
 
-    Writes ``provider:`` into ``config.local.yaml`` (never the documented base
+    Writes ``provider:`` into ``user_config.yaml`` (never the documented base
     file) and, when the provider needs one, the API key into ``.env`` under the
     provider's ``api_key_env``. ``config_path`` / ``env_path`` are for tests.
     """
@@ -112,11 +112,11 @@ def save_onboarding(answers: dict, *, db_path: Optional[str] = None) -> dict:
     """Persist onboarding answers into the agent's SQLite DB exactly as the in-chat
     onboarding does: ``name`` → an *identity* fact, everything else → *onboarding*
     facts. Returns the facts actually saved. ``db_path`` is for tests."""
-    from namma_agent.config import load_config
+    from namma_agent.config import data_dir, load_config
     from namma_agent.core.memory import Database
 
     if db_path is None:
-        db_path = ((load_config().get("database") or {}).get("path")) or "data/namma_agent.db"
+        db_path = ((load_config().get("database") or {}).get("path")) or str(data_dir() / "namma_agent.db")
     db = Database(db_path)
     saved: dict = {}
     name = str(answers.get("name") or "").strip()

@@ -7,7 +7,7 @@
 | **Status** | Implemented — Phases 1, 2 & 3 landed 2026-07-16; remaining gaps (path assist in file tools, Cognee import script, skill drafts, `docs/PLUGINS.md`) closed later the same day. Deviations from the original text are footnoted in place. |
 | **Date** | 2026-07-15 |
 | **Author** | Drafted with Claude (Fable 5) |
-| **Replaces** | Cognee-as-THE-memory ([docs/COGNEE.md](COGNEE.md)) |
+| **Replaces** | Cognee-as-THE-memory (removed 2026-07-15; history in git) |
 | **Owner modules** | `namma_agent/core/memory.py`, new `namma_agent/core/engram/` |
 
 ---
@@ -76,8 +76,8 @@ amount of tuning fixes:
   view stays.
 - **G8 — Environment memory.** A persistent, auto-refreshed model of the host
   (OS, drives, home, key folders, indexed apps, path conventions) injected into the
-  prompt so file paths are never guessed. *(Extended 2026-07-19, STAND_OUT
-  Phase 5: on Windows the probe also detects **WSL distros** — they ride the
+  prompt so file paths are never guessed. *(Extended 2026-07-19,
+  Windows-polish phase: on Windows the probe also detects **WSL distros** — they ride the
   HOST block, and the path assist translates `/mnt/<drive>/…` ↔ `<Drive>:\…`
   and passes `\\wsl$\…` UNC paths through untouched.)*
 
@@ -538,14 +538,14 @@ memory:
 | Component | Fate |
 |---|---|
 | `core/cognee_ingest.py` | **Deleted** (Phase 2) — queue pattern lives on in `engram/writer.py` |
-| Cognee MCP registration, `.env.cognee`, docker-compose, setup scripts | **Kept but optional** — plugin provider path; how-to in [`docs/PLUGINS.md`](PLUGINS.md), container details stay in [`docs/COGNEE.md`](COGNEE.md) (historical) |
+| Cognee MCP registration, `.env.cognee`, docker-compose, setup scripts | **Removed 2026-11-25** — any MCP memory engine can still be attached as a plugin; how-to in [`docs/PLUGINS.md`](PLUGINS.md) |
 | `service.cognee_*` methods, session-buffer sidecar (`cognee_pending.json`) | **Deleted** — consolidation is native now |
 | `_RECALL_HINT` regex + `_cognee_recall_context` | **Replaced** by score-floored prefetch |
 | `mcp_cognee_*` steering block in `_build_messages` | **Replaced** by a shorter block describing `memory_search`/`memory_save` |
 | SQLite `facts` table + FTS | **Superseded** by `memory_items` (one-time import, then dropped) |
 | `turns`/`sessions`/summaries, `docindex`, `skills.py`, scope memory | **Kept** — federated into recall |
 | Memory tab graph view | **Kept** — rebacked, faster |
-| `docs/COGNEE.md` | Marked historical; superseded by this doc |
+| `docs/COGNEE.md` | Removed 2026-11-25 (in git history); superseded by this doc |
 
 ## 14. Success metrics
 
@@ -569,9 +569,9 @@ memory:
 | Core memory grows stale/wrong | user-editable everywhere (tab + markdown mirrors), versioned with undo, consolidator re-validates against recent facts |
 | Prompt bloat from L1+L5 | hard token budgets (~1,500 total), enforced in code; blocks are stable across turns → prefix-cache friendly |
 | Memory poisoning via injected content | write-time screening + quarantine + provenance framing (§11) |
-| Losing the hackathon graph | one-shot import (Phase 2) before deleting anything; Cognee stays attachable as a plugin. *In practice the app-side plumbing was deleted before the import script landed — the data itself lives on in the `cognee-data` docker volume / Cognee Cloud, which is exactly what `scripts/migrate_cognee_to_engram.py` reads (run it while those still exist).* |
+| Losing the old Cognee graph | one-shot import (Phase 2) before deleting anything; Cognee stays attachable as a plugin. *In practice the app-side plumbing was deleted before the import script landed — the data itself lives on in the `cognee-data` docker volume / Cognee Cloud, which is exactly what `scripts/migrate_cognee_to_engram.py` reads (run it while those still exist).* |
 
 ---
 
 *Related: [ARCHITECTURE.md](ARCHITECTURE.md) · [SKILLS.md](SKILLS.md) ·
-[PLUGINS.md](PLUGINS.md) (external providers) · [COGNEE.md](COGNEE.md) (historical)*
+[PLUGINS.md](PLUGINS.md) (external providers)*

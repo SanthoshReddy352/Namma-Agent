@@ -604,8 +604,9 @@ There is no Piper, no Whisper, no server-side STT. (See
 ## 11. Configuration & the assistant name
 
 - **Base config**: `namma_agent/config.yaml` (documented, commented).
-- **Overlay**: `namma_agent/config.local.yaml` — written by the Settings panel via
-  `config.update_config`; the base file is never rewritten.
+- **User config**: `data/user_config.yaml` (or `$NAMMA_DATA_DIR/user_config.yaml`) —
+  written by the Settings panel via `config.update_config`; the base file is never
+  rewritten. The legacy `config.local.yaml` is migrated into it once.
 - **Secrets**: the OS-native vault (`core/secrets.py` — Windows Credential
   Manager / POSIX keyring / a DPAPI-sealed fallback file) with an opt-in
   migration from `.env`; `.env` at the repo root still works and is loaded by a
@@ -799,7 +800,7 @@ and the trade-off we accepted.
 ### 13.13 Browser Web Speech API vs server-side Piper / Whisper
 - **Options:** server TTS (Piper) + server STT (faster-whisper + sounddevice), or the
   browser's built-in `speechSynthesis` + `SpeechRecognition`.
-- **Chosen:** browser-native voice; the backend produces no audio and has no STT.
+- **Chosen (until 2026-11-26):** browser-native voice. **Superseded by Phase 9:** read-aloud and dictation now use the OS engines through `core/os_voice.py` (Windows SAPI, macOS `say`, espeak-ng), with the browser as a fallback — browser dictation does not work inside Electron/WebView2.
 - **Why:** removes heavy native dependencies (Piper binary + ONNX voices, whisper models,
   PortAudio) and a whole audio-hardware failure surface; the browser already ships capable
   TTS/STT; and it works correctly when the server is remote (audio belongs on the client,
@@ -849,8 +850,11 @@ and the trade-off we accepted.
 ### 13.18 Config base + local overlay vs a single mutable file or env-only
 - **Options:** one mutable `config.yaml` the UI rewrites, env-vars only, or a commented
   base + a machine-written overlay.
-- **Chosen:** base `config.yaml` (hand-edited, documented) + `config.local.yaml` (UI-written
-  overlay), deep-merged, secrets in `.env`.
+- **Chosen:** base `config.yaml` (hand-edited, documented) + one user config in the data
+  dir (`user_config.yaml`, UI-written), deep-merged; secrets in the vault (`.env` as a
+  bridge). Until 2026-11-25 the overlay was `config.local.yaml` beside the base; it moved
+  to the data dir so it lives with the user's other state and survives updates and image
+  rebuilds.
 - **Why:** the UI can persist settings **without** clobbering the documented, commented base
   file, and you can diff what you changed from defaults.
 - **Trade-off:** two files to reason about; the loader's merge order is the contract.
@@ -994,7 +998,7 @@ and the trade-off we accepted.
 Three subsystem groups landed after the sections above were written; each has its
 own deep-dive doc, so this is the architectural summary and the map.
 
-### 14.1 Trust model (STAND_OUT Phase 1)
+### 14.1 Trust model
 
 Full treatment: **[SECURITY.md](SECURITY.md)** — every claim there is observable
 live in Settings → System → **Security**.

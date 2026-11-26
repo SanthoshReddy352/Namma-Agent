@@ -33,7 +33,10 @@ from namma_agent.comms.inbound import InboundBridge
 from namma_agent.core.logger import logger
 
 _MAX_CHARS = 4000  # under WhatsApp's ~4096 text body limit
-_SESSION_DB = Path("~/.namma_agent/whatsapp_qr.sqlite3").expanduser()
+# NAMMA_WHATSAPP_SESSION overrides the location (the test suite points it at a
+# temp file so runs never touch the developer's linked session).
+_SESSION_DB = Path(os.environ.get("NAMMA_WHATSAPP_SESSION")
+                   or "~/.namma_agent/whatsapp_qr.sqlite3").expanduser()
 
 
 def whatsapp_mode() -> str:

@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import pytest
 
-from namma_agent.core.safety import is_destructive
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.tools import load_tools
 from namma_agent.tools import goals as goalmod
@@ -53,6 +52,6 @@ def test_update_missing_goal(reg):
 
 
 def test_destructive_flags(reg):
-    assert reg.get("remove_task").destructive and is_destructive("remove_task")
-    assert reg.get("remove_goal").destructive and is_destructive("remove_goal")
+    assert reg.get("remove_task").destructive
+    assert reg.get("remove_goal").destructive
     assert reg.get("add_task").destructive is False

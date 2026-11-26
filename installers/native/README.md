@@ -6,7 +6,7 @@ When the user clicks Start it: installs Python/Git/Node if missing, downloads th
 app to the Desktop, creates the environment, installs dependencies, then asks for
 the AI provider + a few onboarding questions — all inside the branded window.
 
-It's the Tkinter installer in [`installer/`](../../installer/) frozen with
+It's the React + pywebview installer in [`installer/`](../../installer/) frozen with
 PyInstaller (the app source, incl. the prebuilt web UI, is bundled inside), so the
 installer's UI runs even on a machine with no Python.
 

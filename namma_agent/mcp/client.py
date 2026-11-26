@@ -86,6 +86,7 @@ class StdioMCPClient:
         self._id = 0
         self._lock = threading.Lock()
         self._docker_name = _docker_container_name(command)
+        self.last_error = ""   # why the last connect failed (shown in Settings)
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -112,6 +113,9 @@ class StdioMCPClient:
             )
         except (FileNotFoundError, OSError) as exc:
             logger.warning("[mcp] %s: spawn failed (%s): %s", self.name, resolved[0], exc)
+            self.last_error = (f"'{self.command[0]}' was not found — install it or fix the "
+                               "command" if isinstance(exc, FileNotFoundError)
+                               else f"couldn't start '{self.command[0]}': {exc}")
             return False
         try:
             self._request("initialize", {
@@ -126,6 +130,9 @@ class StdioMCPClient:
             return True
         except Exception as exc:  # noqa: BLE001
             logger.warning("[mcp] %s: handshake failed: %s", self.name, exc)
+            self.last_error = (f"started, but the MCP handshake failed: {str(exc)[:160]} "
+                               "(wrong package, a missing key, or still downloading — "
+                               "try a longer connect_timeout)")
             self.close()
             return False
 

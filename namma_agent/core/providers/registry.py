@@ -39,6 +39,13 @@ PROVIDER_TYPES: dict[str, type[Provider]] = {
     "opencode": OpenAICompatProvider,
     "lmstudio": OpenAICompatProvider,
     "ollama": OpenAICompatProvider,
+    # Hosted OpenAI-compatible providers (Phase 5 catalogue).
+    "openrouter": OpenAICompatProvider,
+    "groq": OpenAICompatProvider,
+    "deepseek": OpenAICompatProvider,
+    "mistral": OpenAICompatProvider,
+    "xai": OpenAICompatProvider,
+    "together": OpenAICompatProvider,
 }
 
 #: Convenience defaults so a bare ``type: ollama`` just works.
@@ -46,6 +53,12 @@ _TYPE_DEFAULTS: dict[str, dict] = {
     "lmstudio": {"base_url": "http://localhost:1234/v1"},
     "ollama": {"base_url": "http://localhost:11434/v1"},
     "opencode": {"base_url": "https://opencode.ai/zen/v1"},
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": "OPENROUTER_API_KEY"},
+    "groq": {"base_url": "https://api.groq.com/openai/v1", "api_key_env": "GROQ_API_KEY"},
+    "deepseek": {"base_url": "https://api.deepseek.com/v1", "api_key_env": "DEEPSEEK_API_KEY"},
+    "mistral": {"base_url": "https://api.mistral.ai/v1", "api_key_env": "MISTRAL_API_KEY"},
+    "xai": {"base_url": "https://api.x.ai/v1", "api_key_env": "XAI_API_KEY"},
+    "together": {"base_url": "https://api.together.xyz/v1", "api_key_env": "TOGETHER_API_KEY"},
 }
 
 
@@ -59,7 +72,8 @@ def build_provider(cfg: dict) -> Provider:
         )
     cfg.pop("fallback", None)
     for key, val in _TYPE_DEFAULTS.get(ptype, {}).items():
-        cfg.setdefault(key, val)
+        if not cfg.get(key):        # "" / None from a profile still gets the default
+            cfg[key] = val
     cls = PROVIDER_TYPES[ptype]
     return cls(**cfg)
 
@@ -73,6 +87,8 @@ class ProviderChain(Provider):
     """
 
     name = "chain"
+    # Member providers record their own usage; the chain must not count twice.
+    _metered = False
 
     def __init__(self, providers: list[Provider]):
         if not providers:
@@ -84,6 +100,16 @@ class ProviderChain(Provider):
     @property
     def active(self) -> Provider:
         return self._providers[0]
+
+    # The agent's hard wall-clock ceiling (agent._generate_timeout) reads these;
+    # a chain may try every link, so its budget covers all of them.
+    @property
+    def timeout_s(self) -> float:
+        return float(sum(float(getattr(p, "timeout_s", 60.0) or 60.0) for p in self._providers))
+
+    @property
+    def max_retries(self) -> int:
+        return max(int(getattr(p, "max_retries", 1) or 1) for p in self._providers)
 
     def is_available(self) -> bool:
         """A chain is usable when ANY link is. The base implementation reads
