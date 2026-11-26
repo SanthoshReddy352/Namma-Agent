@@ -17,6 +17,14 @@
   !insertmacro nammaStopBackend
 !macroend
 
+; The installer is per user only (perMachine: false; the all-users choice is
+; greyed out), so skip the "Only for me / Anyone" page. It matters most for
+; updates: electron-updater doesn't pass /currentuser, so an update's visible
+; installer stopped on that page and waited for a click.
+!macro customInstallMode
+  StrCpy $isForceCurrentInstall "1"
+!macroend
+
 ; Refresh Windows' icon cache so Start shows the app's own icon, not one cached
 ; for the same AppUserModelID by an earlier copy (e.g. a development run).
 !macro customInstall

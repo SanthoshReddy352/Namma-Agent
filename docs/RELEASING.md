@@ -123,8 +123,8 @@ the **Update available** banner should appear → **Update now** pulls, reinstal
 and relaunches.
 
 For the **desktop app**, the banner's **Update now** (or Settings → About) downloads
-`NammaAgentSetup-<new>.exe`, closes the app, installs silently and reopens it on the
-new version. The tray's **Check for updates…** asks on demand. To rehearse this
+`NammaAgentSetup-<new>.exe` with a progress bar, closes the app, runs the installer
+with its progress window showing (no questions) and reopens it on the new version. The tray's **Check for updates…** asks on demand. To rehearse this
 without publishing, see *Developing the desktop app* in the README (a local feed via
 `NAMMA_DESKTOP_UPDATE_URL`).
 

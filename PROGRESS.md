@@ -4,7 +4,7 @@
 > and technical decisions. It replaced `Namma_Agent_Port.md` (Hermes parity) and
 > `STAND_OUT.md` (stand-out plan) on 2026-11-25. Both live on in git history.
 >
-> **Last updated:** 2026-11-25 · **Version:** 2.3.2 · **Tests:** see §1
+> **Last updated:** 2026-11-26 · **Version:** 2.3.2 · **Tests:** see §1
 
 ## How to use this file (rules)
 
@@ -33,8 +33,8 @@
 | | |
 |---|---|
 | Version | 2.3.2 (`namma_agent/version.py`) |
-| Test suite | **1,583 passed, 3 skipped** (2026-11-26, Phase 9 integration: W1 + W2 + W3 + Phase 10 merged; web UI 106 passed; desktop shell 8 passed; 1,440 after W1 slice 6; 1,439 after slice 5; 1,437 after slice 4; 1,424 after slice 1; 1,420 after Phase 5/6; 1,312 after Phase 3) |
-| Web UI tests | **84 passed** — `cd namma_agent/webui && npm test` (Vitest + React Testing Library; 63 after W1 slice 5; 51 after slice 4; 38 after slice 3; 34 after slice 2; 29 after slice 1) |
+| Test suite | **1,604 passed, 3 skipped** (2026-11-26, Phase 9 complete: W1-W4 + Phase 10; desktop shell 9 passed; 1,583 at the integration; 1,440 after W1 slice 6; 1,439 after slice 5; 1,437 after slice 4; 1,424 after slice 1; 1,420 after Phase 5/6; 1,312 after Phase 3) |
+| Web UI tests | **118 passed** — `cd namma_agent/webui && npm test` (Vitest + React Testing Library; 106 at the Phase 9 integration; 84 after W1 slice 6; 63 after W1 slice 5; 51 after slice 4; 38 after slice 3; 34 after slice 2; 29 after slice 1) |
 | Run | `python -m namma_agent --server` → http://127.0.0.1:8000 (desktop: `python -m namma_agent`) |
 | Test | `.venv/Scripts/python.exe -m pytest namma_agent/tests -q` (no API key needed) |
 | Lint | `.venv/Scripts/python.exe -m ruff check namma_agent` |
@@ -771,6 +771,23 @@ owner had about 400K tokens left, and that hunt needs more.
   - About 40K live tokens.
 - **Tests:** `test_mcp_setup.py` (17), `test_setup_mode.py` (27),
   `test_skill_market.py` (10). Full suite: 1,420 passed, 3 skipped.
+- [x] **Setup mode re-tested live (2026-11-26, owner report: "Configure GitHub"
+  gave a config snippet and asked for the token in plain chat).** On gpt-4o, a
+  scratch desktop instance:
+  - Before: generic advice, a JSON config block, no tools called, no secure field.
+  - `setup_tools.setup_context()`: setup mode's system prompt now carries a compact
+    live snapshot (providers, MCP servers, integrations, every MCP preset with its
+    secret and params, mail presets). The preamble's first rule is to work from it,
+    never generic advice or config snippets, with a GitHub worked example.
+  - Safety net in `agent.py`: when a setup request names a preset whose required
+    secret is unset (`missing_secret_for`) and the model didn't call
+    `request_secret`, the agent opens the secure field itself. gpt-4o still answered
+    without tools, so the guard is what opened it (logged as "setup guard").
+  - Verified live end to end: secure field → test token to the vault → `mcp_add_server`
+    behind the approval card → the hosted server's HTTP 400 explained in chat with a
+    fresh secure field to replace the token.
+  - Tests: `test_setup_mode.py` 27 → 32 (snapshot in the prompt, preset matching,
+    the guard opens the field, stays quiet when the model asked, never outside setup).
 - [ ] Not done:
   - a real-token end-to-end for a working GitHub/Google/mail setup (needs the
     owner's credentials);
@@ -920,7 +937,7 @@ The plan is in `plan/2026-11-25_23-20-00_plan.md`. Owner decisions:
 
 Each workstream edits only its own subsection below.
 
-#### W1 — Shared renderer redesign (web + desktop) — `[~]` (slices 1-4 landed; the W2/W4-dependent bits are open)
+#### W1 — Shared renderer redesign (web + desktop) — `[x]` (slices 1-7 landed and verified; small leftovers at the end)
 Slice 1 landed 2026-11-25. Everything marked `[x]` is verified live.
 - [x] **Modes are picked from a list.**
   - `ui/SelectMenu.jsx` (listbox: arrow keys, Enter, Escape, click-outside, focus return) replaces the 3-way `ModePill`.
@@ -1068,12 +1085,22 @@ Slice 1 landed 2026-11-25. Everything marked `[x]` is verified live.
   - **Verified live** (scratch instance): Appearance renders (five swatches, dark toggle, log level). A prompt sent, then "New chat": the first chat was listed at once as a pulsing "Untitled session" and reopened from the sidebar with its message. The dummy model's turn then failed, so it stayed untitled; titling after a real reply is covered by the test.
   - The real `data/` changed between 09:01 and 09:50 IST: owner use of the app, before this slice. Nothing was written there during this slice's scratch runs.
   - The W2, W3 and Phase 10 sessions stopped at once on the account's usage limit (resets 12:20 IST); they can be resumed.
+- [x] **Slice 7 (2026-11-26, owner follow-ups after the integration PR):**
+  - **Logo:**
+    - Dark mode: the light-on-dark line art looked like loose pixels with no background. The medallion and sidebar mark are now a light coin (`--coin-face` / `--coin-ink`) with dark ink in every dark theme. A `:root` default that overrode `.dark` was moved before it.
+    - Home hero: `Logo variant="medallion" solid`, a filled coin with the bold mask, so the 88px logo reads like the sidebar's.
+    - The Imperium laurel around the hero is removed (`Laurel.jsx` deleted).
+  - **Hermes Agent's click sounds:** `haptics.js` ports Hermes' `HAPTIC_INTENTS` onto `web-haptics` 0.0.6 (MIT, the library Hermes uses; its desktop debug mode plays the clicks). `sounds.js` maps each press to Hermes' intents (submit / crisp / close / open / selection), with a 50 ms selection debounce and a 5/s cap. Credits in `THIRD_PARTY_NOTICES.md`.
+  - **Update progress in the UI** (`updateProgress.js`): the banner and Settings → About follow `/api/update/check` and show Checking / Downloading n% (a bar) / Ready / Installing…, instead of going quiet after the click.
+  - **Sidebar toggle:** a 28px button in the band, the same size and stroke as the other band tools, aligned with the sidebar logo, with collapse/expand icons that follow the state (`TitleBar.jsx`, renamed from `Titlebar.jsx` because Linux imports are case-sensitive).
+  - **Side panel tabs** have their own row under the band. In the band, Settings, the panel toggle and the window controls left ~130px and clipped them to "Runs Plan F".
+  - **Tests:** `updateProgress.test.jsx`, `imports.test.js` (import case), haptics in `w1polish.test.jsx`, the no-laurel check in `w1.test.jsx`, the side-panel row in `w4.test.jsx`. Web UI **118 passed**.
+  - **Verified live** in the Electron dev window on a scratch instance: the coin logo in light and dark, the solid hero, the toggle, all four side-panel tabs, and the clicks playing (Web Audio buffer starts counted from the inspector).
 - [ ] **Left for W1 (blocked or deliberately left):**
-  - `[!]` OAuth sign-in and an explicit `active_model` need W2's endpoints. The UI already calls them and falls back.
-  - `[!]` Persona portraits need W4.
+  - `[x]` W2's OAuth and `active_model` endpoints are merged; the UI uses them. `[!]` A completed OpenRouter sign-in still needs the owner's account.
+  - `[x]` Persona portraits: done in W4.
   - 95 `dark:` status tints have no semantic token yet.
   - About 25 content SVGs (learning cards, charts) are still hand-drawn.
-  - The laurel isn't in the brand mark: that's the owner's logo art.
   - `npm audit` reports 20 pre-existing advisories (not introduced here).
 
 #### W2 — Provider & setup parity (backend) — `[~]` (backend done and verified; a real OpenRouter sign-in is open)
@@ -1122,7 +1149,7 @@ Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`de
   - native toasts from `desktop_notify`, received over `/ws` (`src/bus.js`);
   - start at login (`app.setLoginItemSettings`, value `NammaAgent`, `--hidden`);
   - `namma://` deep links on a strict route allowlist (`deeplink.js`);
-  - `electron-updater` against GitHub Releases. The shell reports its state to the backend (`POST /api/desktop/update-state`), so the web UI's **Update available** banner and Settings → About work unchanged. **Update now** downloads, quits, installs silently and relaunches.
+  - `electron-updater` against GitHub Releases. The shell reports its state to the backend (`POST /api/desktop/update-state`), so the web UI's **Update available** banner and Settings → About work unchanged. **Update now** downloads (progress in the banner, About and the taskbar), shows "Installing…" plus a toast, quits, runs the installer with its progress window visible, and relaunches.
   - The release workflow's new `desktop` job uploads `NammaAgentSetup-<ver>.exe`, its `.blockmap` and `latest.yml`; CI runs the shell tests.
 - [x] **Backend hooks under `NAMMA_DESKTOP=1`:**
   - `core/desktop.py`: event sink, `desktop_notify` / `desktop_command`, the per-user data dir, a parent-PID watchdog;
@@ -1172,26 +1199,38 @@ Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`de
   - Forwarded update checks were made quiet: the web UI checks on every load.
   - Updater logs are first lines only, and the "no release yet" message is informational.
 - **Testing finding:** processes started from the Claude desktop app inherit its MSIX package identity, so their AppData and HKCU writes are virtualized into `%LOCALAPPDATA%\Packages\Claude_*`. The first install and uninstall, launched from the agent's shell, wrote the Add/Remove entry only to that private hive. Real-system checks must launch through Explorer (or the user). The virtualized test leftovers were deleted.
+- **Second round, 2026-11-26 (owner follow-ups):**
+  - `[x]` **No Electron icon anywhere.** Dev runs post toasts as AUMID `com.namma.agent.dev` from their own Start shortcut, *Namma Agent (dev)*, with the brand icon (`ensureDevShortcut()`, created with `writeShortcutLink("create")`; "replace" failed silently). A stray `Electron.lnk` is removed at start. Verified: dev toasts grouped under "Namma Agent (dev)" with the bust, and the taskbar shows the bust.
+  - `[x]` **Tray icon:** a generated multi-size `tray.ico` (`scripts/make_tray_icons.py`): the bold silhouette knocked out of a navy coin with a light rim. Verified in the tray overflow; the line-art icon was a grey smudge at 16px.
+  - `[x]` **Electron fuses for release builds** (`electronFuses`): RunAsNode, NODE_OPTIONS and `--inspect` off; cookie encryption; asar-only loading with integrity validation. Dev runs from `node_modules` are unaffected.
+  - `[x]` **Global show/hide shortcut** Ctrl+Alt+N verified live: hides the focused window and brings it back.
+  - `[x]` **WhatsApp QR session** under the shell lives in the desktop data folder (`whatsapp_qr.session_db_path()`), so *Uninstall everything* removes it; `NAMMA_WHATSAPP_SESSION` still wins.
+  - `[x]` Webui items: Appearance fixed (W1 slice 6); the side-panel tabs no longer clip (W1 slice 7).
+  - `[x]` **Update flow with the visible installer, verified on the installed build** (installed from Explorer; a local feed on port 47900; packaged builds with the fuses on):
+    - 2.3.2 → 2.3.3: Settings → About showed *Update to 2.3.3*, then "Downloading … n%" and "Installing Namma Agent 2.3.3. The installer shows its progress, and Namma Agent reopens when it's done." A toast said the same, as **Namma Agent** with the brand icon. The app closed, the installer's progress window appeared, and the app reopened by itself. The exe, Add/Remove and the backend all read 2.3.3.
+    - **Found and fixed:** the update's installer first stopped on the "Only for me / Anyone" page, because electron-updater doesn't pass `/currentuser`. `installer.nsh` `customInstallMode` now always picks the current user (the installer is per-user only), so the page never shows.
+    - 2.3.3 → 2.3.4, built with the fix: no question pages, just the progress window, then the app reopened by itself.
+    - The installed build's tray shows the navy coin.
+    - Then Settings → About → *Uninstall everything* on 2.3.4: the app closed and the uninstaller ran (one Welcome click). The real-system check found nothing left: no entry, shortcut, `namma://` key, install dir, app data or updater cache. The real `data/` and `~/.namma_agent` were identical before and after the whole run.
+  - Tests: `test_desktop.py` 27 → 28; shell `npm test` 8 → 9 (every icon `main.js` loads exists and is packaged; the port test tolerates a dev app holding 47821).
 - **Open:**
   - `[!]` Code signing: the installer is unsigned, so SmartScreen will warn on downloaded copies. It needs the owner's certificate.
-  - `[ ]` Electron fuses (RunAsNode, inspect) are still on; turn them off for release builds (`electronFuses`).
   - `[ ]` Safe mode on the error page: the backend has no safe-mode switch yet.
-  - `[ ]` The global show/hide shortcut (Ctrl+Alt+N) is registered but not verified live.
   - `[ ]` An update from a real GitHub release is untested until the first desktop release is tagged; the local-feed update is verified. The release workflow's `desktop` job hasn't run on GitHub yet.
   - `[ ]` Cold first start after install took about 20 s (Phase 7 targets under 4 s). Not measured warm or optimised; lazy start-up of MCP and comms is still open.
   - `[ ]` Linux AppImage: configured, not built or verified (no bundled runtime on Linux; it uses `python3` from PATH).
-  - `[ ]` WhatsApp QR session still defaults to `~/.namma_agent` (`comms/whatsapp_qr.py`), not the desktop data dir.
-  - `[ ]` The tray icon is faint at 16px (the light bust); it needs a higher-contrast tray glyph.
-  - **Webui items for the main session** (outside W3's files):
-    - `AppearanceTab.jsx` is missing its `shared.jsx` import on `phase9-w1`, so `/settings/appearance` crashes (already fixed in the main checkout, uncommitted);
-    - `Titlebar.jsx`: render the tool clusters after the headers so `desktop.js`'s drag fix can go;
-    - the right-pane tabs clip ("Fil…") at narrow widths.
+  - `[ ]` `TitleBar.jsx`: render the tool clusters after the panel headers so `desktop.js`'s drag fix (`DRAG_FIX_CSS`) can go. It works as is.
 
-#### W4 — Roman characters — `[ ]`
-After the W1 shell:
-- roles Imperator / Scriba / Architectus / Legatus;
-- personas Caesar, Cicero, Augustus, Seneca, Aurelius;
-- original portraits.
+#### W4 — Roman characters — `[x]` 2026-11-26
+- [x] **Personas** Caesar (Dictator), Cicero (Orator), Augustus (Princeps), Seneca (Philosopher), Aurelius (Emperor-philosopher) in `personas/*.yaml`.
+  - Each is a manner, not a name: identities use `{name}`, so the assistant is still called `assistant.name`. Each has a tone, dos and don'ts.
+  - `persona.py`: `list_personas` and `get_persona_spec` return `title` and `portrait`. Only bundled `/brand/personas/<id>.svg` URLs pass (`_PORTRAIT_RE`).
+- [x] **Original portraits:** SVG coins (gold, silver, bronze; beaded rim, legend, a relief bust with laurel, curls or beard), drawn by `webui/scripts/make_roman_portraits.py` into `public/brand/personas/`. No copied art.
+- [x] **Roles:** Imperator (Agent), Scriba (Chat), Architectus (Setup) and Legatus (delegated sub-agents), each with an inline-SVG emblem (`RoleEmblem.jsx`: laurel, wax tablet, dividers, standard) in `currentColor`.
+  - Shown in the mode list, the status bar, and on every delegated run in the Runs pane (background tasks aren't marked).
+  - The profile rail shows the coins, with "Persona: Caesar, Dictator" tooltips and labels.
+- **Tests:** `test_roman_personas.py` (14), `w4.test.jsx` (roles, Legatus marking, the coins, the rail; plus the side-panel row).
+- **Verified live** in the Electron dev window: the rail coins and tooltips, the mode-list emblems, and switching to Caesar.
 
 ### Phase 10 — Memory graph and its primitives — `[x]` 2026-11-26
 
@@ -1470,6 +1509,9 @@ background, reduced-motion support.
 
 | Date | Decision | Why |
 |---|---|---|
+| 2026-11-26 | **`web-haptics` 0.0.6 (MIT) as a web UI dependency** | The owner asked for Hermes Agent's exact click sounds. Hermes gets them from this library (its debug mode plays audible clicks on desktop), so porting Hermes' intents onto it reproduces them; a hand-written synth didn't match. About 6 KB, no transitive dependencies. |
+| 2026-11-26 | **Electron fuses on in release builds** (no RunAsNode, NODE_OPTIONS or `--inspect`; asar-only with integrity) | A shipped Electron binary with those fuses on can be driven as a plain Node runtime or debugger by anything that can launch it. Nothing in the app uses them; dev runs aren't fused. |
+| 2026-11-26 | **Setup mode opens the secure field itself when the model doesn't** | Models (gpt-4o here) keep saying "paste your token" in chat instead of calling `request_secret`, which puts secrets in the transcript. The guard only fires in setup mode, for a preset the request names whose required secret is unset. |
 | 2026-11-25 | **Electron desktop app replaces pywebview (reverses "keep pywebview")** | Owner asked for a native app that handles notifications, install and uninstall properly. Hermes Desktop is Electron + React; Node is installed, Rust isn't. The pywebview launcher stays as a fallback for one release. |
 | 2026-11-25 | **Adopt Hermes Desktop's layout and interaction model; keep Namma's own name and art** | The owner wants the Hermes UI. Hermes is MIT (credited in `THIRD_PARTY_NOTICES.md`). Its name and ☤ mark are not used, and its renderer can't be reused directly (different gateway, `@nous-research/ui`). This supersedes "identity not copied" in §4. |
 | 2026-11-25 | **No ChatGPT/Codex or Claude-subscription OAuth** | Both reuse another product's OAuth client (Hermes routes Claude "as Claude Code"), which conflicts with the providers' terms and can break without notice. API keys everywhere, plus official third-party OAuth (OpenRouter PKCE). |
@@ -1609,6 +1651,13 @@ From `STAND_OUT.md`:
 
 ## 10. Change log
 
+- **2026-11-26 (Phase 9 complete, branch `phase9-complete`):**
+  - CI: an explicit ruff rule set, clean under ruff 0.17, with the CI pin removed. Fixed the Linux import case (`TitleBar.jsx`), Windows Engram ordering ties (`created_at` then `rowid`; the Windows clock ticks ~15.6 ms) and an installer test that needed Ollama.
+  - W1 slice 7: dark-mode coin logo, a solid home logo, no Imperium laurel, Hermes Agent's click sounds (`web-haptics`), update progress in the banner and About, the sidebar toggle, side-panel tabs on their own row.
+  - W3 second round: no Electron name or icon in toasts, Start or the taskbar for dev runs; a solid tray coin; release fuses; the visible installer on update; WhatsApp QR session in app data; Ctrl+Alt+N verified.
+  - W4: the five Roman personas with original coin portraits; role emblems; Legatus on delegated runs.
+  - Setup mode: a live setup snapshot in the prompt and a secure-field safety net, verified on gpt-4o.
+  - Python 1,604 passed / 3 skipped; ruff clean; web UI 118 passed; desktop shell 9 passed.
 - **2026-11-26 (Phase 9 integration):**
   - Merged into `phase9-integration` for one PR to `main`:
     - `phase9-w1`, plus the main checkout's uncommitted W1 polish;

@@ -134,9 +134,11 @@ its `.blockmap` (installed builds only).
   and returns `{update_available, latest, current, status, progress}`. So the web UI's
   existing **Update available** banner and Settings → About work unchanged.
 - **Update now** (`/api/update/apply` → `desktop_command update_apply`, or the tray
-  dialog): downloads if needed, with taskbar progress. It then stops the backend, quits,
-  runs the NSIS installer silently and relaunches the new version. A downloaded update
-  also installs on the next quit.
+  dialog): downloads if needed, with a progress bar in the banner and in Settings → About
+  plus taskbar progress. It then shows "Installing…" and a notification, stops the
+  backend, quits and runs the NSIS installer **visibly** (its progress window, no
+  questions), which skips its finish page and reopens the new version by itself. A
+  downloaded update also installs on the next quit.
 - **Local test feed:** `NAMMA_DESKTOP_UPDATE_URL=http://127.0.0.1:47900/` points the updater
   at a folder with `latest.yml` plus the installer (a generic feed), instead of GitHub.
   The steps are in the root README under *Developing the desktop app*.
