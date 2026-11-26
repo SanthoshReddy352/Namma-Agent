@@ -125,6 +125,7 @@ def test_default_config_caps_tool_results_and_steps():
     from pathlib import Path
 
     import yaml
+
     import namma_agent
     base = Path(namma_agent.__file__).parent / "config.yaml"
     conv = (yaml.safe_load(base.read_text(encoding="utf-8")) or {}).get("conversation") or {}

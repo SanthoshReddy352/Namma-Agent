@@ -6,7 +6,6 @@ import time
 from namma_agent.core.events import EventBus, fanout
 from namma_agent.core.narration import NarrationEngine, humanize_tool
 
-
 # -- event bus -------------------------------------------------------------
 
 def test_event_bus_pub_sub_and_wildcard():

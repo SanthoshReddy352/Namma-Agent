@@ -25,12 +25,12 @@ import urllib.request
 import uuid
 from pathlib import Path
 
+from namma_agent.config import data_dir as _data_dir
 from namma_agent.core import urlguard
 from namma_agent.core.interactive import record_artifact
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
-from namma_agent.config import data_dir as _data_dir
 _MEDIA = _data_dir() / "media"
 _TIMEOUT = 12
 

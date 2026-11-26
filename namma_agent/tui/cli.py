@@ -789,7 +789,6 @@ def cmd_memory(args: argparse.Namespace) -> int:
 
 def cmd_status(args: argparse.Namespace) -> int:
     from namma_agent.tui import theme
-
     from namma_agent.version import __version__
 
     service = build_service(args)

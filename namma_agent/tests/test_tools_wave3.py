@@ -95,8 +95,9 @@ def test_news_unknown_category(reg):
 
 def test_news_parse_atom_and_rss():
     rss = b"""<rss><channel><item><title>RSS One</title><link>http://a</link></item></channel></rss>"""
-    import namma_agent.tools.news as n
     import urllib.request
+
+    import namma_agent.tools.news as n
 
     class _Resp:
         def __enter__(self): return self

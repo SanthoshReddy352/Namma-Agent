@@ -18,7 +18,12 @@ from typing import Optional
 
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import (
-    delete_user_persona, list_personas as _list_personas, load_persona, save_persona,
+    delete_user_persona,
+    load_persona,
+    save_persona,
+)
+from namma_agent.core.persona import (
+    list_personas as _list_personas,
 )
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
@@ -492,8 +497,7 @@ def register_project_tools(registry: ToolRegistry, db: Database) -> None:
     def index_document(args: dict) -> ToolResult:
         from pathlib import Path
 
-        from namma_agent.core.docindex import (
-            MAX_FILE_BYTES, MAX_FILES_PER_PROJECT, ingest_document)
+        from namma_agent.core.docindex import MAX_FILE_BYTES, MAX_FILES_PER_PROJECT, ingest_document
         from namma_agent.core.safety import check_path
 
         pid = _project_id()

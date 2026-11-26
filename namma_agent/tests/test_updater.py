@@ -7,7 +7,6 @@ import yaml
 from namma_agent.core import updater
 from namma_agent.core.setup_wizard import configure_provider, run_wizard
 
-
 # ── version comparison ──────────────────────────────────────────────────────
 
 def test_parse_version_lenient():

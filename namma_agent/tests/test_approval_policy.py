@@ -12,8 +12,12 @@ from namma_agent.core.memory import Database
 from namma_agent.core.providers.base import LLMResponse, ToolCall
 from namma_agent.core.tools import ToolRegistry, ToolResult
 from namma_agent.core.trust import (
-    allow_all, channel_approval, decline_all, is_decline_all,
-    reset_message_trust, set_message_trust,
+    allow_all,
+    channel_approval,
+    decline_all,
+    is_decline_all,
+    reset_message_trust,
+    set_message_trust,
 )
 
 

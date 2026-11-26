@@ -251,7 +251,10 @@ def test_delegate_restores_parent_session_and_cancel(wired):
     leave them pointing at its hidden session (todos, shell cwd, notes and
     checkpoints of the rest of the parent turn went to the child)."""
     from namma_agent.core.interactive import (
-        get_current_cancel, get_current_session, set_current_cancel, set_current_session,
+        get_current_cancel,
+        get_current_session,
+        set_current_cancel,
+        set_current_session,
     )
     reg, _, agent = wired
     agent.provider._responses = [LLMResponse(content="ok")]

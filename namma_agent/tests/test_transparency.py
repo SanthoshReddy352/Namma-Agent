@@ -11,7 +11,6 @@ from namma_agent.core.persona import load_persona
 from namma_agent.core.providers.base import LLMResponse, Provider, ToolCall
 from namma_agent.core.tools import ToolRegistry
 
-
 # ── _record_step (the reducer shared in spirit with the web UI) ──────────────
 
 def test_record_step_preamble_and_tools():
@@ -308,6 +307,7 @@ def test_empty_response_mid_task_nudges_then_finishes():
 
 def test_two_empty_responses_fail_loudly():
     import pytest
+
     from namma_agent.core.providers.base import ProviderError
 
     responses = [

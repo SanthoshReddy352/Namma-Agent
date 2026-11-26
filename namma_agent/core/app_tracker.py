@@ -20,6 +20,7 @@ import time
 from pathlib import Path
 
 from namma_agent.config import data_dir as _data_dir
+
 _STORE = _data_dir() / "opened_apps.json"
 
 

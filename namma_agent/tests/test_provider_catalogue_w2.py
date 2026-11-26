@@ -11,17 +11,20 @@ import urllib.parse
 import pytest
 from fastapi.testclient import TestClient
 
+import namma_agent.tests.test_server as ts
 from namma_agent.core.memory import Database
 from namma_agent.core.oauth import OAuthError, OAuthManager, pkce_challenge, pkce_verifier
 from namma_agent.core.providers import catalog as cat
 from namma_agent.core.providers.base import LLMResponse, ToolCall
 from namma_agent.core.providers.registry import (
-    ADAPTERS, PROVIDER_TYPES, _TYPE_DEFAULTS, build_provider,
+    _TYPE_DEFAULTS,
+    ADAPTERS,
+    PROVIDER_TYPES,
+    build_provider,
 )
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.server.api import create_app
 from namma_agent.service import NammaAgentService
-import namma_agent.tests.test_server as ts
 
 CONTRACT_FIELDS = {"id", "label", "group", "auth", "key_env", "key_url", "base_url",
                    "needs_base_url", "key_set", "connected", "docs_url"}

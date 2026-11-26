@@ -4,11 +4,10 @@ approvals survive a reconnect), the queued state, in-session model switching,
 and the event schema."""
 from __future__ import annotations
 
-import time
-
 import json
 import socket
 import threading
+import time
 from contextlib import contextmanager
 
 from fastapi.testclient import TestClient
@@ -19,7 +18,6 @@ from namma_agent.core.tools import ToolRegistry
 from namma_agent.server.api import create_app
 from namma_agent.server.event_log import EVENT_SCHEMA, EventLog, validate
 from namma_agent.service import NammaAgentService
-
 
 # ── the log ──────────────────────────────────────────────────────────────────
 

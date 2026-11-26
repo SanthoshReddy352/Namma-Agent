@@ -28,7 +28,7 @@ from typing import Callable, Optional
 from namma_agent.core.logger import logger
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import Persona, date_line, load_persona
-from namma_agent.core.providers.base import ProviderError, USAGE_KEYS, Provider, usage_tokens
+from namma_agent.core.providers.base import USAGE_KEYS, Provider, ProviderError, usage_tokens
 from namma_agent.core.tools import ToolRegistry
 
 #: OpenAI / Gemini reject requests with more than 128 tool definitions.

@@ -10,7 +10,9 @@ from __future__ import annotations
 import pytest
 
 from namma_agent.core.docscan import (
-    WEB_GUARD_BEGIN, WEB_GUARD_END, screen_web_text,
+    WEB_GUARD_BEGIN,
+    WEB_GUARD_END,
+    screen_web_text,
 )
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.tools import load_tools

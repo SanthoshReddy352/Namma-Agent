@@ -249,8 +249,7 @@ def test_unavailable_tools_are_hidden_from_the_model_but_listed():
 
 
 def test_lab_and_smart_home_tools_hidden_without_config(monkeypatch):
-    from namma_agent.tools import security, smart_home
-    from namma_agent.tools import load_tools
+    from namma_agent.tools import load_tools, security, smart_home
 
     monkeypatch.setattr(security, "_cfg", lambda: {"lab_mode": False})
     monkeypatch.setattr(smart_home, "_cfg", lambda: {})

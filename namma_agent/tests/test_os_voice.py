@@ -122,6 +122,7 @@ def _client(monkeypatch):
 
     svc = types.SimpleNamespace(config={"voice": {"tts_voice": "Zira", "stt_engine": "auto"}})
     import namma_agent.server.api as api_mod
+
     # create_app needs a real service; build one cheaply.
     from namma_agent.core.memory import Database
     from namma_agent.core.providers.base import LLMResponse, Provider

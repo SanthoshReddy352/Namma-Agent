@@ -2,7 +2,6 @@
 markitdown, self-knowledge, self-authoring, gws graceful-degrade."""
 from __future__ import annotations
 
-
 from namma_agent.core.agent import Agent
 from namma_agent.core.memory import Database
 from namma_agent.core.persona import load_persona

@@ -24,26 +24,33 @@ import asyncio
 import itertools
 import json
 import queue
-import time
 import re
 import threading
+import time
 from datetime import datetime as _dt
 from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import (
-    FastAPI, File, Form, HTTPException, Request, Response, UploadFile, WebSocket,
+    FastAPI,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
     WebSocketDisconnect,
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from namma_agent.config import data_dir as _data_dir
 from namma_agent.core.logger import logger
 from namma_agent.core.providers.base import usage_tokens
 from namma_agent.service import NammaAgentService
 
-from namma_agent.config import data_dir as _data_dir
 _UPLOAD_DIR = _data_dir() / "uploads"
 _DEFAULT_MAX_UPLOAD_MB = 50
 
@@ -564,7 +571,9 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         UI polls this: while unlinked it returns a QR data URI to scan; once the
         phone links the session, ``linked`` flips true and ``qr`` clears."""
         from namma_agent.comms.whatsapp_qr import (
-            WhatsAppQRChannel, _neonize_installed, whatsapp_mode,
+            WhatsAppQRChannel,
+            _neonize_installed,
+            whatsapp_mode,
         )
 
         if whatsapp_mode() != "qr":
@@ -687,8 +696,8 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
     @app.post("/api/pack/export")
     def pack_export(body: PackExportBody):
         """Build a pack zip from the selection and save it under ~/.namma_agent/exports."""
-        from namma_agent.core import packs
         from namma_agent.config import assistant_name
+        from namma_agent.core import packs
         from namma_agent.tools.authoring import USER_TOOLS_DIR
         if service.skills is None:
             return {"ok": False, "error": "skills unavailable"}
@@ -1163,8 +1172,7 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         notifications switched off) — the UI then shows an in-app banner instead,
         so the notification still reaches the user in both the browser tab and
         the desktop window."""
-        from namma_agent.core.notifications import (notification_status,
-                                                    send_native_notification)
+        from namma_agent.core.notifications import notification_status, send_native_notification
         ok = send_native_notification(body.title, body.body)
         return {"ok": ok, "reason": "" if ok else notification_status().get("reason", "")}
 

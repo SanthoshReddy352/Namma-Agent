@@ -21,7 +21,6 @@ from namma_agent.core.providers import (
 )
 from namma_agent.core.providers.google_provider import GoogleProvider
 
-
 # --------------------------------------------------------------------------
 # Fakes
 # --------------------------------------------------------------------------

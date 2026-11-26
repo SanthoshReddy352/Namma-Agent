@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Optional
 
 from namma_agent.config import data_dir as _data_dir
+
 MEDIA_ROOT = _data_dir() / "media"
 
 # Same shape the agent/telegram layers use: any /api/media/<rel> reference,

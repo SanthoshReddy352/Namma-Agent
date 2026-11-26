@@ -11,7 +11,6 @@ from namma_agent.core import self_knowledge as sk
 from namma_agent.core.memory import Database
 from namma_agent.core.tools import ToolRegistry
 
-
 # ── self-knowledge ───────────────────────────────────────────────────────────
 
 def test_about_block_names_real_paths_and_no_stale_identity():

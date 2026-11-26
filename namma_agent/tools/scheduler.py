@@ -21,7 +21,6 @@ from namma_agent.config import load_config
 from namma_agent.core.logger import logger
 from namma_agent.core.tools import ToolRegistry, ToolResult
 
-
 _REL_RE = re.compile(r"\bin\s+(\d+)\s*(second|sec|minute|min|hour|hr|day)s?\b", re.I)
 _HHMM_RE = re.compile(r"\b(?:at\s+)?([01]?\d|2[0-3]):([0-5]\d)\b")
 _UNIT_SECONDS = {"second": 1, "sec": 1, "minute": 60, "min": 60,

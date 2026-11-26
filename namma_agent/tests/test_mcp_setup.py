@@ -16,8 +16,13 @@ from namma_agent.core.memory import Database
 from namma_agent.core.providers.base import LLMResponse, Provider
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.mcp import catalog as mcp_catalog
-from namma_agent.mcp.config import (expand_vars, import_servers, merge_servers, resolved,
-                                    validate_servers)
+from namma_agent.mcp.config import (
+    expand_vars,
+    import_servers,
+    merge_servers,
+    resolved,
+    validate_servers,
+)
 from namma_agent.mcp.http_client import HttpMCPClient
 from namma_agent.mcp.manager import MCPManager
 from namma_agent.tests.test_mcp import _FAKE_SERVER

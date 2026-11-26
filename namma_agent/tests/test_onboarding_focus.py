@@ -6,8 +6,8 @@ import pytest
 from namma_agent.core.providers.base import LLMResponse, Provider
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.service import NammaAgentService
-from namma_agent.tools import load_tools
 from namma_agent.tools import focus as focusmod
+from namma_agent.tools import load_tools
 from namma_agent.tools import scheduler as sched
 
 
@@ -49,6 +49,7 @@ def test_complete_onboarding_saves_name_and_facts(service):
 
 def test_onboarding_rest_endpoints(service):
     from fastapi.testclient import TestClient
+
     from namma_agent.server.api import create_app
 
     c = TestClient(create_app(service))

@@ -10,10 +10,12 @@ import threading
 from typing import Callable, Optional
 
 from namma_agent.config import (
-    assistant_name, configured_models, configured_providers, load_config,
+    assistant_name,
+    configured_models,
+    configured_providers,
+    load_config,
 )
 from namma_agent.core.agent import Agent, AgentResult
-from namma_agent.core.setup_service import SetupMixin
 from namma_agent.core.builtins import (
     register_agent_tools,
     register_learning_tools,
@@ -26,6 +28,7 @@ from namma_agent.core.memory import Database
 from namma_agent.core.narration import NarrationEngine
 from namma_agent.core.persona import load_persona
 from namma_agent.core.providers import from_config
+from namma_agent.core.setup_service import SetupMixin
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.core.usage import labeled as _labeled
 
@@ -1278,8 +1281,8 @@ class NammaAgentService(SetupMixin):
         ran, what's queued. Powers GET /api/status and the Settings panel."""
         from namma_agent.core.routines import load_routines
         from namma_agent.core.sandbox import status as _sandbox_status
-        from namma_agent.core.shell_backends import status as _shell_backend_status
         from namma_agent.core.self_review import load_proposals, load_snapshots
+        from namma_agent.core.shell_backends import status as _shell_backend_status
         from namma_agent.core.watchers import load_watchers
 
         routines = load_routines(self.config)
@@ -2608,7 +2611,10 @@ class NammaAgentService(SetupMixin):
         sink. ``model_id`` picks one of the configured model profiles (the chat's
         chosen brain); falls back to the default provider when unset/unknown."""
         from namma_agent.core.interactive import (
-            get_current_session, set_artifact_recorder, set_askpass, set_event_sink,
+            get_current_session,
+            set_artifact_recorder,
+            set_askpass,
+            set_event_sink,
         )
 
         # Any turn resets the memory consolidator's idle clock.
@@ -2643,7 +2649,8 @@ class NammaAgentService(SetupMixin):
         # (delegate_task / background_task) so a sub-agent inherits the model the
         # user actually picked — see core/interactive.set_current_provider.
         from namma_agent.core.interactive import (
-            reset_current_provider, set_current_provider,
+            reset_current_provider,
+            set_current_provider,
         )
         turn_provider = self.provider_for(model_id)
         prov_token = set_current_provider(turn_provider)

@@ -10,9 +10,9 @@ from __future__ import annotations
 
 import time
 
+from namma_agent.core.tools import ToolRegistry, ToolResult
 from namma_agent.tools import _jsonstore as store
 from namma_agent.tools import scheduler as _sched
-from namma_agent.core.tools import ToolRegistry, ToolResult
 
 _FILE = "focus.json"
 

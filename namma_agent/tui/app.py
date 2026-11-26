@@ -481,7 +481,11 @@ class TerminalUI:
         from prompt_toolkit.filters import Condition
         from prompt_toolkit.key_binding import KeyBindings
         from prompt_toolkit.layout import (
-            ConditionalContainer, FormattedTextControl, HSplit, Layout, Window,
+            ConditionalContainer,
+            FormattedTextControl,
+            HSplit,
+            Layout,
+            Window,
         )
         from prompt_toolkit.layout.dimension import Dimension
         from prompt_toolkit.layout.menus import CompletionsMenu

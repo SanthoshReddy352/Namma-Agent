@@ -4,8 +4,8 @@ from __future__ import annotations
 import pytest
 
 from namma_agent.core.tools import ToolRegistry
-from namma_agent.tools import load_tools
 from namma_agent.tools import goals as goalmod
+from namma_agent.tools import load_tools
 from namma_agent.tools import tasks as taskmod
 
 

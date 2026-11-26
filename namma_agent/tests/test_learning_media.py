@@ -36,6 +36,7 @@ def test_render_simulation_rejects_non_html(reg):
 
 def test_fetch_image_mocked(reg, tmp_path, monkeypatch):
     import io
+
     import namma_agent.tools.learning_media as lm
 
     class FakeResp(io.BytesIO):

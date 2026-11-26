@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from fastapi.testclient import TestClient
 
+import namma_agent.tests.test_server as ts
 from namma_agent.core.memory import Database
 from namma_agent.core.providers.base import LLMResponse
 from namma_agent.core.providers.catalog import list_models, list_models_result, provider_catalog
 from namma_agent.core.tools import ToolRegistry
 from namma_agent.server.api import create_app
 from namma_agent.service import NammaAgentService
-import namma_agent.tests.test_server as ts
 
 
 def test_catalog_has_all_providers(monkeypatch):

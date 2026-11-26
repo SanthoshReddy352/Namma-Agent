@@ -300,7 +300,7 @@ class EngramStore:
         params.append(limit)
         with self._lock:
             rows = self.conn.execute(
-                f"SELECT * FROM memory_items {clause} ORDER BY last_seen DESC LIMIT ?",
+                f"SELECT * FROM memory_items {clause} ORDER BY last_seen DESC, rowid DESC LIMIT ?",
                 tuple(params)).fetchall()
         return [dict(r) for r in rows]
 
@@ -314,7 +314,7 @@ class EngramStore:
             rows = self.conn.execute(
                 "SELECT id, text, kind, source, screen_status, created_at "
                 "FROM memory_items WHERE screen_status NOT IN ('ok', 'pending') "
-                "ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
         return [dict(r) for r in rows]
 
     # -- write approval (Phase 7c) --------------------------------------------
@@ -327,7 +327,7 @@ class EngramStore:
             rows = self.conn.execute(
                 "SELECT id, text, kind, source, created_at, pending_supersedes "
                 "FROM memory_items WHERE screen_status = 'pending' "
-                "ORDER BY created_at DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (max(1, int(limit)),)).fetchall()
         out = []
         for row in rows:
             item = dict(row)
@@ -525,7 +525,7 @@ class EngramStore:
                 "SELECT id, subject, predicate, object, frequency FROM memory_items "
                 "WHERE expired_at IS NULL AND archived_at IS NULL "
                 "AND subject != '' AND predicate != '' AND object != '' "
-                "ORDER BY created_at DESC").fetchall()
+                "ORDER BY created_at DESC, rowid DESC").fetchall()
         groups: dict[tuple, list[dict]] = {}
         for r in rows:
             # snake_case and spaced predicates ("studies_at" / "Studies At")
@@ -569,7 +569,7 @@ class EngramStore:
                 "SELECT * FROM memory_items WHERE expired_at IS NULL "
                 "AND archived_at IS NULL AND screen_status = 'ok' "
                 "AND (quality IS NULL OR quality_at IS NULL OR quality_at < ?) "
-                "ORDER BY created_at DESC LIMIT ?", (cutoff, max(1, int(limit)))).fetchall()
+                "ORDER BY created_at DESC, rowid DESC LIMIT ?", (cutoff, max(1, int(limit)))).fetchall()
         return [dict(r) for r in rows]
 
     def set_quality(self, item_id: str, score: float) -> None:
@@ -688,7 +688,7 @@ class EngramStore:
             rows = self.conn.execute(
                 "SELECT id, text, frequency, created_at FROM memory_items "
                 "WHERE expired_at IS NULL AND archived_at IS NULL "
-                "ORDER BY created_at DESC").fetchall()
+                "ORDER BY created_at DESC, rowid DESC").fetchall()
         groups: dict[str, list[dict]] = {}
         for r in rows:
             key = " ".join(r["text"].lower().split())

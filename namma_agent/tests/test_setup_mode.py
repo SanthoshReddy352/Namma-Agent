@@ -299,6 +299,7 @@ def test_shipped_config_does_not_pin_the_database_path():
     """A pinned database.path made NAMMA_DATA_DIR useless for the DB — and the
     vault + memory that live beside it (a scratch run wrote to the real data/)."""
     import yaml
+
     from namma_agent.config import _config_path
     base = yaml.safe_load(_config_path().read_text(encoding="utf-8"))
     assert not ((base.get("database") or {}).get("path"))

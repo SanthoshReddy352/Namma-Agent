@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from unittest.mock import MagicMock
+
 from namma_agent.core.providers.openai_compat import OpenAICompatProvider
 from namma_agent.core.tools import ToolRegistry
 

@@ -33,6 +33,7 @@ if "--version" in sys.argv:
 if "--configure" in sys.argv:
     # Non-interactive provider config from a JSON file (the GUI installer writes one).
     import json
+
     from namma_agent.core.setup_wizard import configure_provider
     data = json.load(open(_arg_after("--configure"), encoding="utf-8"))
     configure_provider(data["type"], model=data.get("model"),
@@ -43,6 +44,7 @@ if "--configure" in sys.argv:
 if "--onboard" in sys.argv:
     # Non-interactive onboarding from a JSON file ({name, date_of_birth, ...}).
     import json
+
     from namma_agent.core.setup_wizard import save_onboarding
     data = json.load(open(_arg_after("--onboard"), encoding="utf-8"))
     saved = save_onboarding(data)

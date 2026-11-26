@@ -3,9 +3,16 @@ target-version = "py310"
 line-length = 100
 
 [lint]
-# Default rules (E4/E7/E9/F) plus: keep the meaningful correctness checks (unused
-# imports, undefined names, unused variables) and ignore purely-stylistic
-# compact-statement rules the codebase uses deliberately.
+# The rule set is selected EXPLICITLY so a ruff upgrade can't change what CI
+# enforces: ruff 0.17 widened its defaults (pyupgrade, bandit, simplify, …) and
+# ~1,078 stylistic findings appeared overnight on unchanged code.
+#   E4/E7/E9/F  the classic defaults: unused imports, undefined names, unused
+#               variables, syntax/IO errors (the meaningful correctness checks)
+#   I           import sorting (auto-fixed)
+#   (RUF100 stays off: `# noqa: BLE001` etc. deliberately document broad excepts)
+#   PLE2515     zero-width characters hiding in source
+# Purely-stylistic compact-statement rules the codebase uses deliberately stay off.
+select = ["E4", "E7", "E9", "F", "I", "PLE2515"]
 ignore = [
     "E701",  # multiple statements on one line (colon) — used in tiny test stubs
     "E702",  # multiple statements on one line (semicolon) — compact assignments
@@ -15,3 +22,6 @@ ignore = [
 [lint.per-file-ignores]
 # Re-export shims and fixtures: unused imports are intentional there.
 "**/__init__.py" = ["F401"]
+
+[lint.isort]
+known-first-party = ["namma_agent", "installer"]
