@@ -157,11 +157,43 @@ button, svg, [role="button"], nav, [data-chrome] { -webkit-user-select: none; us
 }
 .brand-medallion-fill { background-color: rgb(var(--surface-raised)); -webkit-mask-image: url(/brand/logo-fill.png); mask-image: url(/brand/logo-fill.png); }
 .brand-medallion-ink { background-color: rgb(var(--logo-ink)); -webkit-mask-image: url(/brand/logo-mask.png); mask-image: url(/brand/logo-mask.png); }
-.brand-logo {
-  background-color: rgb(var(--logo-ink));
-  -webkit-mask: url(/brand/logo-mask.png) center / contain no-repeat;
-          mask: url(/brand/logo-mask.png) center / contain no-repeat;
+.brand-logo-fill, .brand-logo-ink {
+  -webkit-mask-position: center; mask-position: center;
+  -webkit-mask-size: contain; mask-size: contain;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
 }
+.brand-logo-ink { background-color: rgb(var(--logo-ink)); -webkit-mask-image: url(/brand/logo-mask.png); mask-image: url(/brand/logo-mask.png); }
+.brand-logo-fill { display: none; -webkit-mask-image: url(/brand/logo-fill.png); mask-image: url(/brand/logo-fill.png); }
+
+/* Dark themes: light-on-dark line art turns the engraving's fine hatching into
+   scattered bright pixels with nothing behind it. So in the dark the mark is a
+   light coin, as in daylight: an ivory face tinted by the theme accent, the
+   silhouette filled, the engraving in dark ink. */
+.dark {
+  --coin-face: 247 245 239;
+  --coin-ink: 28 31 46;
+}
+.dark .brand-medallion {
+  background: radial-gradient(circle at 34% 28%,
+    rgb(var(--coin-face)) 0%,
+    color-mix(in srgb, rgb(var(--accent)) 16%, rgb(232 230 224)) 62%,
+    color-mix(in srgb, rgb(var(--accent)) 34%, rgb(205 203 198)) 100%);
+}
+.dark .brand-medallion-fill { background-color: rgb(var(--coin-face)); }
+.dark .brand-medallion-ink { background-color: rgb(var(--coin-ink)); }
+.dark .brand-logo {
+  border-radius: 9999px; overflow: hidden;
+  background: radial-gradient(circle at 34% 28%,
+    rgb(var(--coin-face)) 0%,
+    color-mix(in srgb, rgb(var(--accent)) 18%, rgb(228 226 220)) 100%);
+  box-shadow: 0 0 0 1px rgb(var(--accent) / 0.4);
+}
+.dark .brand-logo-fill { display: block; background-color: rgb(var(--coin-face)); }
+.dark .brand-logo-fill, .dark .brand-logo-ink {
+  -webkit-mask-position: 50% 14%; mask-position: 50% 14%;
+  -webkit-mask-size: 84% auto; mask-size: 84% auto;
+}
+.dark .brand-logo-ink { background-color: rgb(var(--coin-ink)); }
 /* ── Chat background: painted, crumpled paper (Phase 9 W1, slice 4) ─────────
    Art from scripts/make_chat_art.py. Each layer is a mask or neutral texture
    coloured here from tokens: the theme accent, the mode's paint, the ink.  */

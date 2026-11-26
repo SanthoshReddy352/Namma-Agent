@@ -96,7 +96,7 @@ def check_for_update(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict:
             "published_at": latest.get("published_at")}
 
 
-_ACTIVE = ("available", "downloading", "ready")
+_ACTIVE = ("available", "downloading", "ready", "installing")
 
 
 def _desktop_check(repo: str, timeout: float) -> dict:

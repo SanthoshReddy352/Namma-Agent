@@ -8,8 +8,10 @@
 //                             exists, then shows a notification.
 //   check({userInitiated})    the tray's "Check for updates…": dialogs either way.
 //   apply()                   the web UI's "Update now" (/api/update/apply) or the
-//                             tray dialog: download if needed, then quit, install
-//                             silently and relaunch, with no further questions.
+//                             tray dialog: download if needed (progress in the
+//                             banner, Settings → About and the taskbar), then quit
+//                             and run the installer VISIBLY (its progress page),
+//                             which reopens the app, with no further questions.
 //
 // Every state change is reported through onState, which the shell forwards to
 // the backend (/api/desktop/update-state) so the web UI's update banner and
@@ -134,7 +136,7 @@ function createUpdater({ log, getWindow, beforeInstall, appName, onState = () =>
       if (userInitiated) notify("Updates are checked in the installed app, not in a development run.");
       return state;
     }
-    if (["downloading", "ready"].includes(state.status)) return state;   // already under way
+    if (["downloading", "ready", "installing"].includes(state.status)) return state;   // under way
     try { await load().checkForUpdates(); } catch (e) { fail(e); }
     return state;
   }
@@ -150,9 +152,16 @@ function createUpdater({ log, getWindow, beforeInstall, appName, onState = () =>
 
   async function install() {
     applyRequested = false;
+    // Tell the UI first (banner / Settings → About show "Installing…"), give it
+    // a moment to poll, then stop the backend and hand over to the installer.
+    setState({ status: "installing", progress: 100 });
+    notify(`Installing ${appName()} ${state.version || ""}. The installer shows its progress; the app reopens when it's done.`.replace("  ", " "));
+    await new Promise((r) => setTimeout(r, 2500));
     await beforeInstall();
-    // Silent NSIS install, then relaunch the app.
-    load().quitAndInstall(true, true);
+    // NOT silent: the installer's progress page is on screen the whole time (an
+    // invisible multi-minute install looks like the app just died), and its
+    // update-mode finish step reopens the app (resources/installer.nsh).
+    load().quitAndInstall(false, true);
     return state;
   }
 

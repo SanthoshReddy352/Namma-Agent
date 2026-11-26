@@ -180,7 +180,7 @@ _update_cond = threading.Condition()
 
 def set_update_state(state: dict) -> dict:
     """Record the shell's latest updater state (``status``: checking | current |
-    available | downloading | ready | error | unsupported, plus ``version``,
+    available | downloading | ready | installing | error | unsupported, plus ``version``,
     ``progress``, ``error``). Wakes anyone waiting in :func:`wait_update_state`."""
     global _update_seq
     clean = {k: state.get(k) for k in ("status", "version", "progress", "error", "current")

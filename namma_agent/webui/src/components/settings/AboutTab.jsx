@@ -1,9 +1,10 @@
 // Settings → AboutTab (split out of Settings.jsx, Phase 9 W1).
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Dialog } from "../ui/index.js";
 import { applyUpdate, checkUpdate, fetchVersion, uninstallApp } from "../../api.js";
 import { Section } from "./shared.jsx";
+import { UPDATE_ACTIVE, describeUpdate, followUpdate } from "../../updateProgress.js";
 
 // About / Updates / Danger-zone (uninstall) — mirrors Hermes' Settings → About.
 export function AboutTab() {
@@ -15,16 +16,30 @@ export function AboutTab() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
 
+  const [following, setFollowing] = useState(false);
+  const stopRef = useRef(null);
+  const follow = () => {
+    setFollowing(true);
+    stopRef.current?.();
+    stopRef.current = followUpdate((r) => setUpd((cur) => ({ ...cur, ...r })));
+  };
+
   useEffect(() => {
     fetchVersion().then((r) => setVersion(r?.version || "")).catch(() => {});
-    checkUpdate().then(setUpd).catch(() => {});
+    checkUpdate().then((r) => {
+      setUpd(r);
+      if (r?.managed_by === "desktop" && UPDATE_ACTIVE.includes(r.status)) follow();
+    }).catch(() => {});
+    return () => stopRef.current?.();
   }, []);
 
   const doUpdate = async () => {
     setUpdating(true);
-    await applyUpdate().catch(() => {});
-    setMsg("Updating… the app will relaunch shortly.");
+    const r = await applyUpdate().catch(() => null);
+    if (r?.managed_by === "desktop" && r.started) { follow(); return; }
+    setMsg(r?.started === false ? `Couldn't start the update: ${r.error || "unknown error"}` : "Updating… the app will relaunch shortly.");
   };
+  const progress = following && upd ? describeUpdate(upd) : null;
 
   const doUninstall = async () => {
     setBusy(true);
@@ -46,7 +61,20 @@ export function AboutTab() {
       </Section>
 
       <Section title="Updates" hint="Pull the latest version and relaunch automatically.">
-        {upd?.update_available ? (
+        {progress ? (
+          <div role="status" aria-live="polite" className="space-y-2">
+            <div className={`text-sm ${progress.failed ? "text-danger" : "text-fg"}`}>{progress.label}</div>
+            {progress.pct != null && (
+              <div className="h-1.5 w-full max-w-sm rounded-full bg-surface-sunken overflow-hidden"
+                   role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={progress.pct}>
+                <div className="h-full bg-brand transition-[width] duration-300" style={{ width: `${progress.pct}%` }} />
+              </div>
+            )}
+            {progress.failed && (
+              <button onClick={doUpdate} className="px-3 py-1.5 rounded-lg bg-brand text-white hover:bg-brand-deep">Try again</button>
+            )}
+          </div>
+        ) : upd?.update_available ? (
           <button onClick={doUpdate} disabled={updating}
                   className="px-4 py-2 rounded-lg bg-brand text-white hover:bg-brand-deep disabled:opacity-50">
             {updating ? "Updating…" : `Update to ${upd.latest}`}

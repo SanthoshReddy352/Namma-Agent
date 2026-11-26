@@ -24,6 +24,34 @@
   Pop $0
 !macroend
 
+; Finish page. Same as electron-builder's default (a "Run Namma Agent" box),
+; except for an UPDATE: the app runs the installer visibly (not /S) so the user
+; sees the progress page instead of the app silently vanishing for minutes, and
+; once the files are in, the installer reopens the app by itself and closes,
+; with no extra click.
+!macro customFinishPage
+  Function nammaStartApp
+    ${if} ${isUpdated}
+      StrCpy $1 "--updated"
+    ${else}
+      StrCpy $1 ""
+    ${endif}
+    ${StdUtils.ExecShellAsUser} $0 "$launchLink" "open" "$1"
+  FunctionEnd
+
+  Function nammaFinishPre
+    ${if} ${isUpdated}
+      Call nammaStartApp
+      Abort
+    ${endif}
+  FunctionEnd
+
+  !define MUI_FINISHPAGE_RUN
+  !define MUI_FINISHPAGE_RUN_FUNCTION "nammaStartApp"
+  !define MUI_PAGE_CUSTOMFUNCTION_PRE nammaFinishPre
+  !insertmacro MUI_PAGE_FINISH
+!macroend
+
 !macro customUnInstall
   ; Leave the install dir as the working directory, or RMDir /r can't remove
   ; the (empty) folder itself afterwards.
