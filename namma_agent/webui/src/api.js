@@ -294,6 +294,18 @@ export const memoryConsolidate = () => jpost("/api/memory/consolidate", {});
 export const memoryForget = (opts = {}) => jpost("/api/memory/forget", opts);
 export const memoryGraph = (includeExpired = false, asOf = "") =>
   j(`/api/memory/graph?include_expired=${includeExpired}&as_of=${encodeURIComponent(asOf)}`);
+// Phase 10 graph primitives: schema, ranking, one entity's neighbourhood,
+// search, and the two entity-management writes (merge, rename/retype).
+export const memoryGraphSchema = () => j("/api/memory/graph/schema");
+export const memoryGraphRanked = (limit = 50, includeSelf = true) =>
+  j(`/api/memory/graph/ranked?limit=${limit}&include_self=${includeSelf}`);
+export const memoryGraphEntity = (id) => j(`/api/memory/graph/entity/${encodeURIComponent(id)}`);
+export const memoryGraphSearch = (q, limit = 20) =>
+  j(`/api/memory/graph/search?q=${encodeURIComponent(q)}&limit=${limit}`);
+export const memoryGraphMerge = (source, target) => jpost("/api/memory/graph/merge", { source, target });
+export const memoryGraphUpdateEntity = (id, body) =>
+  jpost(`/api/memory/graph/entity/${encodeURIComponent(id)}`, body);
+export const memoryGraphRebuild = () => jpost("/api/memory/graph/rebuild", {});
 export const memoryItems = (kind = "", includeExpired = false) =>
   j(`/api/memory/items?kind=${encodeURIComponent(kind)}&include_expired=${includeExpired}`);
 export const memoryLowQuality = (limit = 50) =>

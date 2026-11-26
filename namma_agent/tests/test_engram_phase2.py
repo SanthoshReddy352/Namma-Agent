@@ -172,7 +172,8 @@ def test_hard_delete_gc_orphan_entities():
 
     store.hard_delete(a)
     g = store.graph()
-    assert {n["name"] for n in g["nodes"]} == {"user", "Namma"}  # shared node stays
+    # Phase 10: "user" resolves to the one self entity (shown as "You").
+    assert {n["name"] for n in g["nodes"]} == {"You", "Namma"}  # shared node stays
     assert len(g["edges"]) == 1
 
     store.hard_delete(b)
