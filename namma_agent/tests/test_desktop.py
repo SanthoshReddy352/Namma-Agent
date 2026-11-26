@@ -195,13 +195,80 @@ def test_focus_window_asks_the_shell(events, monkeypatch):
     assert events == [("desktop_command", {"action": "focus"})]
 
 
-def test_update_check_and_apply_defer_to_electron_updater(events, no_spawn, monkeypatch):
+@pytest.fixture
+def fresh_update_state():
+    desktop.set_update_state({})
+    yield
+    desktop.set_update_state({})
+
+
+def test_update_check_and_apply_defer_to_electron_updater(events, no_spawn, monkeypatch,
+                                                          fresh_update_state):
     monkeypatch.setattr(updater, "latest_release",
                         lambda *a, **k: pytest.fail("no GitHub call in desktop mode"))
+    monkeypatch.setenv("NAMMA_DESKTOP_VERSION", "2.3.2")
+    import threading
+
+    # The shell answers an update_check command by reporting electron-updater's
+    # result, asynchronously (it really arrives over HTTP from another process).
+    def shell(e, p):
+        events.append((e, p))
+        if e == "desktop_command" and p.get("action") == "update_check":
+            def answer():
+                desktop.set_update_state({"status": "checking"})
+                desktop.set_update_state({"status": "available", "version": "2.3.3"})
+            threading.Timer(0.05, answer).start()
+
+    desktop.set_sink(shell)
     chk = updater.check_for_update()
-    assert chk["managed_by"] == "desktop" and chk["forwarded"] is True
+    assert chk["managed_by"] == "desktop"
+    assert chk["update_available"] is True
+    assert (chk["current"], chk["latest"], chk["status"]) == ("2.3.2", "2.3.3", "available")
+    assert chk["html_url"].endswith("/releases/tag/v2.3.3")
+    # Once an update is known, a later check answers at once (no new command).
+    n = len(events)
+    assert updater.check_for_update()["update_available"] is True
+    assert len(events) == n
     assert updater.apply_update() == {"started": True, "managed_by": "desktop"}
     assert [p["action"] for _, p in events] == ["update_check", "update_apply"]
+
+
+def test_update_check_reports_up_to_date_and_times_out_quietly(events, monkeypatch,
+                                                               fresh_update_state):
+    monkeypatch.setenv("NAMMA_DESKTOP_VERSION", "2.3.2")
+
+    def shell(e, p):
+        if p.get("action") == "update_check":
+            desktop.set_update_state({"status": "current", "version": "2.3.2"})
+
+    desktop.set_sink(shell)
+    chk = updater.check_for_update()
+    assert chk["update_available"] is False and chk["status"] == "current"
+    # A shell that never answers: the check returns after the timeout, no update.
+    desktop.set_update_state({})
+    desktop.set_sink(lambda e, p: None)
+    chk = updater.check_for_update(timeout=0.2)
+    assert chk["update_available"] is False
+
+
+def test_api_update_state_drives_the_banner(events, monkeypatch, fresh_update_state):
+    """The shell POSTs electron-updater's state; /api/update/check (what the web
+    UI's banner and Settings → About call) then reports the update."""
+    monkeypatch.setenv("NAMMA_DESKTOP_VERSION", "2.3.2")
+    client = TestClient(create_app(_service()))
+    r = client.post("/api/desktop/update-state",
+                    json={"status": "available", "version": "2.4.0", "junk": 1})
+    assert r.json() == {"ok": True, "state": {"status": "available", "version": "2.4.0"}}
+    chk = client.get("/api/update/check").json()
+    assert chk["update_available"] is True and chk["latest"] == "2.4.0"
+    assert client.post("/api/update/apply").json()["started"] is True
+    assert events[-1] == ("desktop_command", {"action": "update_apply"})
+
+
+def test_update_state_endpoint_is_desktop_only(monkeypatch):
+    monkeypatch.delenv("NAMMA_DESKTOP", raising=False)
+    client = TestClient(create_app(_service()))
+    assert client.post("/api/desktop/update-state", json={"status": "x"}).status_code == 404
 
 
 def test_update_apply_without_the_shell_does_not_run_the_git_script(monkeypatch, no_spawn):

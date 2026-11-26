@@ -75,7 +75,8 @@ jobs:
           append_body: true
           body: |
             **Which file do I download?**
-            - **Windows** → `NammaAgentInstaller-<ver>.exe`
+            - **Windows desktop app (recommended)** → `NammaAgentSetup-<ver>.exe` — installs the native app (no admin needed); updates itself from later releases
+            - **Windows (classic installer)** → `NammaAgentInstaller-<ver>.exe`
             - **Mac (Apple Silicon — M1 and later)** → `NammaAgent-<ver>-arm64.dmg`
             - **Mac (Intel)** → `NammaAgent-<ver>-x86_64.dmg`
             - **Linux** → `NammaAgentInstaller-<ver>-x86_64.AppImage` (`chmod +x`, then run — no libfuse2 needed), or the source zip
@@ -89,3 +90,59 @@ jobs:
         with:
           name: namma-agent-installer-${{ matrix.os }}
           path: installers/native/dist/*
+
+  # Phase 9 W3: the Electron desktop app — per-user NSIS installer with the Python
+  # runtime bundled. Uploads the three files electron-updater needs to the
+  # Release: NammaAgentSetup-<ver>.exe, its .blockmap, and latest.yml (installed
+  # apps read latest.yml from the newest release to offer the update).
+  desktop:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Read the version (namma_agent/version.py)
+        id: ver
+        shell: bash
+        run: |
+          VER=$(python -c "import re;print(re.search(r'__version__\s*=\s*\"([^\"]+)\"', open('namma_agent/version.py').read()).group(1))")
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
+          echo "Building Namma Agent desktop $VER"
+
+      - name: Install the desktop build tools
+        working-directory: desktop
+        run: npm ci
+
+      - name: Stage the backend, web UI and bundled Python
+        working-directory: desktop
+        run: node scripts/stage.js
+
+      - name: Build the NSIS installer
+        working-directory: desktop
+        run: npx electron-builder --win nsis --publish never -c.extraMetadata.version=${{ steps.ver.outputs.version }}
+
+      - name: Upload the desktop installer to the Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            desktop/out/NammaAgentSetup-*.exe
+            desktop/out/NammaAgentSetup-*.exe.blockmap
+            desktop/out/latest.yml
+
+      - name: Upload the desktop installer as a build artifact (manual runs)
+        if: "!startsWith(github.ref, 'refs/tags/')"
+        uses: actions/upload-artifact@v4
+        with:
+          name: namma-agent-desktop-windows
+          path: |
+            desktop/out/NammaAgentSetup-*.exe
+            desktop/out/NammaAgentSetup-*.exe.blockmap
+            desktop/out/latest.yml

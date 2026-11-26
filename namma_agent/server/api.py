@@ -497,6 +497,16 @@ def create_app(service: Optional[NammaAgentService] = None) -> FastAPI:
         focused = bool(launcher is not None and launcher.focus_window())
         return {"ok": True, "focused": focused}
 
+    @app.post("/api/desktop/update-state")
+    def desktop_update_state(body: dict):
+        """The desktop shell reports electron-updater's state here (Phase 9 W3),
+        so /api/update/check can tell the web UI an update is available."""
+        from namma_agent.core import desktop
+        if not desktop.enabled():
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "not running under the desktop app"}, status_code=404)
+        return {"ok": True, "state": desktop.set_update_state(body or {})}
+
     # -- inbound webhooks (Slack / WhatsApp) -------------------------------
     # These platforms can't be polled, so they push events here. We ACK fast and
     # run the agent turn on a background thread (Slack requires a <3s response).

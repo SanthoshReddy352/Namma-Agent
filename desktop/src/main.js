@@ -278,8 +278,8 @@ function onBusEvent(msg) {
   // The web UI checks on its own (update banner, About tab), so a forwarded
   // check is quiet: the shell only speaks up when an update actually exists.
   else if (msg.action === "update_check") updater.check();
-  else if (msg.action === "update_apply") updater.install();
-  else if (msg.action === "uninstall") runUninstaller();
+  else if (msg.action === "update_apply") updater.apply();
+  else if (msg.action === "uninstall") runUninstaller(msg.scope);
 }
 
 // ── uninstall (from Settings → About → Danger zone) ─────────────────────────
@@ -290,16 +290,19 @@ function uninstallerPath() {
   return fs.existsSync(p) ? p : null;
 }
 
-async function runUninstaller() {
+async function runUninstaller(scope) {
   const exe = uninstallerPath();
   if (!exe) {
     dialog.showMessageBox(getWindow() || undefined, { type: "info", message: "Nothing to uninstall here.",
       detail: "This is not an installed copy. Use Windows Settings → Apps for installed copies." });
     return;
   }
-  // The NSIS uninstaller asks whether to keep chats and settings. Quit first so
-  // our files unlock; the uninstaller waits for the app to exit.
-  require("child_process").spawn(exe, [], { detached: true, stdio: "ignore" }).unref();
+  // The choice was already made in Settings → About (keep my data / everything),
+  // so pass it on and the uninstaller doesn't ask again (resources/installer.nsh).
+  // Quit first so our files unlock; the uninstaller waits for the app to exit.
+  const dataFlag = scope === "all" ? "--delete-app-data" : "--keep-app-data";
+  log(`uninstall: ${exe} ${dataFlag}`);
+  require("child_process").spawn(exe, ["/currentuser", dataFlag], { detached: true, stdio: "ignore" }).unref();
   quitting = true;
   app.quit();
 }
@@ -309,6 +312,14 @@ async function runUninstaller() {
 const updater = createUpdater({
   log, getWindow, appName,
   beforeInstall: async () => { quitting = true; await shutdownBackend(); },
+  onShow: () => showWindow(),
+  // Tell the backend, so the web UI's update banner and Settings → About can
+  // show "Update available" and drive "Update now" (/api/update/apply).
+  onState: (st) => {
+    if (backend && backend.alive()) {
+      backend.api("/api/desktop/update-state", { method: "POST", body: st }).catch(() => {});
+    }
+  },
 });
 
 function injectToken(b) {
@@ -367,6 +378,9 @@ async function startBackend() {
   }
   bus = new Bus({ url: backend.url, token: backend.token, onEvent: onBusEvent, isAlive: () => backend.alive(), log });
   bus.start();
+  // Check for updates right away (quiet), so the answer is ready when the web
+  // UI's banner asks via /api/update/check.
+  if (app.isPackaged || process.env.NAMMA_DESKTOP_UPDATE_URL) updater.check();
   // The configured assistant name (assistant.name) for the tray and splash.
   backend.api("/api/config").then((r) => {
     const name = r.json && (r.json.assistant_name || r.json.name);
@@ -419,7 +433,7 @@ function registerIpc() {
   ipcMain.handle("autostart:get", () => ({ supported: process.platform !== "linux", enabled: loginItem() }));
   ipcMain.handle("autostart:set", (_e, on) => ({ enabled: setLoginItem(!!on) }));
   ipcMain.handle("update:check", () => updater.check({ userInitiated: true }));
-  ipcMain.handle("update:install", () => updater.install());
+  ipcMain.handle("update:install", () => updater.apply());
   ipcMain.handle("app:info", () => ({
     version: app.getVersion(), electron: process.versions.electron, platform: process.platform,
     packaged: app.isPackaged, userData, logDir, port: backend && backend.port,
@@ -457,7 +471,8 @@ app.whenReady().then(() => {
   // Show/hide from anywhere. Best-effort: another app may own the chord.
   try { globalShortcut.register("CommandOrControl+Alt+N", toggleWindow); } catch { /* taken */ }
   boot();
-  if (app.isPackaged) setTimeout(() => updater.check(), 30000);
+  // And again every 6 hours for long-running sessions (quiet; notifies once).
+  if (app.isPackaged) setInterval(() => updater.check(), 6 * 60 * 60 * 1000);
 });
 
 // Test hook for driving the shell from a Node inspector session (verification

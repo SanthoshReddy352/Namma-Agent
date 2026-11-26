@@ -121,8 +121,23 @@ window size changes.
 
 ## Updates
 
-`electron-updater` checks GitHub Releases of `SanthoshReddy352/Namma-Agent` for
-`latest.yml`. It runs in installed builds only, 30 s after start, from the tray's
-"Check for updates…", or when the web UI asks (`/api/update/*`, forwarded as
-`desktop_command`). It asks before downloading and again before restarting. Until
-a desktop release is published, the check finds nothing (a manual check says so).
+`electron-updater` reads `latest.yml` from the newest published GitHub Release of
+`SanthoshReddy352/Namma-Agent`. The release workflow uploads it with the installer and
+its `.blockmap` (installed builds only).
+
+- **Checks:** quietly at start-up, every 6 h, and whenever the web UI asks
+  (`/api/update/check`). A quiet check speaks up only when an update exists, with one
+  notification per version. The tray's **Check for updates…** answers with a dialog
+  either way.
+- **State → web UI:** every updater state change (`checking`, `available`, `downloading`
+  with progress, `ready`, `current`, `error`) is POSTed to the backend at
+  `/api/desktop/update-state`. `/api/update/check` waits up to 8 s for a fresh answer
+  and returns `{update_available, latest, current, status, progress}`. So the web UI's
+  existing **Update available** banner and Settings → About work unchanged.
+- **Update now** (`/api/update/apply` → `desktop_command update_apply`, or the tray
+  dialog): downloads if needed, with taskbar progress. It then stops the backend, quits,
+  runs the NSIS installer silently and relaunches the new version. A downloaded update
+  also installs on the next quit.
+- **Local test feed:** `NAMMA_DESKTOP_UPDATE_URL=http://127.0.0.1:47900/` points the updater
+  at a folder with `latest.yml` plus the installer (a generic feed), instead of GitHub.
+  The steps are in the root README under *Developing the desktop app*.

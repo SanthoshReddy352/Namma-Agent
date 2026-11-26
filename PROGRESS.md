@@ -1045,7 +1045,8 @@ Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`de
   - native toasts from `desktop_notify`, received over `/ws` (`src/bus.js`);
   - start at login (`app.setLoginItemSettings`, value `NammaAgent`, `--hidden`);
   - `namma://` deep links on a strict route allowlist (`deeplink.js`);
-  - `electron-updater` against GitHub Releases, which asks before downloading and before installing; nothing is ever published.
+  - `electron-updater` against GitHub Releases. The shell reports its state to the backend (`POST /api/desktop/update-state`), so the web UI's **Update available** banner and Settings → About work unchanged. **Update now** downloads, quits, installs silently and relaunches.
+  - The release workflow's new `desktop` job uploads `NammaAgentSetup-<ver>.exe`, its `.blockmap` and `latest.yml`; CI runs the shell tests.
 - [x] **Backend hooks under `NAMMA_DESKTOP=1`:**
   - `core/desktop.py`: event sink, `desktop_notify` / `desktop_command`, the per-user data dir, a parent-PID watchdog;
   - `notifications.py`: posts to the bus instead of PowerShell; the status honours the Windows mute for AUMID `com.namma.agent`;
@@ -1058,9 +1059,9 @@ Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`de
   - Bundles the backend from this checkout plus a relocatable CPython 3.12 with every dependency (the 2.3.1 self-contained runtime, topped up to `requirements.txt`; the top-up added `rich` and `prompt_toolkit`).
   - The uninstaller asks "Also delete your chats, settings and API keys?" (default No), stops a leftover backend, and removes `namma://`, the Run value and the updater cache.
 - **Tests:**
-  - Python `test_desktop.py` (24): mode and sink, the bus replacing PowerShell, `/api/notify` → `/ws` end to end, focus/update/uninstall hand-offs, data dir, `NAMMA_PORT`, autostart, the WS header, the watchdog.
+  - Python `test_desktop.py` (27): mode and sink, the bus replacing PowerShell, `/api/notify` → `/ws` end to end, focus/update/uninstall hand-offs, data dir, `NAMMA_PORT`, autostart, the WS header, the watchdog, the update state reaching /api/update/check.
   - Web UI `desktop.test.js` (7). Shell `npm test` (8: deep links, window bounds, interpreter lookup, port choice).
-  - Totals: Python **1,461 passed / 3 skipped**; web UI **58 passed**; ruff clean.
+  - Totals: Python **1,464 passed / 3 skipped**; web UI **58 passed**; ruff clean.
 - **Verified live, in the real Electron window** (screenshots in the session's shared notes folder `w3-proof/`; the real `data/` and `~/.namma_agent` were not touched by any run):
   - all five themes, light and dark (Imperium included): the overlay blends with no strip, and the glyphs follow the live class change;
   - the controls dim under the Settings modal; drag moves the window, and double-click maximizes;
@@ -1078,6 +1079,15 @@ Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`de
   - launched from the Start menu;
   - uninstalled from **Settings → Apps** with the app running (the uninstaller closed it) and "Yes, delete". The registry and file check afterwards found nothing left: no entry, shortcut, `namma://` key, Run or StartupApproved value, install dir, updater cache or app data.
   - A first, keep-data uninstall kept `%APPDATA%\Namma Agent` as intended. It is the run that exposed the empty install dir and updater cache left behind, both fixed since.
+- **Verified 2026-11-26, owner follow-ups** (real context, installer from Explorer; the real `data/` and `~/.namma_agent` were byte-identical before and after):
+  - **Update flow, end to end**, with a local feed (`NAMMA_DESKTOP_UPDATE_URL`) serving a 2.3.3 build to an installed 2.3.2:
+    - the shell found 2.3.3, and `/api/update/check` returned `update_available` 2.3.2 → 2.3.3;
+    - the banner showed **Update now / Later**, and Settings → About showed **Update to 2.3.3**;
+    - clicking it downloaded the update, stopped the backend and quit; the NSIS installer ran silently (about 3.5 min) and relaunched the app;
+    - the exe, Windows Settings → Apps and About all read **2.3.3**, and About said "You're on the latest version".
+  - **In-app uninstall** (Settings → About → Danger zone → *Uninstall everything*): the app closed itself, and the uninstaller ran without asking again (`--delete-app-data`; *keep my data* passes `--keep-app-data`). The real-system check found nothing left.
+  - **Start-menu icon:** it showed Electron's atom because Windows had cached an icon for the AUMID from the dev run's `Electron.lnk`. With that shortcut removed and the installer now refreshing the icon cache (`ie4uinit -show`), Start shows the brand icon.
+  - Windows 11 asks once which app should open a `namma://` link from a newly installed handler (standard behaviour); the user picks *Always*.
 - **Found and fixed while verifying:**
   - **NSIS 3.0.4.1's `System.dll` crashed the installer at start-up** (access violation; 3 of 5 launches). With the NSIS 3.12 toolset, 3 of 3 opened and no new crash dumps appeared.
   - Dev runs posted toasts under the real AUMID, so Electron created a Start shortcut `Electron.lnk` for `com.namma.agent`, and Windows then named the installed app "Electron" in Start and in toasts. Dev runs now use `com.namma.agent.dev`; the stray shortcut was removed.
@@ -1089,7 +1099,8 @@ Branch `claude/phase9-w3-desktop-57ffaf`. How it works and how to build it: [`de
   - `[!]` Code signing: the installer is unsigned, so SmartScreen will warn on downloaded copies. It needs the owner's certificate.
   - `[ ]` Electron fuses (RunAsNode, inspect) are still on; turn them off for release builds (`electronFuses`).
   - `[ ]` Safe mode on the error page: the backend has no safe-mode switch yet.
-  - `[ ]` The global show/hide shortcut (Ctrl+Alt+N) is registered but not verified live. The download/install half of auto-update is untested: there is no published release to update to.
+  - `[ ]` The global show/hide shortcut (Ctrl+Alt+N) is registered but not verified live.
+  - `[ ]` An update from a real GitHub release is untested until the first desktop release is tagged; the local-feed update is verified. The release workflow's `desktop` job hasn't run on GitHub yet.
   - `[ ]` Cold first start after install took about 20 s (Phase 7 targets under 4 s). Not measured warm or optimised; lazy start-up of MCP and comms is still open.
   - `[ ]` Linux AppImage: configured, not built or verified (no bundled runtime on Linux; it uses `python3` from PATH).
   - `[ ]` WhatsApp QR session still defaults to `~/.namma_agent` (`comms/whatsapp_qr.py`), not the desktop data dir.

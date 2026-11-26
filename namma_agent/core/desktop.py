@@ -169,6 +169,55 @@ def start_parent_watchdog(on_exit: Callable[[], None],
     return True
 
 
+# ── updates (electron-updater state, reported by the shell) ─────────────────
+# The shell owns updates; it POSTs electron-updater's state here whenever it
+# changes (/api/desktop/update-state), so the web UI's existing update banner and
+# Settings → About can show "Update available" and drive "Update now".
+_update_state: dict = {}
+_update_seq = 0
+_update_cond = threading.Condition()
+
+
+def set_update_state(state: dict) -> dict:
+    """Record the shell's latest updater state (``status``: checking | current |
+    available | downloading | ready | error | unsupported, plus ``version``,
+    ``progress``, ``error``). Wakes anyone waiting in :func:`wait_update_state`."""
+    global _update_seq
+    clean = {k: state.get(k) for k in ("status", "version", "progress", "error", "current")
+             if state.get(k) is not None}
+    with _update_cond:
+        _update_state.clear()
+        _update_state.update(clean)
+        _update_seq += 1
+        _update_cond.notify_all()
+    return dict(clean)
+
+
+def update_state() -> dict:
+    with _update_cond:
+        return dict(_update_state)
+
+
+def wait_update_state(after_seq: int, timeout: float) -> dict:
+    """Block up to ``timeout`` s for a state newer than ``after_seq`` whose check
+    has finished (not ``checking``). Returns whatever is known by then."""
+    import time
+
+    deadline = time.monotonic() + max(0.0, timeout)
+    with _update_cond:
+        while True:
+            done = _update_seq > after_seq and _update_state.get("status") not in (None, "checking")
+            left = deadline - time.monotonic()
+            if done or left <= 0:
+                return dict(_update_state)
+            _update_cond.wait(left)
+
+
+def update_seq() -> int:
+    with _update_cond:
+        return _update_seq
+
+
 def info() -> dict:
     """What the backend knows about the shell, for ``/api/desktop`` style
     reporting and diagnostics."""

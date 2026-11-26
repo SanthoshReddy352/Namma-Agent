@@ -84,11 +84,7 @@ def check_for_update(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict:
     from namma_agent.core import desktop
 
     if desktop.enabled():
-        forwarded = desktop.command("update_check")
-        cur = current_version()
-        return {"current": cur, "latest": None, "update_available": False,
-                "managed_by": "desktop", "forwarded": forwarded,
-                "desktop_version": os.environ.get("NAMMA_DESKTOP_VERSION", "")}
+        return _desktop_check(repo, timeout)
     cur = current_version()
     latest = latest_release(repo, timeout)
     if not latest or not latest.get("version"):
@@ -98,6 +94,35 @@ def check_for_update(repo: str = DEFAULT_REPO, timeout: float = 6.0) -> dict:
     return {"current": cur, "latest": latest["version"], "update_available": available,
             "html_url": latest.get("html_url"), "notes": latest.get("notes", ""),
             "published_at": latest.get("published_at")}
+
+
+_ACTIVE = ("available", "downloading", "ready")
+
+
+def _desktop_check(repo: str, timeout: float) -> dict:
+    """Desktop app: ask the shell's electron-updater to check (unless it already
+    knows of an update) and wait briefly for its answer, so the web UI's banner
+    and Settings → About show a real "Update available" on first load."""
+    from namma_agent.core import desktop
+
+    cur = os.environ.get("NAMMA_DESKTOP_VERSION", "").strip() or current_version()
+    state = desktop.update_state()
+    if state.get("status") not in _ACTIVE:
+        seq = desktop.update_seq()
+        if desktop.command("update_check"):
+            state = desktop.wait_update_state(seq, min(timeout, 8.0))
+    status = state.get("status") or "unknown"
+    latest = state.get("version") or None
+    return {
+        "current": cur,
+        "latest": latest if status in _ACTIVE else (latest or cur),
+        "update_available": status in _ACTIVE and bool(latest),
+        "status": status,
+        "progress": state.get("progress"),
+        "error": state.get("error"),
+        "managed_by": "desktop",
+        "html_url": f"https://github.com/{repo}/releases/tag/v{latest}" if status in _ACTIVE and latest else None,
+    }
 
 
 def _update_script() -> Path:

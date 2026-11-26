@@ -17,6 +17,13 @@
   !insertmacro nammaStopBackend
 !macroend
 
+; Refresh Windows' icon cache so Start shows the app's own icon, not one cached
+; for the same AppUserModelID by an earlier copy (e.g. a development run).
+!macro customInstall
+  nsExec::Exec `"$SYSDIR\ie4uinit.exe" -show`
+  Pop $0
+!macroend
+
 !macro customUnInstall
   ; Leave the install dir as the working directory, or RMDir /r can't remove
   ; the (empty) folder itself afterwards.
@@ -30,13 +37,31 @@
   ${ifNot} ${isUpdated}
     ; electron-updater's copy of the installer (kept for differential updates).
     RMDir /r "$LOCALAPPDATA\namma-agent-desktop-updater"
-    ${ifNot} ${Silent}
+
+    ; The in-app uninstall (Settings -> About) has already asked and passes
+    ; --delete-app-data or --keep-app-data; only otherwise ask here.
+    StrCpy $R2 "ask"
+    ${GetParameters} $R0
+    ClearErrors
+    ${GetOptions} $R0 "--delete-app-data" $R1
+    ${ifNot} ${Errors}
+      StrCpy $R2 "delete"
+    ${endIf}
+    ClearErrors
+    ${GetOptions} $R0 "--keep-app-data" $R1
+    ${ifNot} ${Errors}
+      StrCpy $R2 "keep"
+    ${endIf}
+    ${if} $R2 == "ask"
+    ${andIfNot} ${Silent}
       MessageBox MB_YESNO|MB_ICONQUESTION|MB_DEFBUTTON2 \
         "Also delete your chats, settings and API keys?$\r$\n$\r$\nChoose No to keep them in $APPDATA\Namma Agent, so they are there if you reinstall." \
-        /SD IDNO IDNO namma_keep_data
-        SetShellVarContext current
-        RMDir /r "$APPDATA\Namma Agent"
-      namma_keep_data:
+        /SD IDNO IDNO +2
+      StrCpy $R2 "delete"
+    ${endIf}
+    ${if} $R2 == "delete"
+      SetShellVarContext current
+      RMDir /r "$APPDATA\Namma Agent"
     ${endIf}
   ${endIf}
 !macroend
